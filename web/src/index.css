@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,
+*::before,
+*::after {
+  box-sizing: content-box;
+}
+
+#root,
+#root::before,
+#root::after,
+#root *,
+#root *::before,
+#root *::after {
+  box-sizing: border-box;
+}
+
+#root .monaco-editor,
+#root .monaco-editor *,
+#root .monaco-diff-editor,
+#root .monaco-diff-editor * {
+  box-sizing: content-box;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+}
+
+#root {
+  @apply min-h-screen;
+}
+
+.proof-hl-emerald {
+  background-color: rgba(16, 185, 129, 0.35);
+  border-radius: 2px;
+}
+
+.proof-hl-sky {
+  background-color: rgba(56, 189, 248, 0.35);
+  border-radius: 2px;
+}
+
+.proof-hl-amber {
+  background-color: rgba(245, 158, 11, 0.35);
+  border-radius: 2px;
+}
+
+.proof-hl-rose {
+  background-color: rgba(244, 63, 94, 0.3);
+  border-radius: 2px;
+}
+
+.proof-hl-indigo {
+  background-color: rgba(99, 102, 241, 0.3);
+  border-radius: 2px;
+}
+
+.proof-hl-slate {
+  background-color: rgba(148, 163, 184, 0.35);
+  border-radius: 2px;
+}
+
+.proof-hl-purple {
+  background-color: rgba(168, 85, 247, 0.3);
+  border-radius: 2px;
+}
+
+.monaco-diff-editor .codicon-arrow-right,
+.monaco-diff-editor .codicon-arrow-left {
+  display: none !important;
+}
+
+.monaco-diff-editor .diffActions {
+  display: none !important;
+}
+
+.monaco-editor .proofread-hl-default {
+  background-color: rgba(129, 140, 248, 0.25);
+}
+
+.monaco-editor .proofread-hl-medium {
+  background-color: rgba(251, 191, 36, 0.28);
+}
+
+.monaco-editor .proofread-hl-critical {
+  background-color: rgba(248, 113, 113, 0.3);
+}
+
+.monaco-editor .proofread-hl-low {
+  background-color: rgba(34, 197, 94, 0.22);
+}
+
+.monaco-editor .proofread-hl-active {
+  box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.6);
+}
+
+.monaco-editor .proofread-hl-resolved {
+  background-color: rgba(134, 239, 172, 0.35) !important;
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.4);
+}
+
+.monaco-editor .scrollbar.vertical,
+.monaco-diff-editor .scrollbar.vertical {
+  width: 16px !important;
+}
+
+.monaco-editor .scrollbar.vertical .slider,
+.monaco-diff-editor .scrollbar.vertical .slider {
+  width: 12px !important;
+  margin-left: 2px;
+  border-radius: 6px;
+}

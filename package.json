@@ -1,0 +1,30 @@
+{
+  "name": "project-t1-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "server",
+    "web",
+    "packages/translation-types"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=web",
+    "dev:backend": "npm run dev --workspace=server",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:backend\"",
+    "dev:https": "concurrently \"npm run dev:https --workspace=web\" \"npm run dev:https --workspace=server\"",
+    "generate-ssl": "node scripts/generate-ssl-certs.js",
+    "lint": "npm run lint --workspace=web && npm run lint --workspace=server",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.52.4",
+    "@types/jwt-decode": "^2.2.1",
+    "concurrently": "^8.2.2",
+    "prettier": "^3.2.5"
+  },
+  "dependencies": {
+    "@bookko/ai-image-gen": "file:packages/ai-image-gen",
+    "bullmq": "^5.61.0",
+    "jwt-decode": "^4.0.0"
+  }
+}

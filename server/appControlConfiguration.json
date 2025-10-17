@@ -1,0 +1,42 @@
+{
+  "lineJoiner": false,
+  "translation": {
+    "translationMode": "sequential",
+    "sourceLang": "ko",
+    "targetLang": "en",
+    "segmentMode": "paragraph",
+    "window": 1,
+    "contextPolicy": {
+      "verbatimMax": 300,
+      "summaryMax": 120,
+      "mode": "hybrid"
+    },
+    "temps": {
+      "literal": 0.35,
+      "style": 0.6,
+      "emotion": 0.6
+    },
+    "register": "literary",
+    "honorifics": "preserve",
+    "romanizationPolicy": "as-is",
+    "creativeAutonomy": "light",
+    "batching": {
+      "batchSize": 8,
+      "workerConcurrency": 2,
+      "apiRateLimitTPS": 2
+    },
+    "tokenBudget": {
+      "promptMax": 3000,
+      "completionMax": 900
+    },
+    "proofread": {
+      "topK": 7,
+      "minSeverity": "medium",
+      "autoApplySafeFixes": false
+    }
+  },
+  "translationStageQueue": {
+    "removeOnComplete": true,
+    "removeOnFailAgeSeconds": 86400
+  }
+}

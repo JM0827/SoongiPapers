@@ -1,0 +1,36 @@
+{
+  "name": "@bookko/ai-image-gen",
+  "version": "1.0.0",
+  "description": "AI Image Generation Module using Google Gemini 2.5 Flash",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node test/test.js"
+  },
+  "keywords": [
+    "ai",
+    "image-generation",
+    "gemini",
+    "svg",
+    "typescript"
+  ],
+  "author": "Bookko Team",
+  "license": "MIT",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "mongodb": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}
