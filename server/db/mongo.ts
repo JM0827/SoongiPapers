@@ -23,22 +23,61 @@ export async function getMongoDoc(project_id: string, job_id: string) {
   const m = await getMongo();
   const col = m.collection("translation_files");
 
-  let doc = await col.findOne({ project_id, job_id });
+  const match = { project_id, job_id } as const;
+  let doc = await col.findOne(match);
+
   if (!doc) {
-    const fallback = await col.findOne({ job_id });
-    if (fallback) {
-      if (fallback.project_id !== project_id) {
-        await col.updateOne({ _id: fallback._id }, { $set: { project_id } });
+    const byJob = await col.findOne({ job_id });
+    if (byJob) {
+      if (byJob.project_id !== project_id) {
+        await col.updateOne({ _id: byJob._id }, { $set: { project_id } });
+        byJob.project_id = project_id;
       }
-      doc = await col.findOne({ project_id, job_id });
+      doc = byJob;
     }
   }
 
-  if (!doc)
+  if (!doc) {
+    const byProject = await col
+      .find({ project_id })
+      .sort({ updated_at: -1, completed_at: -1, created_at: -1 })
+      .limit(1)
+      .next();
+
+    if (byProject) {
+      const needsJobBackfill = !byProject.job_id;
+      if (needsJobBackfill) {
+        await col.updateOne(
+          { _id: byProject._id },
+          { $set: { job_id } },
+        );
+        byProject.job_id = job_id;
+        console.warn(
+          "[proofreading] Backfilled translation_files.job_id for project",
+          {
+            project_id,
+            job_id,
+            translation_file_id: byProject._id,
+          },
+        );
+      }
+      doc = byProject;
+    }
+  }
+
+  if (!doc) {
     throw new Error(`translation_files not found: ${project_id}/${job_id}`);
-  const { origin_content, translated_content } = doc as any;
-  if (!origin_content || !translated_content)
+  }
+
+  const origin_content =
+    (doc as any).origin_content ?? (doc as any).originContent ?? null;
+  const translated_content =
+    (doc as any).translated_content ?? (doc as any).translatedContent ?? null;
+
+  if (!origin_content || !translated_content) {
     throw new Error("origin_content or translated_content missing.");
+  }
+
   return { origin_content, translated_content, raw: doc };
 }
 export async function saveProofreadingDoc(payload: {

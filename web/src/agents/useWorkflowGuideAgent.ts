@@ -62,17 +62,30 @@ const formatSummary = (
   prefix: string,
 ) => {
   if (!profile) return null;
+  const clamp = (value: string, max: number) =>
+    value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+
   const segments: string[] = [];
-  if (profile.summary?.story) segments.push(profile.summary.story);
-  if (profile.summary?.intention)
-    segments.push(`Intention: ${profile.summary.intention}`);
-  if (profile.summary?.readerPoints?.length) {
-    segments.push(
-      `Reader takeaways: ${profile.summary.readerPoints.join(", ")}`,
-    );
+  const story = profile.summary?.story?.trim();
+  if (story) {
+    segments.push(clamp(story.replace(/\s+/g, " "), 200));
   }
+  const intention = profile.summary?.intention?.trim();
+  if (intention) {
+    segments.push(`Intention: ${clamp(intention.replace(/\s+/g, " "), 100)}`);
+  }
+  const points = profile.summary?.readerPoints ?? [];
+  const limitedPoints = points
+    .slice(0, 3)
+    .map((point) => clamp(point.replace(/\s+/g, " "), 100));
+  if (limitedPoints.length) {
+    segments.push(`Reader takeaways: ${limitedPoints.join("; ")}`);
+  }
+
   if (!segments.length) return null;
-  return `${prefix}\n${segments.join("\n")}`;
+
+  const message = `${prefix}\n${segments.join("\n")}`;
+  return clamp(message, 320);
 };
 
 export const useWorkflowGuideAgent = ({

@@ -39,33 +39,17 @@ import {
   type EditingSuggestion,
   type EditorSelectionContext,
 } from "../../store/editingCommand.store";
-import {
-  useChatInsightStore,
-  type ProofIssueSummaryInsight,
-} from "../../store/chatInsight.store";
 import { useChatActionStore } from "../../store/chatAction.store";
 import type { EditingSelectionPayload } from "../../types/domain";
 import { translate } from "../../lib/locale";
 import { useUILocale } from "../../hooks/useUILocale";
-import { Upload, Compass } from "lucide-react";
+import { Upload } from "lucide-react";
 
 type MessageTone = "default" | "success" | "error";
 
 type MessageRole = "assistant" | "user" | "system";
 
-type StageKey = "origin" | "translation" | "proofreading" | "quality";
-
-interface StageNote {
-  message: string;
-  badge?: Message["badge"];
-  actions?: ChatAction[];
-}
-
-interface StageCardContent {
-  text: string;
-  badge?: Message["badge"] | null;
-  actions?: ChatAction[] | null;
-}
+type StageKey = "origin" | "translation" | "proofreading" | "quality" | "publishing";
 
 interface Message {
   id: string;
@@ -77,7 +61,6 @@ interface Message {
     tone?: MessageTone;
   };
   actions?: ChatAction[];
-  anchorStage?: StageKey;
 }
 
 const SUPPORTED_ORIGIN_EXTENSIONS = [
@@ -107,11 +90,15 @@ const TRANSLATION_STAGE_ORDER = [
   "qa",
 ] as const;
 
-const TRANSLATION_STAGE_FALLBACKS: Record<(typeof TRANSLATION_STAGE_ORDER)[number], string> = {
+type TranslationPipelineStage = (typeof TRANSLATION_STAGE_ORDER)[number];
+type TranslationDisplayStage = TranslationPipelineStage | "finalizing";
+
+const TRANSLATION_STAGE_FALLBACKS: Record<TranslationDisplayStage, string> = {
   literal: "직역",
   style: "스타일",
   emotion: "감정",
   qa: "QA",
+  finalizing: "후처리",
 };
 
 const previewText = (value: string, limit = 160) =>
@@ -144,35 +131,6 @@ const generateMessageId = () => {
     return segments.join("-");
   }
   return `msg-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-};
-
-const getActionKey = (action: ChatAction) => {
-  switch (action.type) {
-    case "cancelTranslation":
-      return `${action.type}:${action.jobId ?? ""}:${action.workflowRunId ?? ""}`;
-    case "applyEditingSuggestion":
-    case "undoEditingSuggestion":
-    case "dismissEditingSuggestion":
-      return `${action.type}:${action.suggestionId}`;
-    default:
-      return action.type;
-  }
-};
-
-const mergeStageActions = (
-  baseActions: ChatAction[],
-  extraActions?: ChatAction[] | null,
-): ChatAction[] | undefined => {
-  const combined = [...baseActions, ...(extraActions ?? [])];
-  const seen = new Set<string>();
-  const deduped: ChatAction[] = [];
-  combined.forEach((action) => {
-    const key = getActionKey(action);
-    if (seen.has(key)) return;
-    seen.add(key);
-    deduped.push(action);
-  });
-  return deduped.length ? deduped : undefined;
 };
 
 const MAX_ASSISTANT_MESSAGE_CHARS = 200;
@@ -229,21 +187,7 @@ export const ChatOrchestrator = ({
     },
     [locale],
   );
-  const buildIntroMessage = useCallback(
-    (): Message => ({
-      id: "intro",
-      role: "assistant",
-      text: localize(
-        "chat_intro_default",
-        `안녕하세요, AI 번역·교정 파트너입니다. 원문(${SUPPORTED_ORIGIN_LABEL})을 올려 주시면 프로젝트를 준비하고 번역, 교정, 품질 평가까지 도와드릴게요. 파일을 드래그앤드롭하거나 궁금한 점을 자유롭게 물어봐 주세요.`,
-        { formats: SUPPORTED_ORIGIN_LABEL },
-      ),
-    }),
-    [localize],
-  );
-  const [messages, setMessages] = useState<Message[]>(() => [
-    buildIntroMessage(),
-  ]);
+  const [messages, setMessages] = useState<Message[]>(() => []);
   const [quickReplies, setQuickReplies] = useState<QuickReplyItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -251,112 +195,13 @@ export const ChatOrchestrator = ({
   const [inputDraft, setInputDraft] = useState<{ id: string; text: string } | null>(
     null,
   );
-  const [insightCooldown, setInsightCooldown] = useState(false);
-  const insightCooldownTimerRef = useRef<number | null>(null);
   const firstRunScriptShownRef = useRef(false);
   const stageAnchorRefs = useRef<Record<StageKey, HTMLElement | null>>({
     origin: null,
     translation: null,
     proofreading: null,
     quality: null,
-  });
-  const stageMessageRefs = useRef<Record<StageKey, string | null>>({
-    origin: null,
-    translation: null,
-    proofreading: null,
-    quality: null,
-  });
-  const proofSummaryMessageRef = useRef<string | null>(null);
-  const [proofSummary, setProofSummary] =
-    useState<ProofIssueSummaryInsight | null>(null);
-  const lastProofSummaryRef = useRef<ProofIssueSummaryInsight | null>(null);
-  const upsertStageMessage = useCallback(
-    (stage: StageKey, content: StageCardContent) => {
-      setMessages((prev) => {
-        const existingId = stageMessageRefs.current[stage];
-        const composeMessage = (id: string): Message => ({
-          id,
-          role: "assistant",
-          text: content.text,
-          badge: content.badge ?? undefined,
-          actions:
-            content.actions && content.actions.length
-              ? content.actions
-              : undefined,
-          anchorStage: stage,
-        });
-
-        if (existingId) {
-          const index = prev.findIndex((message) => message.id === existingId);
-          if (index !== -1) {
-            const next = [...prev];
-            next[index] = composeMessage(existingId);
-            return next;
-          }
-        }
-
-        const nextId = generateMessageId();
-        stageMessageRefs.current[stage] = nextId;
-        return [...prev, composeMessage(nextId)];
-      });
-    },
-    [setMessages],
-  );
-  const upsertProofSummaryMessage = useCallback(
-    (content: StageCardContent) => {
-      setMessages((prev) => {
-        const existingId = proofSummaryMessageRef.current;
-        const composeMessage = (id: string): Message => ({
-          id,
-          role: "assistant",
-          text: content.text,
-          badge: content.badge ?? undefined,
-          actions:
-            content.actions && content.actions.length
-              ? content.actions
-              : undefined,
-        });
-
-        if (existingId) {
-          const currentIndex = prev.findIndex(
-            (message) => message.id === existingId,
-          );
-          if (currentIndex !== -1) {
-            const next = [...prev];
-            next[currentIndex] = composeMessage(existingId);
-            return next;
-          }
-        }
-
-        const nextId = generateMessageId();
-        proofSummaryMessageRef.current = nextId;
-        const nextMessages = [...prev];
-        const stageId = stageMessageRefs.current.proofreading;
-        if (stageId) {
-          const stageIndex = nextMessages.findIndex(
-            (message) => message.id === stageId,
-          );
-          if (stageIndex !== -1) {
-            nextMessages.splice(stageIndex, 0, composeMessage(nextId));
-            return nextMessages;
-          }
-        }
-        nextMessages.push(composeMessage(nextId));
-        return nextMessages;
-      });
-    },
-    [setMessages],
-  );
-  const resetProofSummaryState = useCallback(() => {
-    proofSummaryMessageRef.current = null;
-    lastProofSummaryRef.current = null;
-    setProofSummary(null);
-  }, []);
-  const stageNotesRef = useRef<Record<StageKey, StageNote | null>>({
-    origin: null,
-    translation: null,
-    proofreading: null,
-    quality: null,
+    publishing: null,
   });
 
   const token = useAuthStore((state) => state.token);
@@ -401,8 +246,6 @@ export const ChatOrchestrator = ({
   );
   const setChatActionExecutor = useChatActionStore((state) => state.setExecutor);
   const lastHandledEditingRef = useRef<string | null>(null);
-  const insightQueueLength = useChatInsightStore((state) => state.queue.length);
-  const dequeueInsight = useChatInsightStore((state) => state.dequeue);
 
   const currentProject = useMemo(
     () => projects.find((project) => project.project_id === projectId) ?? null,
@@ -412,7 +255,22 @@ export const ChatOrchestrator = ({
   const originText = content?.content?.origin?.content ?? "";
   const hasOrigin = Boolean(originText.trim());
   const translationText = content?.content?.translation?.content ?? "";
-  const hasTranslation = Boolean(translationText.trim());
+  const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
+
+  const translationContentLoaded = Boolean(
+    translationText.trim().length || appliedTranslation?.trim?.().length,
+  );
+
+  const stageLabel = snapshot.lifecycle.translation?.stage?.toLowerCase() ?? "";
+  const translationReadyByStage =
+    stageLabel.includes("translated") ||
+    stageLabel.includes("complete") ||
+    stageLabel.includes("done") ||
+    stageLabel.includes("final");
+
+  const hasTranslation = Boolean(
+    translationContentLoaded || translationReadyByStage || snapshot.translation?.hasContent,
+  );
   const targetLang = currentProject?.target_lang;
   const translationJobId: string | null =
     content?.content?.translation?.jobId ?? content?.latestJob?.jobId ?? null;
@@ -467,7 +325,6 @@ export const ChatOrchestrator = ({
       badge?: Message["badge"],
       actions?: ChatAction[],
       persist = false,
-      anchorStage?: StageKey,
     ) => {
       validateAssistantMessage(text);
       let appended = false;
@@ -477,7 +334,6 @@ export const ChatOrchestrator = ({
         text,
         badge,
         actions,
-        anchorStage,
       };
 
       setMessages((previous) => {
@@ -498,7 +354,6 @@ export const ChatOrchestrator = ({
             ...last,
             badge: badge ?? last.badge,
             actions: actions ?? last.actions,
-            anchorStage: anchorStage ?? last.anchorStage,
           };
           return next;
         }
@@ -530,38 +385,19 @@ export const ChatOrchestrator = ({
     setQuickReplies([]);
   }, [openFileDialog, setShowUploader]);
 
-  const handleQuickTour = useCallback(() => {
-    pushAssistant(
-      localize(
-        "chat_tour_message",
-        "번역 스튜디오 기능을 둘러보려면 우측 패널의 미리보기, 교정, 품질 탭을 차례로 살펴보세요. 필요하면 제가 각 단계를 안내해 드릴게요.",
-      ),
-      {
-        label: localize("chat_tour_badge", "Studio tour"),
-        tone: "default",
-      },
-    );
-    setQuickReplies([]);
-  }, [localize, pushAssistant]);
-
   const buildQuickReplies = useCallback((): QuickReplyItem[] => {
-    const replies: QuickReplyItem[] = [];
     if (!hasOrigin) {
-      replies.push({
-        id: "quick-upload",
-        label: localize("chat_quick_upload", "Upload origin"),
-        icon: <Upload className="h-3 w-3" aria-hidden="true" />,
-        onSelect: handleQuickUpload,
-      });
+      return [
+        {
+          id: "quick-upload",
+          label: localize("chat_quick_upload", "Upload origin"),
+          icon: <Upload className="h-3 w-3" aria-hidden="true" />,
+          onSelect: handleQuickUpload,
+        },
+      ];
     }
-    replies.push({
-      id: "quick-tour",
-      label: localize("chat_quick_tour", "Take a tour"),
-      icon: <Compass className="h-3 w-3" aria-hidden="true" />,
-      onSelect: handleQuickTour,
-    });
-    return replies;
-  }, [handleQuickTour, handleQuickUpload, hasOrigin, localize]);
+    return [];
+  }, [handleQuickUpload, hasOrigin, localize]);
 
   useEffect(() => {
     const shouldShow = historyLength === 0 && !isHistoryLoading;
@@ -577,51 +413,13 @@ export const ChatOrchestrator = ({
     if (historyLength > 0) return;
     if (firstRunScriptShownRef.current) return;
     firstRunScriptShownRef.current = true;
-
-    const lines = [
-      localize(
-        "chat_welcome_line_intro",
-        "안녕하세요! 원문을 올리면 번역, 교정, QA와 전자책 제작까지 함께 도와드릴게요.",
-      ),
-      localize(
-        "chat_welcome_line_actions",
-        "지금 바로 원문을 업로드하거나, 둘러보기·샘플 프로젝트로 사용법을 살펴볼 수 있어요.",
-      ),
-      localize(
-        "chat_welcome_line_tip",
-        "궁금한 점은 언제든지 채팅으로 물어봐 주세요. 단계별 진행 상황은 상단 타임라인과 배지에서 확인할 수 있습니다.",
-      ),
-    ];
-
-    lines.forEach((line, index) => {
-      pushAssistant(
-        line,
-        index === 0
-          ? {
-              label: localize("chat_welcome_badge", "Welcome"),
-              tone: "default",
-            }
-          : undefined,
-      );
-    });
     setQuickReplies(buildQuickReplies());
   }, [
     historyLoaded,
     isHistoryLoading,
     historyLength,
-    localize,
-    pushAssistant,
     buildQuickReplies,
   ]);
-
-  const registerStageAnchor = useCallback((stage: StageKey, element: HTMLElement | null) => {
-    const anchors = stageAnchorRefs.current;
-    if (element) {
-      anchors[stage] = element;
-    } else if (anchors[stage]) {
-      anchors[stage] = null;
-    }
-  }, []);
 
   const scrollToStage = useCallback(
     (stage: StageKey) => {
@@ -651,11 +449,7 @@ export const ChatOrchestrator = ({
     pushAssistant,
     onCompleted: onTranslationCompleted,
     refreshContent: refreshContentOnly,
-    isTranslationReady: () =>
-      Boolean(
-        content?.content?.translation?.content?.trim().length &&
-          content?.documentProfiles?.translation,
-      ),
+    isTranslationReady: () => translationContentLoaded,
     lifecycle: snapshot.lifecycle.translation,
   });
 
@@ -1447,11 +1241,6 @@ export const ChatOrchestrator = ({
     setQuickReplies,
   ]);
 
-  useEffect(() => () => {
-    if (insightCooldownTimerRef.current !== null) {
-      window.clearTimeout(insightCooldownTimerRef.current);
-    }
-  }, []);
   const translationStage =
     snapshot.lifecycle.translation?.stage?.toLowerCase() ?? "none";
   const proofreadingStage =
@@ -1530,27 +1319,64 @@ export const ChatOrchestrator = ({
 
     const sequential = totalSegments
       ? {
-          stages: TRANSLATION_STAGE_ORDER.map((stage) => {
-            const isCompleted = completedStages.includes(stage);
-            const isCurrent = currentStage === stage;
-            let state: "pending" | "running" | "done" | "failed" = "pending";
+          stages: (() => {
+            const normalizedCurrentStage =
+              translationState.currentStage?.toLowerCase() ?? null;
+            const baseStages = TRANSLATION_STAGE_ORDER.map((stage) => {
+              const isCompleted = completedStages.includes(stage);
+              const isCurrent = currentStage === stage;
+              let state: "pending" | "running" | "done" | "failed" = "pending";
+              if (overall.failed) {
+                state = "failed";
+              } else if (isCompleted) {
+                state = "done";
+              } else if (isCurrent) {
+                state = "running";
+              }
+              return {
+                key: stage,
+                label: localize(
+                  `chat_stage_${stage}`,
+                  TRANSLATION_STAGE_FALLBACKS[stage] ?? stage,
+                ),
+                state,
+                count: stageCounts[stage] ?? 0,
+              };
+            });
+
+            const qaCount = stageCounts.qa ?? 0;
+            const qaComplete =
+              totalSegments > 0
+                ? qaCount >= totalSegments
+                : completedStages.includes("qa");
+            let finalizingState: "pending" | "running" | "done" | "failed" =
+              "pending";
             if (overall.failed) {
-              state = "failed";
-            } else if (isCompleted) {
-              state = "done";
-            } else if (isCurrent) {
-              state = "running";
+              finalizingState = "failed";
+            } else if (overall.done) {
+              finalizingState = "done";
+            } else if (
+              normalizedCurrentStage === "finalizing" ||
+              qaComplete
+            ) {
+              finalizingState = "running";
             }
-            return {
-              key: stage,
+
+            const finalizingStage = {
+              key: "finalizing" as const,
               label: localize(
-                `chat_stage_${stage}`,
-                TRANSLATION_STAGE_FALLBACKS[stage] ?? stage,
+                "chat_stage_finalizing",
+                TRANSLATION_STAGE_FALLBACKS.finalizing,
               ),
-              state,
-              count: stageCounts[stage] ?? 0,
+              state: finalizingState,
+              count:
+                finalizingState === "done" || finalizingState === "running"
+                  ? totalSegments
+                  : 0,
             };
-          }),
+
+            return [...baseStages, finalizingStage];
+          })(),
           totalSegments,
           needsReviewCount,
           guardFailures,
@@ -1623,650 +1449,325 @@ export const ChatOrchestrator = ({
         qualityState.status === "done" ||
         qualityStage === "done",
       failed:
-      summaryFailed ||
-      qualityState.status === "failed" ||
-      qualityStage === "failed",
+        summaryFailed ||
+        qualityState.status === "failed" ||
+        qualityStage === "failed",
     };
   }, [qualityWorkflow, qualityState.status, qualityStage]);
 
-  const translationDone = translationVisual.overall.done;
+  type StageStatusKey =
+    | "ready"
+    | "queued"
+    | "inProgress"
+    | "completed"
+    | "failed";
 
-  interface ProofSummaryView {
-    text: string;
-    actions: ChatAction[] | null;
-    tone: MessageTone;
-  }
-
-  const composeProofSummaryView = useCallback(
-    (summary: ProofIssueSummaryInsight | null): ProofSummaryView | null => {
-      if (!summary) return null;
-
-      if (summary.totalCount === 0) {
-        const lines = [
-          localize(
-            "chat_proof_summary_empty_headline",
-            "지금은 교정할 문제가 없어요.",
-          ),
-          localize(
-            "chat_proof_summary_empty_detail",
-            "새 교정 결과가 준비되면 바로 알려드릴게요.",
-          ),
-        ];
-        return {
-          text: lines.join("\n"),
-          actions: translationDone ? [{ type: "startProofread" }] : null,
-          tone: "default",
-        };
-      }
-
-      const progress = localize(
-        "chat_proof_summary_progress",
-        `해결됨 ${summary.resolvedCount}/${summary.totalCount}`,
-        {
-          resolved: summary.resolvedCount,
-          total: summary.totalCount,
-        },
-      );
-
-      if (summary.readyForQuality) {
-        const lines = [
-          localize(
-            "chat_proof_summary_done_headline",
-            "교정이 모두 끝났어요!",
-          ),
-          localize(
-            "chat_proof_summary_done_detail",
-            `${progress}. 품질 평가로 넘어가 볼까요?`,
-            { progress },
-          ),
-        ];
-        return {
-          text: lines.join("\n"),
-          actions: [{ type: "startQuality" }],
-          tone: "success",
-        };
-      }
-
-      const lines: string[] = [
-        localize(
-          "chat_proof_summary_pending_headline",
-          `${progress}. 아직 ${summary.pendingCount}건 남아 있어요.`,
-          {
-            progress,
-            pending: summary.pendingCount,
-          },
-        ),
-      ];
-
-      const highlight = summary.exampleIssues[0];
-      if (highlight) {
-        lines.push(
-          localize(
-            "chat_proof_summary_pending_detail_highlight",
-            `${highlight.title}부터 Proofread 탭에서 같이 정리해요.`,
-            { title: highlight.title },
-          ),
-        );
-      } else {
-        lines.push(
-          localize(
-            "chat_proof_summary_pending_detail",
-            "Proofread 탭에서 남은 항목을 함께 정리해요.",
-          ),
-        );
-      }
-
-      return {
-        text: lines.join("\n"),
-        actions: [{ type: "openProofreadTab" }],
-        tone: "default",
-      };
-    },
-    [localize, translationDone],
+  const statusMeta = useMemo<
+    Record<StageStatusKey, { label: string; tone: "info" | "success" | "danger" }>
+  >(
+    () => ({
+      ready: {
+        label: localize("timeline_status_ready", "Ready"),
+        tone: "info",
+      },
+      queued: {
+        label: localize("timeline_status_queued", "Queued"),
+        tone: "info",
+      },
+      inProgress: {
+        label: localize("timeline_status_in_progress", "In Progress"),
+        tone: "info",
+      },
+      completed: {
+        label: localize("timeline_status_completed", "Completed"),
+        tone: "success",
+      },
+      failed: {
+        label: localize("timeline_status_failed", "Failed"),
+        tone: "danger",
+      },
+    }),
+    [localize],
   );
 
-  useEffect(() => {
-    if (!insightQueueLength || insightCooldown) return;
-    const insight = dequeueInsight();
-    if (!insight) return;
+  const stageLabels = useMemo<
+    Record<"origin" | "translation" | "proofreading" | "quality" | "publishing", string>
+  >(
+    () => ({
+      origin: localize("timeline_stage_manuscript", "Manuscript Intake"),
+      translation: localize("timeline_stage_translation", "Translation"),
+      proofreading: localize("timeline_stage_proofreading", "Proofreading"),
+      quality: localize("timeline_stage_quality", "Quality Review"),
+      publishing: localize("timeline_stage_ebook", "eBook Export"),
+    }),
+    [localize],
+  );
 
-    if (insight.type === "proofIssueSummary") {
-      lastProofSummaryRef.current = insight;
-      setProofSummary(insight);
-      const summaryView = composeProofSummaryView(insight);
-      if (summaryView) {
-        upsertProofSummaryMessage({
-          text: summaryView.text,
-          badge: {
-            label: localize("chat_proof_summary_badge", "Proofread 요약"),
-            tone: summaryView.tone,
-          },
-          actions: summaryView.actions,
-        });
-      }
+  const translationContentAvailable = Boolean(
+    content?.content?.translation?.content?.trim().length,
+  );
+
+  const translationStatusKey = useMemo<StageStatusKey | undefined>(() => {
+    if (
+      translationState.status === "failed" ||
+      translationState.status === "cancelled"
+    ) {
+      return "failed";
     }
-
-    insightCooldownTimerRef.current = window.setTimeout(() => {
-      insightCooldownTimerRef.current = null;
-      setInsightCooldown(false);
-    }, 900);
-    setInsightCooldown(true);
-  }, [
-    insightQueueLength,
-    insightCooldown,
-    dequeueInsight,
-    composeProofSummaryView,
-    setProofSummary,
-    upsertProofSummaryMessage,
-    localize,
-  ]);
-
-  const buildOriginStageContent = useCallback((): StageCardContent => {
-    const note = stageNotesRef.current.origin;
-    const hasOriginFile = Boolean(snapshot.origin?.hasContent);
-    const filename = snapshot.origin?.filename ?? null;
-    const lines: string[] = [];
-
-    if (hasOriginFile) {
-      lines.push(
-        localize("chat_stage_origin_ready", "원문이 준비되었습니다."),
-      );
-    } else {
-      lines.push(
-        localize(
-          "chat_stage_origin_missing_short",
-          "원문을 업로드하면 바로 시작할 수 있어요.",
-        ),
-      );
+    if (translationState.status === "running") {
+      return "inProgress";
     }
-
-    if (hasOriginFile && filename) {
-      lines.push(
-        localize(
-          "chat_stage_origin_filename",
-          `파일: ${filename}`,
-          { filename },
-        ),
-      );
-    }
-    if (note?.message) {
-      lines.push(note.message);
-    }
-
-    const baseActions: ChatAction[] = [];
-    if (!hasOriginFile) {
-      baseActions.push({
-        type: "startUploadFile",
-        reason: "origin-stage-card",
-      });
-    } else {
-      if (!translationVisual.overall.running && !translationVisual.overall.done) {
-        baseActions.push({
-          type: "startTranslation",
-          label: nextTranslationLabel ?? translationWorkflow?.label ?? null,
-        });
-      }
-      if (translationVisual.overall.done || snapshot.translation?.hasContent) {
-        baseActions.push({ type: "viewTranslatedText" });
-      }
-    }
-
-    const actions = mergeStageActions(baseActions, note?.actions);
-
-    return {
-      text: lines.join("\n"),
-      badge:
-        note?.badge ??
-        {
-          label: localize("chat_stage_origin_badge", "Origin stage"),
-          tone: hasOriginFile ? "success" : "default",
-        },
-      actions: actions ?? null,
-    };
-  }, [
-    localize,
-    nextTranslationLabel,
-    snapshot.origin?.filename,
-    snapshot.origin?.hasContent,
-    snapshot.translation?.hasContent,
-    translationVisual.overall.done,
-    translationVisual.overall.running,
-    translationWorkflow?.label,
-  ]);
-
-  const buildTranslationStageContent = useCallback((): StageCardContent => {
-    const note = stageNotesRef.current.translation;
-    const { overall, sequential } = translationVisual;
-    const completedCount = sequential
-      ? sequential.stages.filter((stage) => stage.state === "done").length
-      : 0;
-    const totalStages = sequential?.stages.length ?? TRANSLATION_STAGE_ORDER.length;
-    const runningStage = sequential?.stages.find(
-      (stage) => stage.state === "running",
-    );
-    const guardAlertCount = sequential
-      ? Object.entries(sequential.guardFailures ?? {})
-          .filter(([key]) => key !== "allOk")
-          .reduce((acc, [, value]) => acc + Number(value ?? 0), 0)
-      : 0;
-    const flaggedCount = sequential?.flaggedSegments?.length ?? 0;
-
-    let headline: string;
-    let tone: MessageTone = "default";
-
     if (translationState.status === "queued") {
-      headline = localize(
-        "chat_stage_translation_queued",
-        "번역이 대기열에 있습니다.",
-      );
-    } else if (overall.failed) {
-      headline = localize(
-        "chat_stage_translation_failed",
-        "번역 작업이 실패했습니다.",
-      );
-      tone = "error";
-    } else if (overall.running) {
-      if (runningStage) {
-        headline = localize(
-          "chat_stage_translation_running_stage",
-          `${runningStage.label} 단계 진행 중`,
-          { stage: runningStage.label },
-        );
-      } else {
-        headline = localize(
-          "chat_stage_translation_running",
-          "번역이 진행 중입니다.",
-        );
-      }
-    } else if (overall.done) {
-      headline = localize(
-        "chat_stage_translation_done",
-        "번역이 완료되었습니다.",
-      );
-      tone = "success";
-    } else if (hasOrigin) {
-      headline = localize(
-        "chat_stage_translation_ready",
-        "번역을 시작할 준비가 완료되었습니다.",
-      );
-    } else {
-      headline = localize(
-        "chat_stage_translation_waiting_origin",
-        "원문을 업로드하면 번역을 시작할 수 있어요.",
-      );
+      return "queued";
     }
+    if (translationState.status === "done" || translationContentAvailable) {
+      return "completed";
+    }
+    if (hasOrigin) {
+      return "ready";
+    }
+    return undefined;
+  }, [hasOrigin, translationContentAvailable, translationState.status]);
 
-    const lines: string[] = [headline];
+  const proofreadingStatusKey = useMemo<StageStatusKey | undefined>(() => {
+    if (proofreadingState.status === "failed") return "failed";
+    if (proofreadingState.status === "running") return "inProgress";
+    if (proofreadingState.status === "queued") return "queued";
+    if (proofreadingState.status === "done") return "completed";
+    if (translationStatusKey === "completed") return "ready";
+    return undefined;
+  }, [proofreadingState.status, translationStatusKey]);
+
+  const qualityStatusKey = useMemo<StageStatusKey | undefined>(() => {
+    if (qualityState.status === "failed" || qualityStage === "failed") {
+      return "failed";
+    }
+    if (qualityState.status === "running" || qualityStage === "running") {
+      return "inProgress";
+    }
+    if (qualityState.status === "done" || qualityStage === "done") {
+      return "completed";
+    }
+    if (translationStatusKey === "completed") return "ready";
+    return undefined;
+  }, [qualityState.status, qualityStage, translationStatusKey]);
+
+  const publishingStatusKey = useMemo<StageStatusKey | undefined>(() => {
+    const stage =
+      snapshot.lifecycle.publishing?.stage?.toLowerCase() ?? "none";
+    if (stage.includes("fail")) return "failed";
+    if (stage === "exporting") return "inProgress";
+    if (stage === "exported") return "completed";
+    if (translationStatusKey === "completed") return "ready";
+    return undefined;
+  }, [snapshot.lifecycle.publishing?.stage, translationStatusKey]);
+
+  const translationDetail = useMemo(() => {
+    const sequential = translationVisual.sequential;
+    if (!sequential || !sequential.stages.length) {
+      return undefined;
+    }
+    const pendingLabel = localize("timeline_status_pending", "Pending");
+    const inProgressLabel = statusMeta.inProgress.label;
+    const completedLabel = statusMeta.completed.label;
+    const failedLabel = statusMeta.failed.label;
+
+    return sequential.stages
+      .map((stage) => {
+        const label =
+          stage.state === "done"
+            ? completedLabel
+            : stage.state === "running"
+              ? inProgressLabel
+              : stage.state === "failed"
+                ? failedLabel
+                : pendingLabel;
+        return `${stage.label} (${label})`;
+      })
+      .join(" · ");
+  }, [
+    localize,
+    statusMeta.completed.label,
+    statusMeta.failed.label,
+    statusMeta.inProgress.label,
+    translationVisual.sequential,
+  ]);
+
+  const timelineStages = useMemo(
+    () => {
+      const items: Array<{
+        key: "origin" | "translation" | "proofreading" | "quality" | "publishing";
+        label: string;
+        status?: { label: string; tone: "info" | "success" | "danger" };
+        detail?: string;
+      }> = [];
+
+      const pushStage = (
+        key: "origin" | "translation" | "proofreading" | "quality" | "publishing",
+        statusKey?: StageStatusKey,
+        detail?: string,
+      ) => {
+        items.push({
+          key,
+          label: stageLabels[key],
+          status: statusKey ? statusMeta[statusKey] : undefined,
+          detail,
+        });
+      };
+
+      pushStage("origin", hasOrigin ? "completed" : undefined);
+      pushStage("translation", translationStatusKey, translationDetail);
+      pushStage("proofreading", proofreadingStatusKey);
+      pushStage("quality", qualityStatusKey);
+      pushStage("publishing", publishingStatusKey);
+
+      return items;
+    },
+    [
+      hasOrigin,
+      publishingStatusKey,
+      proofreadingStatusKey,
+      stageLabels,
+      statusMeta,
+      translationDetail,
+      translationStatusKey,
+    ],
+  );
+
+  type RecommendationKind =
+    | "uploadOrigin"
+    | "startTranslation"
+    | "startProofread"
+    | "startQuality"
+    | "openExport";
+
+  interface Recommendation {
+    kind: RecommendationKind;
+    message: string;
+    action: ChatAction;
+    buttonLabel: string;
+  }
+
+  const recommendations = useMemo<Recommendation[]>(() => {
+    const items: Recommendation[] = [];
+    const translationRunning = translationVisual.overall.running;
+    const translationCompleted = translationVisual.overall.done;
+    const proofreadingRunning = proofreadingVisual.running;
+    const proofreadingCompleted = proofreadingVisual.done;
+    const qualityRunning = qualityVisual.running;
+    const qualityCompleted = qualityVisual.done;
+    const publishingStage = snapshot.lifecycle?.publishing?.stage ?? "none";
+
+    if (!hasOrigin) {
+      items.push({
+        kind: "uploadOrigin",
+        message: localize(
+          "chat_rec_upload_origin",
+          "새 프로젝트를 열었어요. 원문을 올리고 시작해 볼까요?",
+        ),
+        action: { type: "startUploadFile" },
+        buttonLabel: localize("chat_rec_upload_origin_cta", "원문 올리기"),
+      });
+      return items;
+    }
 
     if (
-      overall.running &&
-      translationState.progressTotal > 0 &&
-      translationState.progressCompleted >= 0
+      !translationRunning &&
+      !translationCompleted &&
+      translationState.status !== "failed"
     ) {
-      const currentPass = Math.min(
-        translationState.progressTotal,
-        translationState.progressCompleted < translationState.progressTotal
-          ? translationState.progressCompleted + 1
-          : translationState.progressTotal,
-      );
-      lines.push(
-        localize(
-          "chat_stage_translation_pass_progress",
-          `진행 중인 패스: ${currentPass}/${translationState.progressTotal}`,
-          {
-            current: currentPass,
-            total: translationState.progressTotal,
-          },
+      items.push({
+        kind: "startTranslation",
+        message: localize(
+          "chat_rec_start_translation",
+          "원문이 준비됐어요. 번역을 시작해 볼까요?",
         ),
-      );
-    }
-
-    if (sequential) {
-      lines.push(
-        localize(
-          "chat_stage_translation_stage_progress",
-          `단계 진행률: ${completedCount}/${totalStages}`,
-          { completed: completedCount, total: totalStages },
-        ),
-      );
-      if (sequential.totalSegments > 0) {
-        lines.push(
-          localize(
-            "chat_stage_translation_segments",
-            `총 문장 수: ${sequential.totalSegments}`,
-            { count: sequential.totalSegments },
-          ),
-        );
-      }
-      if (sequential.needsReviewCount > 0) {
-        lines.push(
-          localize(
-            "chat_stage_translation_needs_review",
-            `검토 필요 문장: ${sequential.needsReviewCount}`,
-            { count: sequential.needsReviewCount },
-          ),
-        );
-      }
-    }
-
-    if (guardAlertCount > 0) {
-      lines.push(
-        localize(
-          "chat_stage_translation_guards",
-          `가드 경고: ${guardAlertCount}건`,
-          { count: guardAlertCount },
-        ),
-      );
-    }
-
-    if (flaggedCount > 0) {
-      lines.push(
-        localize(
-          "chat_stage_translation_flagged",
-          `플래그된 문장: ${flaggedCount}개`,
-          { count: flaggedCount },
-        ),
-      );
-    }
-
-    if (translationState.lastMessage && overall.running) {
-      lines.push(translationState.lastMessage);
-    }
-
-    if (translationState.lastError && overall.failed) {
-      lines.push(translationState.lastError);
-    }
-
-    if (note?.message) {
-      lines.push(note.message);
-    }
-
-    const baseActions: ChatAction[] = [{ type: "viewTranslationStatus" }];
-    if (overall.running && translationState.jobId) {
-      baseActions.push({
-        type: "cancelTranslation",
-        jobId: translationState.jobId,
-      });
-    }
-    if (!overall.running && hasOrigin && !overall.done) {
-      baseActions.push({
-        type: "startTranslation",
-        label: nextTranslationLabel ?? translationWorkflow?.label ?? null,
-      });
-    }
-    if (overall.done) {
-      baseActions.push({ type: "viewTranslatedText" });
-      baseActions.push({ type: "startProofread" });
-    }
-    if (overall.failed) {
-      baseActions.push({
-        type: "startTranslation",
-        label: nextTranslationLabel ?? translationWorkflow?.label ?? null,
-      });
-    }
-
-    const actions = mergeStageActions(baseActions, note?.actions);
-
-    return {
-      text: lines.join("\n"),
-      badge:
-        note?.badge ??
-        {
-          label: localize("chat_stage_translation_badge", "Translation stage"),
-          tone,
+        action: {
+          type: "startTranslation",
+          label: nextTranslationLabel ?? translationWorkflow?.label ?? null,
         },
-      actions: actions ?? null,
-    };
+        buttonLabel: localize(
+          "chat_rec_start_translation_cta",
+          "번역 시작",
+        ),
+      });
+    }
+
+    if (
+      translationCompleted &&
+      !proofreadingRunning &&
+      !proofreadingCompleted &&
+      proofreadingState.status !== "failed"
+    ) {
+      items.push({
+        kind: "startProofread",
+        message: localize(
+          "chat_rec_start_proofread",
+          "번역이 완료됐어요. 교정을 시작해 보세요.",
+        ),
+        action: { type: "startProofread" },
+        buttonLabel: localize(
+          "chat_rec_start_proofread_cta",
+          "교정 시작",
+        ),
+      });
+    }
+
+    if (
+      proofreadingCompleted &&
+      !qualityRunning &&
+      !qualityCompleted &&
+      qualityState.status !== "failed"
+    ) {
+      items.push({
+        kind: "startQuality",
+        message: localize(
+          "chat_rec_start_quality",
+          "교정이 끝났어요. 품질 평가로 마무리해 볼까요?",
+        ),
+        action: { type: "startQuality" },
+        buttonLabel: localize(
+          "chat_rec_start_quality_cta",
+          "품질 평가",
+        ),
+      });
+    }
+
+    if (
+      translationCompleted &&
+      proofreadingCompleted &&
+      publishingStage !== "exported"
+    ) {
+      items.push({
+        kind: "openExport",
+        message: localize(
+          "chat_rec_open_export",
+          "모든 단계가 끝났어요. 전자책을 만들어 볼까요?",
+        ),
+        action: { type: "openExportPanel" },
+        buttonLabel: localize(
+          "chat_rec_open_export_cta",
+          "전자책 만들기",
+        ),
+      });
+    }
+
+    return items;
   }, [
     hasOrigin,
     localize,
     nextTranslationLabel,
-    translationState.jobId,
-    translationState.lastError,
-    translationState.lastMessage,
-    translationState.progressCompleted,
-    translationState.progressTotal,
+    proofreadingState.status,
+    qualityState.status,
+    snapshot.lifecycle?.publishing?.stage,
     translationState.status,
     translationVisual,
     translationWorkflow?.label,
-  ]);
-
-  const buildProofreadingStageContent = useCallback((): StageCardContent => {
-    const note = stageNotesRef.current.proofreading;
-    const badgeLabel = localize("chat_stage_proof_badge", "Proofread stage");
-
-    if (proofreadingVisual.failed || proofreadingState.status === "failed") {
-      const lines = [
-        localize(
-          "chat_stage_proof_failed",
-          "교정 작업이 실패했습니다.",
-        ),
-      ];
-      if (proofreadingState.lastError) {
-        lines.push(proofreadingState.lastError);
-      }
-      if (note?.message) {
-        lines.push(note.message);
-      }
-      const actions = mergeStageActions([], note?.actions);
-      return {
-        text: lines.join("\n"),
-        badge:
-          note?.badge ?? {
-            label: badgeLabel,
-            tone: "error",
-          },
-        actions: actions ?? null,
-      };
-    }
-
-    if (
-      proofreadingVisual.running ||
-      proofreadingState.status === "running" ||
-      proofreadingState.status === "queued"
-    ) {
-      const lines = [
-        localize(
-          "chat_stage_proof_running",
-          "교정이 진행 중입니다.",
-        ),
-      ];
-      if (proofreadingState.lastMessage) {
-        lines.push(proofreadingState.lastMessage);
-      }
-      if (proofreadingState.isStalled) {
-        lines.push(
-          localize(
-            "chat_stage_proof_stalled",
-            "최근 하트비트가 없어 작업이 지연된 것 같아요.",
-          ),
-        );
-      }
-      if (note?.message) {
-        lines.push(note.message);
-      }
-      const actions = mergeStageActions([], note?.actions);
-      return {
-        text: lines.join("\n"),
-        badge:
-          note?.badge ?? {
-            label: badgeLabel,
-            tone: "default",
-          },
-        actions: actions ?? null,
-      };
-    }
-
-    const summaryView = composeProofSummaryView(proofSummary);
-    if (summaryView) {
-      const lines = [summaryView.text];
-      if (note?.message) {
-        lines.push(note.message);
-      }
-      const baseActions = summaryView.actions ? [...summaryView.actions] : [];
-      const actions = mergeStageActions(baseActions, note?.actions);
-      return {
-        text: lines.join("\n"),
-        badge:
-          note?.badge ?? {
-            label: badgeLabel,
-            tone: summaryView.tone,
-          },
-        actions: actions ?? null,
-      };
-    }
-
-    const lines = [
-      localize(
-        "chat_stage_proof_ready",
-        "교정을 시작해 보세요.",
-      ),
-    ];
-    if (note?.message) {
-      lines.push(note.message);
-    }
-    const baseActions: ChatAction[] = [];
-    if (translationVisual.overall.done) {
-      baseActions.push({ type: "startProofread" });
-    }
-    const actions = mergeStageActions(baseActions, note?.actions);
-
-    return {
-      text: lines.join("\n"),
-      badge:
-        note?.badge ?? {
-          label: badgeLabel,
-          tone: "default",
-        },
-      actions: actions ?? null,
-    };
-  }, [
-    composeProofSummaryView,
-    localize,
-    proofSummary,
-    proofreadingState.isStalled,
-    proofreadingState.lastError,
-    proofreadingState.lastMessage,
-    proofreadingState.status,
-    proofreadingVisual.failed,
-    proofreadingVisual.running,
-    translationVisual.overall.done,
-  ]);
-
-  const buildQualityStageContent = useCallback((): StageCardContent => {
-    const note = stageNotesRef.current.quality;
-    const { running, done, failed } = qualityVisual;
-    let headline: string;
-    let tone: MessageTone = "default";
-
-    if (failed || qualityState.status === "failed") {
-      headline = localize(
-        "chat_stage_quality_failed",
-        "품질 평가가 실패했습니다.",
-      );
-      tone = "error";
-    } else if (running || qualityState.status === "running") {
-      headline = localize(
-        "chat_stage_quality_running",
-        "품질 평가 중입니다.",
-      );
-    } else if (done || qualityState.status === "done") {
-      headline = localize(
-        "chat_stage_quality_done",
-        "품질 평가가 완료되었습니다.",
-      );
-      tone = "success";
-    } else {
-      headline = localize(
-        "chat_stage_quality_ready",
-        "품질 평가를 실행해 보세요.",
-      );
-    }
-
-    const lines: string[] = [headline];
-
-    if (qualityState.score != null && (done || qualityState.status === "done")) {
-      const roundedScore = Math.round(Number(qualityState.score) * 10) / 10;
-      lines.push(
-        localize(
-          "chat_stage_quality_score",
-          `품질 점수: ${roundedScore}`,
-          { score: roundedScore },
-        ),
-      );
-    }
-
-    if (qualityState.lastError && (failed || qualityState.status === "failed")) {
-      lines.push(qualityState.lastError);
-    }
-
-    if (note?.message) {
-      lines.push(note.message);
-    }
-
-    const baseActions: ChatAction[] = [];
-    if (!running && !done && (proofreadingVisual.done || translationVisual.overall.done)) {
-      baseActions.push({ type: "startQuality" });
-    }
-    if (done) {
-      baseActions.push({ type: "viewQualityReport" });
-    }
-
-    const actions = mergeStageActions(baseActions, note?.actions);
-
-    return {
-      text: lines.join("\n"),
-      badge:
-        note?.badge ??
-        {
-          label: localize("chat_stage_quality_badge", "Quality stage"),
-          tone,
-        },
-      actions: actions ?? null,
-    };
-  }, [
-    localize,
-    proofreadingVisual.done,
-    qualityState.lastError,
-    qualityState.score,
-    qualityState.status,
+    proofreadingVisual,
     qualityVisual,
-      translationVisual.overall.done,
   ]);
 
-  const applyOriginStageCard = useCallback(() => {
-    upsertStageMessage("origin", buildOriginStageContent());
-  }, [buildOriginStageContent, upsertStageMessage]);
-
-  const applyTranslationStageCard = useCallback(() => {
-    upsertStageMessage("translation", buildTranslationStageContent());
-  }, [buildTranslationStageContent, upsertStageMessage]);
-
-  const applyProofreadingStageCard = useCallback(() => {
-    upsertStageMessage("proofreading", buildProofreadingStageContent());
-  }, [buildProofreadingStageContent, upsertStageMessage]);
-
-  const applyQualityStageCard = useCallback(() => {
-    upsertStageMessage("quality", buildQualityStageContent());
-  }, [buildQualityStageContent, upsertStageMessage]);
-
-  useEffect(() => {
-    applyOriginStageCard();
-  }, [applyOriginStageCard]);
-
-  useEffect(() => {
-    applyTranslationStageCard();
-  }, [applyTranslationStageCard]);
-
-  useEffect(() => {
-    applyProofreadingStageCard();
-  }, [applyProofreadingStageCard]);
-
-  useEffect(() => {
-    applyQualityStageCard();
-  }, [applyQualityStageCard]);
-
-  const enqueueTask = useCallback(
+  const handleGuideTask = useCallback(
     (task: WorkflowTask) => {
       const normalized: WorkflowTask = {
         ...task,
@@ -2278,61 +1779,30 @@ export const ChatOrchestrator = ({
       }
       processedTaskIdsRef.current.add(normalized.id!);
 
+      if (
+        normalized.type === "startTranslation" ||
+        normalized.type === "startProofread" ||
+        normalized.type === "startQuality" ||
+        normalized.type === "shareOriginSummaryPending"
+      ) {
+        return;
+      }
+
       const actions = adaptActionsForOrigin(
         normalized.actions as ChatAction[] | undefined,
       );
 
-      if (normalized.stage) {
-        stageNotesRef.current[normalized.stage] = {
-          message: normalized.message,
-          badge: normalized.badge,
-          actions: actions,
-        };
-
-        switch (normalized.stage) {
-          case "origin":
-            applyOriginStageCard();
-            break;
-          case "translation":
-            applyTranslationStageCard();
-            break;
-          case "proofreading":
-            applyProofreadingStageCard();
-            break;
-          case "quality":
-            applyQualityStageCard();
-            break;
-          default:
-            break;
-        }
-        return;
-      }
-
-      pushAssistant(
-        normalized.message,
-        normalized.badge,
-        actions,
-        true,
-        normalized.stage,
-      );
+      pushAssistant(normalized.message, normalized.badge, actions, true);
     },
-    [
-      adaptActionsForOrigin,
-      applyOriginStageCard,
-      applyProofreadingStageCard,
-      applyQualityStageCard,
-      applyTranslationStageCard,
-      pushAssistant,
-    ],
+    [adaptActionsForOrigin, pushAssistant],
   );
 
   useWorkflowGuideAgent({
     projectId,
     snapshot,
     content,
-    queueTask: enqueueTask,
+    queueTask: handleGuideTask,
   });
-
   const toPayload = useCallback(
     (msgs: Message[]): ChatMessagePayload[] =>
       msgs.slice(-20).map((msg) => ({ role: msg.role, content: msg.text })),
@@ -2645,59 +2115,28 @@ export const ChatOrchestrator = ({
 
   useEffect(() => {
     setHistoryLoaded(false);
-    setMessages([buildIntroMessage()]);
+    setMessages([]);
     setInputDraft(null);
     firstRunScriptShownRef.current = false;
-    resetProofSummaryState();
     stageAnchorRefs.current = {
       origin: null,
       translation: null,
       proofreading: null,
       quality: null,
+      publishing: null,
     };
-    stageMessageRefs.current = {
-      origin: null,
-      translation: null,
-      proofreading: null,
-      quality: null,
-    };
-    stageNotesRef.current = {
-      origin: null,
-      translation: null,
-      proofreading: null,
-      quality: null,
-    };
-  }, [projectId, buildIntroMessage, resetProofSummaryState]);
-
-  useEffect(() => {
-    setMessages((prev) => {
-      if (!prev.length) {
-        return [buildIntroMessage()];
-      }
-      const intro = buildIntroMessage();
-      return prev.map((message) =>
-        message.id === "intro"
-          ? {
-              ...message,
-              text: intro.text,
-            }
-          : message,
-      );
-    });
-  }, [buildIntroMessage]);
+  }, [projectId]);
 
   useEffect(() => {
     if (!projectId) {
-      setMessages([buildIntroMessage()]);
+      setMessages([]);
       setHistoryLoaded(false);
-      resetProofSummaryState();
       return;
     }
 
     if (history && !historyLoaded && !isHistoryLoading) {
       if (!history.length) {
-        setMessages([buildIntroMessage()]);
-        resetProofSummaryState();
+        setMessages([]);
       } else {
         setMessages(
           history.map((item) => ({
@@ -2721,25 +2160,6 @@ export const ChatOrchestrator = ({
           })),
         );
       }
-      stageMessageRefs.current = {
-        origin: null,
-        translation: null,
-        proofreading: null,
-        quality: null,
-      };
-      stageNotesRef.current = {
-        origin: null,
-        translation: null,
-        proofreading: null,
-        quality: null,
-      };
-      if (history && history.length) {
-        resetProofSummaryState();
-      }
-      applyOriginStageCard();
-      applyTranslationStageCard();
-      applyProofreadingStageCard();
-      applyQualityStageCard();
       setHistoryLoaded(true);
     }
   }, [
@@ -2748,12 +2168,6 @@ export const ChatOrchestrator = ({
     historyLoaded,
     isHistoryLoading,
     adaptActionsForOrigin,
-    applyOriginStageCard,
-    applyProofreadingStageCard,
-    applyQualityStageCard,
-    applyTranslationStageCard,
-    resetProofSummaryState,
-    buildIntroMessage,
   ]);
 
   const handleCreateProject = useCallback(async () => {
@@ -3565,10 +2979,7 @@ export const ChatOrchestrator = ({
             </div>
           </div>
           <WorkflowTimeline
-            originReady={hasOrigin}
-            translation={translationVisual}
-            proofreading={proofreadingVisual}
-            quality={qualityVisual}
+            stages={timelineStages}
             onStageClick={scrollToStage}
           />
           {(translationWorkflow?.label ||
@@ -3593,7 +3004,7 @@ export const ChatOrchestrator = ({
                 <p className="font-medium text-slate-600">
                   {localize(
                     "chat_dropzone_title",
-                    "원문 파일을 드래그해 여기에 놓거나 파일을 선택해 주세요.",
+                    "원문 파일을 드래그해 여기에 놓거나 원문 올리기 버튼을 눌러 원문 파일을 선택해 주세요.",
                   )}
                 </p>
                 <p className="text-slate-600">
@@ -3605,14 +3016,8 @@ export const ChatOrchestrator = ({
                 </p>
                 <p className="mt-1 text-slate-500">
                   {localize(
-                    "chat_dropzone_hint",
-                    "파일을 업로드하면 자동으로 분석하고 미리보기 영역에 그 내용을 보여드립니다.",
-                  )}
-                </p>
-                <p className="text-slate-500">
-                  {localize(
                     "chat_dropzone_guidance",
-                    "번역, 교정, 그리고 번역 품질 평가를 채팅으로 자연스럽게 요청해 주세요. 번역 과정을 도와드리겠습니다.",
+                    "번역 과정을 도와드리겠습니다.",
                   )}
                 </p>
                 <button
@@ -3621,7 +3026,7 @@ export const ChatOrchestrator = ({
                   disabled={isUploading}
                   className="mt-3 inline-flex items-center rounded border border-indigo-300 px-3 py-1 text-xs font-medium text-indigo-600 transition hover:border-indigo-400 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {localize("chat_dropzone_select", "파일 선택하기")}
+                  {localize("chat_dropzone_select", "원문 올리기")}
                 </button>
                 {(isUploading ||
                   translationVisual.overall.running ||
@@ -3657,6 +3062,47 @@ export const ChatOrchestrator = ({
             }}
           >
             <div className="space-y-3 pb-28">
+              <div className="contents">
+                <div
+                  ref={(node) => (stageAnchorRefs.current.origin = node)}
+                  className="h-0"
+                />
+                <div
+                  ref={(node) => (stageAnchorRefs.current.translation = node)}
+                  className="h-0"
+                />
+                <div
+                  ref={(node) => (stageAnchorRefs.current.proofreading = node)}
+                  className="h-0"
+                />
+                <div
+                  ref={(node) => (stageAnchorRefs.current.quality = node)}
+                  className="h-0"
+                />
+                <div
+                  ref={(node) => (stageAnchorRefs.current.publishing = node)}
+                  className="h-0"
+                />
+              </div>
+              {recommendations.length > 0 && (
+                <div className="space-y-2">
+                  {recommendations.map((rec) => (
+                    <div
+                      key={rec.kind}
+                      className="flex items-center justify-between gap-3 rounded-md border border-indigo-200 bg-white/90 px-3 py-2 text-xs text-slate-700 shadow-sm"
+                    >
+                      <p className="flex-1 leading-relaxed">{rec.message}</p>
+                      <button
+                        type="button"
+                        className="flex-shrink-0 rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white transition hover:bg-indigo-500"
+                        onClick={() => handleMessageAction(rec.action)}
+                      >
+                        {rec.buttonLabel}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {messages.map((message) => (
                 <ChatMessage
                   key={message.id}
@@ -3665,8 +3111,6 @@ export const ChatOrchestrator = ({
                   badge={message.badge}
                   actions={message.actions}
                   onAction={handleMessageAction}
-                  anchorStage={message.anchorStage}
-                  onAnchorMount={registerStageAnchor}
                 />
               ))}
               <div style={{ height: composerHeight + 48 }}>
