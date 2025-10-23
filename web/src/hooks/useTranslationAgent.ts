@@ -16,9 +16,12 @@ const STAGE_LABELS: Record<string, string> = {
   style: "스타일 보정",
   emotion: "감정 조율",
   qa: "QA 검수",
+  finalizing: "후처리",
 };
 
-const SEQUENTIAL_STAGE_LABEL_SEQUENCE = SEQUENTIAL_STAGE_ORDER
+const DISPLAY_STAGE_ORDER = [...SEQUENTIAL_STAGE_ORDER, "finalizing"] as const;
+
+const SEQUENTIAL_STAGE_LABEL_SEQUENCE = DISPLAY_STAGE_ORDER
   .map((stage) => STAGE_LABELS[stage] ?? stage)
   .join(" -> ");
 
@@ -132,10 +135,13 @@ export const useTranslationAgent = ({
     }
   }, [projectId, resetTranslation]);
 
+  const translationReadyFlag = isTranslationReady?.() ?? false;
+
   useEffect(() => {
     if (!lifecycle) return;
     const stage = lifecycle.stage?.toLowerCase() ?? null;
-    if (!stage) return;
+    const translationReady = translationReadyFlag;
+    if (!stage && !translationReady) return;
     const hasJob = Boolean(lifecycle.jobId);
 
     if (!projectId) return;
@@ -165,7 +171,8 @@ export const useTranslationAgent = ({
     } else if (
       (stage.includes("done") ||
         stage.includes("complete") ||
-        stage === "translated") &&
+        stage === "translated" ||
+        (stage.includes("final") && translationReady)) &&
       translation.status !== "done"
     ) {
       finalizingRef.current = false;
@@ -173,6 +180,28 @@ export const useTranslationAgent = ({
       setTranslation(projectId, {
         status: "done",
         jobId: null,
+        lastMessage:
+        translation.needsReviewCount > 0
+            ? "QA 점검이 필요한 항목이 있습니다."
+            : "번역이 완료되었습니다.",
+        lastError: null,
+        progressCompleted:
+          lifecycle.batchesCompleted ?? translation.progressCompleted,
+        progressTotal:
+          lifecycle.batchesTotal ?? translation.progressTotal,
+        updatedAt:
+          lifecycle.lastUpdatedAt ??
+          translation.updatedAt ??
+          new Date().toISOString(),
+      });
+    } else if (
+      translationReady &&
+      translation.status !== "done" &&
+      (!stage || !stage.includes("fail"))
+    ) {
+      setTranslation(projectId, {
+        status: "done",
+        jobId: lifecycle.jobId ?? translation.jobId,
         lastMessage:
           translation.needsReviewCount > 0
             ? "QA 점검이 필요한 항목이 있습니다."
@@ -198,6 +227,7 @@ export const useTranslationAgent = ({
     translation.needsReviewCount,
     translation.updatedAt,
     projectId,
+    translationReadyFlag,
   ]);
 
   const waitForTranslationResult = useCallback(async () => {

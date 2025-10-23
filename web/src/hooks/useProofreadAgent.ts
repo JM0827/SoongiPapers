@@ -252,15 +252,15 @@ export const useProofreadAgent = ({
                 runId,
                 label,
               });
-              pushAssistant(
-                runStatus === "accepted"
-                  ? "교정 워크플로우가 시작되었습니다."
-                  : "교정 워크플로우 요청이 거절되었습니다.",
-                {
-                  label: "Proofread workflow",
-                  tone: runStatus === "accepted" ? "default" : "error",
-                },
-              );
+              if (runStatus !== "accepted") {
+                pushAssistant(
+                  "교정 워크플로우 요청이 거절되었습니다.",
+                  {
+                    label: "Proofread workflow",
+                    tone: "error",
+                  },
+                );
+              }
 
               if (runStatus !== "accepted") {
                 encounteredError = true;
@@ -435,18 +435,6 @@ export const useProofreadAgent = ({
                 itemCount:
                   itemCount > 0 ? itemCount : undefined,
               });
-              pushAssistant(
-                `${tierLabel} 교정 단계가 완료되었어요. 발견된 이슈 ${itemCount}건을 기록했습니다.`,
-                {
-                  label:
-                    tier === "quick"
-                      ? "Quick tier complete"
-                      : "Deep tier complete",
-                  tone: "success",
-                },
-                undefined,
-                true,
-              );
               return;
             }
 
@@ -670,12 +658,6 @@ export const useProofreadAgent = ({
               undefined,
               { updateHeartbeat: false },
             );
-            pushAssistant(
-              "교정 진행이 멈춘 것 같습니다. Proofread 탭에서 상태를 확인해 주세요.",
-              { label: "Proofread stalled", tone: "error" },
-              undefined,
-              true,
-            );
           } else if (diff <= DEFAULT_STALL_THRESHOLD_MS && proofreading.isStalled) {
             setProofreadingForProject({ isStalled: false });
             appendActivity(
@@ -683,12 +665,6 @@ export const useProofreadAgent = ({
               "교정 heartbeat가 복구되었습니다.",
               undefined,
               { updateHeartbeat: false },
-            );
-            pushAssistant(
-              "교정이 다시 진행 중입니다.",
-              { label: "Proofread resumed", tone: "success" },
-              undefined,
-              true,
             );
           }
         }

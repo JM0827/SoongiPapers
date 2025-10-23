@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X } from "lucide-react";
+import { Pencil, X, Loader2, CheckCircle2, Circle } from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -44,53 +44,297 @@ import { api } from "../../services/api";
 import { useWorkflowStore } from "../../store/workflow.store";
 import { projectKeys } from "../../hooks/useProjectData";
 
-const TRANSLATION_STAGE_ORDER = [
+const TRANSLATION_PIPELINE_STAGE_ORDER = [
   "literal",
   "style",
   "emotion",
   "qa",
 ] as const;
 
-const TRANSLATION_STAGE_LABELS: Record<
-  (typeof TRANSLATION_STAGE_ORDER)[number],
-  string
+type PipelineStageKey = (typeof TRANSLATION_PIPELINE_STAGE_ORDER)[number];
+type StageKey = PipelineStageKey | "finalizing";
+
+type StageStatusKey =
+  | "ready"
+  | "queued"
+  | "inProgress"
+  | "completed"
+  | "failed";
+
+type LocalizeFn = (
+  key: string,
+  fallback: string,
+  params?: Record<string, string | number>,
+) => string;
+
+const TRANSLATION_STAGE_LABEL_META: Record<
+  StageKey,
+  { key: string; fallback: string }
 > = {
-  literal: "직역 단계",
-  style: "스타일 보정",
-  emotion: "감정 조율",
-  qa: "QA",
+  literal: {
+    key: "translation_stage_literal",
+    fallback: "Literal pass",
+  },
+  style: {
+    key: "translation_stage_style",
+    fallback: "Style pass",
+  },
+  emotion: {
+    key: "translation_stage_emotion",
+    fallback: "Emotion pass",
+  },
+  qa: {
+    key: "translation_stage_qa",
+    fallback: "QA review",
+  },
+  finalizing: {
+    key: "translation_stage_finalizing",
+    fallback: "Finalizing",
+  },
 };
 
-type StageKey = (typeof TRANSLATION_STAGE_ORDER)[number];
+const STAGE_STATUS_META: Record<
+  StageStatusKey,
+  { key: string; fallback: string }
+> = {
+  ready: {
+    key: "timeline_status_ready",
+    fallback: "Ready",
+  },
+  queued: {
+    key: "timeline_status_queued",
+    fallback: "Queued",
+  },
+  inProgress: {
+    key: "timeline_status_in_progress",
+    fallback: "In Progress",
+  },
+  completed: {
+    key: "timeline_status_completed",
+    fallback: "Completed",
+  },
+  failed: {
+    key: "timeline_status_failed",
+    fallback: "Failed",
+  },
+};
 
-const inferCurrentStage = (
+const applyParams = (
+  template: string,
+  params?: Record<string, string | number>,
+): string => {
+  if (!params) return template;
+  return template.replace(/{{(\w+)}}/g, (match, token) => {
+    if (Object.prototype.hasOwnProperty.call(params, token)) {
+      return String(params[token]);
+    }
+    return match;
+  });
+};
+
+const inferCurrentPipelineStage = (
   sequential: JobSequentialSummary,
-): StageKey | null => {
+): PipelineStageKey | null => {
   if (!sequential.totalSegments) return null;
   if (sequential.currentStage) {
-    return sequential.currentStage as StageKey;
+    const normalized = sequential.currentStage.toLowerCase();
+    if (
+      (TRANSLATION_PIPELINE_STAGE_ORDER as readonly string[]).includes(
+        normalized,
+      )
+    ) {
+      return normalized as PipelineStageKey;
+    }
   }
   return (
-    TRANSLATION_STAGE_ORDER.find((stage) => {
+    TRANSLATION_PIPELINE_STAGE_ORDER.find((stage) => {
       const count = sequential.stageCounts?.[stage] ?? 0;
       return count < sequential.totalSegments;
-    }) ?? TRANSLATION_STAGE_ORDER[TRANSLATION_STAGE_ORDER.length - 1]
+    }) ??
+    TRANSLATION_PIPELINE_STAGE_ORDER[
+      TRANSLATION_PIPELINE_STAGE_ORDER.length - 1
+    ]
   );
 };
 
-const formatSequentialStageStatus = (job: JobSummary): string | null => {
+const resolveStageStatusKey = (
+  job: JobSummary,
+  stageKey: StageKey,
+  sequential: JobSequentialSummary,
+  total: number,
+): StageStatusKey => {
+  const normalizedJobStatus = job.status?.toLowerCase() ?? "";
+  const translationDone =
+    normalizedJobStatus === "done" ||
+    normalizedJobStatus === "succeeded" ||
+    normalizedJobStatus === "completed" ||
+    normalizedJobStatus === "success" ||
+    Boolean(job.finalTranslation);
+  const currentStage = inferCurrentPipelineStage(sequential);
+  const completedStages = new Set(
+    (sequential.completedStages ?? []).map((stage) => stage.toLowerCase()),
+  );
+  const stageCount = sequential.stageCounts?.[stageKey] ?? 0;
+  const pipelineStageCount = sequential.stageCounts ?? {};
+  const qaCount = pipelineStageCount.qa ?? 0;
+  const qaComplete =
+    total > 0 ? qaCount >= total : completedStages.has("qa");
+
+  if (stageKey === "finalizing") {
+    if (normalizedJobStatus === "failed" || normalizedJobStatus === "cancelled") {
+      return "failed";
+    }
+    if (completedStages.has("finalizing") || translationDone) {
+      return "completed";
+    }
+    if (qaComplete) {
+      return normalizedJobStatus === "running" ? "inProgress" : "ready";
+    }
+    return "queued";
+  }
+
+  const completed = total > 0 && stageCount >= total;
+
+  if (completed || completedStages.has(stageKey)) {
+    return "completed";
+  }
+
+  if (normalizedJobStatus === "failed" || normalizedJobStatus === "cancelled") {
+    if (currentStage === stageKey || (!currentStage && stageCount < total)) {
+      return "failed";
+    }
+    return "queued";
+  }
+
+  if (currentStage === stageKey) {
+    if (normalizedJobStatus === "queued" || normalizedJobStatus === "pending") {
+      return "queued";
+    }
+    return "inProgress";
+  }
+
+  const stageIndex = TRANSLATION_PIPELINE_STAGE_ORDER.indexOf(stageKey);
+  const currentIndex = currentStage
+    ? TRANSLATION_PIPELINE_STAGE_ORDER.indexOf(currentStage)
+    : -1;
+
+  if (currentIndex >= 0) {
+    if (stageIndex < currentIndex) {
+      return "completed";
+    }
+    if (stageIndex === currentIndex + 1) {
+      return normalizedJobStatus === "running" ? "ready" : "queued";
+    }
+    if (stageIndex > currentIndex + 1) {
+      return "queued";
+    }
+  } else {
+    if (normalizedJobStatus === "queued" || normalizedJobStatus === "pending") {
+      return "queued";
+    }
+    if (normalizedJobStatus === "running") {
+      if (stageIndex === 0) {
+        return "inProgress";
+      }
+      const previousStage = TRANSLATION_PIPELINE_STAGE_ORDER[stageIndex - 1];
+      const previousComplete =
+        (sequential.stageCounts?.[previousStage] ?? 0) >= total ||
+        completedStages.has(previousStage);
+      return previousComplete ? "ready" : "queued";
+    }
+    if (
+      normalizedJobStatus === "succeeded" ||
+      normalizedJobStatus === "completed"
+    ) {
+      return "completed";
+    }
+  }
+
+  return stageCount > 0 ? "inProgress" : "queued";
+};
+
+const formatSequentialStageStatus = (
+  job: JobSummary,
+  localize: LocalizeFn,
+): string | null => {
   const sequential = job.sequential;
   if (!sequential || !sequential.totalSegments) {
     return null;
   }
   const total = sequential.totalSegments;
-  const currentStage = inferCurrentStage(sequential);
-  const stageKey = currentStage ?? TRANSLATION_STAGE_ORDER[TRANSLATION_STAGE_ORDER.length - 1];
-  const stageLabel = TRANSLATION_STAGE_LABELS[stageKey] ?? stageKey;
-  const completed = Math.min(sequential.stageCounts?.[stageKey] ?? 0, total);
-  const label = `Job ${job.id} · ${stageLabel} ${completed}/${total}`;
-  // Needs-review counts are surfaced in the proofread view; omit the badge here.
-  return label;
+  const normalizedJobStatus = job.status?.toLowerCase() ?? "";
+  const pipelineStage = inferCurrentPipelineStage(sequential);
+  const completedStages = new Set(
+    (sequential.completedStages ?? []).map((stage) => stage.toLowerCase()),
+  );
+  const qaCount = sequential.stageCounts?.qa ?? 0;
+  const qaComplete =
+    total > 0 ? qaCount >= total : completedStages.has("qa");
+  const translationDone =
+    normalizedJobStatus === "done" ||
+    normalizedJobStatus === "succeeded" ||
+    normalizedJobStatus === "completed" ||
+    normalizedJobStatus === "success" ||
+    Boolean(job.finalTranslation);
+
+  const stageKey: StageKey = (() => {
+    if (
+      (qaComplete &&
+        normalizedJobStatus !== "failed" &&
+        normalizedJobStatus !== "cancelled" &&
+        !translationDone) ||
+      translationDone
+    ) {
+      return "finalizing";
+    }
+    if (pipelineStage) {
+      return pipelineStage;
+    }
+    return TRANSLATION_PIPELINE_STAGE_ORDER[
+      TRANSLATION_PIPELINE_STAGE_ORDER.length - 1
+    ];
+  })();
+  const stageMeta = TRANSLATION_STAGE_LABEL_META[stageKey] ?? {
+    key: stageKey,
+    fallback: stageKey,
+  };
+  const stageLabel = localize(stageMeta.key, stageMeta.fallback);
+  const completedSegments = Math.min(
+    sequential.stageCounts?.[stageKey] ?? 0,
+    total,
+  );
+  const statusKey = resolveStageStatusKey(
+    job,
+    stageKey,
+    sequential,
+    total,
+  );
+  const statusMeta = STAGE_STATUS_META[statusKey];
+  const statusLabel = localize(statusMeta.key, statusMeta.fallback);
+
+  if (stageKey === "finalizing") {
+    return localize(
+      "rightpanel_job_stage_finalizing",
+      "Job {{jobId}} · {{stageLabel}} ({{statusLabel}})",
+      {
+        jobId: job.id,
+        stageLabel,
+        statusLabel,
+      },
+    );
+  }
+
+  return localize(
+    "rightpanel_job_stage_progress",
+    "Job {{jobId}} · {{stageLabel}} ({{statusLabel}}) {{completed}}/{{total}}",
+    {
+      jobId: job.id,
+      stageLabel,
+      statusLabel,
+      completed: completedSegments,
+      total,
+    },
+  );
 };
 
 interface RightPanelProps {
@@ -554,34 +798,74 @@ const TranslationSummaryCard = ({
   );
 };
 
+type SummaryStatus = "pending" | "running" | "done";
+
 const DocumentSummaryCard = ({
   title,
   profile,
   isLoading = false,
   defaultOpen = true,
+  status = "pending",
+  fallbackSummary,
+  fallbackMetrics,
+  fallbackTimestamp,
+  fallbackLanguage,
+  fallbackVersion,
 }: {
   title: string;
   profile: DocumentProfileSummary | null;
   isLoading?: boolean;
   defaultOpen?: boolean;
+  status?: SummaryStatus;
+  fallbackSummary?: {
+    story?: string | null;
+    intention?: string | null;
+    readerPoints?: string[];
+  } | null;
+  fallbackMetrics?: {
+    wordCount?: number | null;
+    charCount?: number | null;
+    paragraphCount?: number | null;
+    readingTimeMinutes?: number | null;
+    readingTimeLabel?: string | null;
+  } | null;
+  fallbackTimestamp?: string | null;
+  fallbackLanguage?: string | null;
+  fallbackVersion?: number | null;
 }) => {
-  const timestamp = profile?.updatedAt ?? profile?.createdAt ?? null;
-  const timestampLabel = timestamp
-    ? new Date(timestamp).toLocaleString()
+  const effectiveTimestamp =
+    profile?.updatedAt ?? profile?.createdAt ?? fallbackTimestamp ?? null;
+  const timestampLabel = effectiveTimestamp
+    ? new Date(effectiveTimestamp).toLocaleString()
     : null;
-  const summary = profile?.summary;
-  const metrics = profile?.metrics;
+  const summary =
+    profile?.summary ??
+    (fallbackSummary
+      ? {
+          story: fallbackSummary.story ?? "",
+          intention: fallbackSummary.intention ?? "",
+          readerPoints: fallbackSummary.readerPoints ?? [],
+        }
+      : null);
+  const metrics = profile?.metrics ?? fallbackMetrics ?? null;
   const [isOpen, setIsOpen] = useState(defaultOpen);
-  const isToggleDisabled = !profile && !isLoading;
+  const hasFallback = Boolean(fallbackSummary);
+  const isToggleDisabled = !profile && !hasFallback && !isLoading;
 
   const formatMinutes = (value: number | undefined) => {
     if (value === undefined || Number.isNaN(value)) return null;
     return Math.max(1, Math.round(value)).toString();
   };
 
-  const wordsLabel = metrics ? metrics.wordCount.toLocaleString() : null;
-  const charsLabel = metrics ? metrics.charCount.toLocaleString() : null;
-  const minutesLabel = formatMinutes(metrics?.readingTimeMinutes);
+  const wordsLabel =
+    metrics?.wordCount !== undefined && metrics?.wordCount !== null
+      ? Number(metrics.wordCount).toLocaleString()
+      : null;
+  const charsLabel =
+    metrics?.charCount !== undefined && metrics?.charCount !== null
+      ? Number(metrics.charCount).toLocaleString()
+      : null;
+  const minutesLabel = formatMinutes(metrics?.readingTimeMinutes ?? undefined);
 
   const toggle = () => {
     if (!profile && !isLoading) return;
@@ -617,6 +901,56 @@ const DocumentSummaryCard = ({
     return <p className="mt-4 text-[11px] text-slate-400">{parts.join(" ")}</p>;
   };
 
+  const statusIcon = () => {
+    if (status === "running") {
+      return (
+        <Loader2
+          className="h-4 w-4 animate-spin text-indigo-500"
+          aria-hidden="true"
+        />
+      );
+    }
+    if (status === "done") {
+      return (
+        <CheckCircle2
+          className="h-4 w-4 text-emerald-500"
+          aria-hidden="true"
+        />
+      );
+    }
+    return <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />;
+  };
+
+  const statusDescription = (() => {
+    if (profile) {
+      return (
+        <p className="text-xs text-slate-500">
+          version v{profile.version}
+          {profile.language ? `.${profile.language}` : ""}
+        </p>
+      );
+    }
+    if (fallbackSummary) {
+      return (
+        <p className="text-xs text-slate-500">
+          임시 요약 제공
+          {fallbackVersion ? ` · v${fallbackVersion}` : ""}
+          {fallbackLanguage ? `.${fallbackLanguage}` : ""}
+        </p>
+      );
+    }
+    if (status === "running" || isLoading) {
+      return (
+        <p className="text-xs text-slate-500">분석 정보를 불러오는 중입니다…</p>
+      );
+    }
+    return (
+      <p className="text-xs text-slate-400">
+        아직 분석 정보가 생성되지 않았습니다.
+      </p>
+    );
+  })();
+
   return (
     <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
       <header className="flex items-start justify-between gap-3">
@@ -629,19 +963,11 @@ const DocumentSummaryCard = ({
           onClick={handleHeaderClick}
           onKeyDown={handleHeaderKeyDown}
         >
-          <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-          {profile ? (
-            <p className="text-xs text-slate-500">
-              version v{profile.version}
-              {profile.language ? `.${profile.language}` : ""}
-            </p>
-          ) : (
-            <p className="text-xs text-slate-400">
-              {isLoading
-                ? "분석 정보를 불러오는 중입니다…"
-                : "아직 분석 정보가 생성되지 않았습니다."}
-            </p>
-          )}
+          <div className="flex items-center gap-2">
+            {statusIcon()}
+            <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+          </div>
+          {statusDescription}
         </div>
         <button
           type="button"
@@ -655,9 +981,9 @@ const DocumentSummaryCard = ({
         </button>
       </header>
       {isOpen &&
-        (profile ? (
+        (summary ? (
           <>
-            {summary?.intention && (
+            {summary.intention && (
               <div className="mt-4 text-sm text-slate-700">
                 <span className="font-medium text-slate-800">작가의도:</span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
@@ -665,7 +991,7 @@ const DocumentSummaryCard = ({
                 </span>
               </div>
             )}
-            {summary?.story && (
+            {summary.story && (
               <div className="mt-3 text-sm text-slate-700">
                 <span className="font-medium text-slate-800">줄거리:</span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
@@ -673,25 +999,27 @@ const DocumentSummaryCard = ({
                 </span>
               </div>
             )}
-        {summary?.readerPoints?.length ? (
+        {summary.readerPoints?.length ? (
           <div className="mt-4 space-y-1 text-sm text-slate-700">
             <p className="font-medium text-slate-800">독자 포인트</p>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
               {summary.readerPoints.map((point, index) => (
-                <li key={`${profile.id}-point-${index}`}>{point}</li>
+                <li key={`${profile?.id ?? "fallback"}-point-${index}`}>
+                  {point}
+                </li>
               ))}
             </ul>
           </div>
         ) : null}
         {renderFooter()}
       </>
-    ) : !isLoading ? (
+    ) : status === "running" || isLoading ? (
           <p className="mt-4 text-sm text-slate-500">
-            텍스트가 저장되면 자동으로 문서 요약이 생성됩니다.
+            분석 정보를 불러오는 중입니다…
           </p>
         ) : (
           <p className="mt-4 text-sm text-slate-500">
-            분석 정보를 불러오는 중입니다…
+            텍스트가 저장되면 자동으로 문서 요약이 생성됩니다.
           </p>
         ))}
     </section>
@@ -705,6 +1033,10 @@ const DocumentSummarySection = ({
   translationNotesEditable = false,
   translationNotesSaving = false,
   translationNotesError = null,
+  originStatus = "pending",
+  translationStatus = "pending",
+  translationFallback = null,
+  originFallback = null,
 }: {
   origin: DocumentProfileSummary | null;
   translation: DocumentProfileSummary | null;
@@ -715,12 +1047,52 @@ const DocumentSummarySection = ({
   translationNotesEditable?: boolean;
   translationNotesSaving?: boolean;
   translationNotesError?: string | null;
+  originStatus?: SummaryStatus;
+  translationStatus?: SummaryStatus;
+  translationFallback?: {
+    summary: {
+      story: string;
+      intention: string | null;
+      readerPoints: string[];
+    };
+    metrics: {
+      wordCount: number;
+      charCount: number;
+      paragraphCount: number;
+      readingTimeMinutes: number;
+      readingTimeLabel: string;
+    };
+    timestamp: string | null;
+    language: string | null;
+  } | null;
+  originFallback?: {
+    summary: {
+      story: string;
+      intention: string | null;
+      readerPoints: string[];
+    };
+    metrics: {
+      wordCount: number;
+      charCount: number;
+      paragraphCount: number;
+      readingTimeMinutes: number;
+      readingTimeLabel: string;
+    };
+    timestamp: string | null;
+    language: string | null;
+  } | null;
 }) => (
   <div className="space-y-4">
     <DocumentSummaryCard
       title="Origin summary"
       profile={origin}
       isLoading={isLoading && !origin}
+      status={originStatus}
+      fallbackSummary={originFallback?.summary}
+      fallbackMetrics={originFallback?.metrics}
+      fallbackTimestamp={originFallback?.timestamp ?? null}
+      fallbackLanguage={originFallback?.language ?? null}
+      fallbackVersion={originFallback ? 0 : null}
     />
     <TranslationNotesSection
       notes={origin?.translationNotes ?? null}
@@ -733,6 +1105,12 @@ const DocumentSummarySection = ({
       title="Translation summary"
       profile={translation}
       isLoading={isLoading && !translation}
+      status={translationStatus}
+      fallbackSummary={translationFallback?.summary}
+      fallbackMetrics={translationFallback?.metrics}
+      fallbackTimestamp={translationFallback?.timestamp ?? null}
+      fallbackLanguage={translationFallback?.language ?? null}
+      fallbackVersion={translationFallback ? 0 : null}
     />
   </div>
 );
@@ -967,9 +1345,9 @@ const TranslationNotesSection = ({
 
   const renderTagList = (items: string[]) => (
     <ul className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-      {items.map((item) => (
+      {items.map((item, index) => (
         <li
-          key={item}
+          key={`${item}-${index}`}
           className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700"
         >
           {item}
@@ -1606,6 +1984,17 @@ export const RightPanel = ({
     [jobsProp],
   );
 
+  const localize = useCallback(
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
+      const resolved = translate(key, locale, params);
+      if (resolved === key) {
+        return applyParams(fallback, params);
+      }
+      return resolved;
+    },
+    [locale],
+  );
+
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarFileName, setAvatarFileName] = useState<string | null>(null);
   const [careerSummary, setCareerSummary] = useState("");
@@ -1635,18 +2024,7 @@ export const RightPanel = ({
     [projects, activeProjectId],
   );
 
-  const translationText = useMemo(() => {
-    const translationMeta = content?.content?.translation;
-    const applied = content?.proofreading?.appliedTranslation;
-    const primary = translationMeta?.content;
-    if (typeof primary === "string" && primary.length > 0) {
-      return primary;
-    }
-    if (typeof applied === "string" && applied.length > 0) {
-      return applied;
-    }
-    return "";
-  }, [content]);
+  const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
 
   const originFilename = useMemo(() => {
     const originMeta = content?.content?.origin;
@@ -1676,9 +2054,8 @@ export const RightPanel = ({
     return content?.latestJob?.jobId ?? null;
   }, [content]);
 
-  const proofreadingAgentState = useWorkflowStore(
-    (state) => state.proofreading,
-  );
+  const translationAgentState = useWorkflowStore((state) => state.translation);
+  const proofreadingAgentState = useWorkflowStore((state) => state.proofreading);
 
   const resolvedTabs = useMemo<Array<{ key: RightPanelBaseTab; label: string }>>(
     () => {
@@ -1717,6 +2094,104 @@ export const RightPanel = ({
 
   const originProfile = content?.documentProfiles?.origin ?? null;
   const translationProfile = content?.documentProfiles?.translation ?? null;
+  const originContentAvailable = Boolean(
+    content?.content?.origin?.content?.trim().length,
+  );
+  const translationContentFromBatches = useMemo(() => {
+    const batches = content?.content?.batchesActualData;
+    if (!Array.isArray(batches) || !batches.length) return null;
+    const fragments = batches
+      .map((batch) => {
+        if (!batch) return "";
+        const candidate =
+          (batch as { translated_text?: unknown; translatedText?: unknown })
+            .translated_text ??
+          (batch as { translated_text?: unknown; translatedText?: unknown })
+            .translatedText ??
+          null;
+        return typeof candidate === "string" ? candidate.trim() : "";
+      })
+      .filter((fragment) => fragment.length > 0);
+    if (!fragments.length) return null;
+    return fragments.join("\n\n");
+  }, [content?.content?.batchesActualData]);
+
+  const translationText = useMemo(() => {
+    const translationMeta = content?.content?.translation;
+    const primary = translationMeta?.content;
+    if (typeof primary === "string" && primary.length > 0) {
+      return primary;
+    }
+    if (typeof appliedTranslation === "string" && appliedTranslation.length > 0) {
+      return appliedTranslation;
+    }
+    if (typeof translationContentFromBatches === "string") {
+      return translationContentFromBatches;
+    }
+    return "";
+  }, [content, appliedTranslation, translationContentFromBatches]);
+  const translationContentAvailable = Boolean(
+    content?.content?.translation?.content?.trim().length ||
+      translationContentFromBatches?.trim().length ||
+      appliedTranslation?.trim?.().length,
+  );
+
+  const originFallback = useMemo(() => {
+    if (originProfile || !originContentAvailable) return null;
+    const raw = content?.content?.origin?.content ?? "";
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const paragraphs = trimmed
+      .split(/\n{2,}/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const preview = paragraphs.length
+      ? paragraphs.slice(0, 2).join("\n\n")
+      : trimmed.slice(0, 600);
+    const previewLimited =
+      preview.length > 600 ? `${preview.slice(0, 600)}…` : preview;
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    const charCount = trimmed.length;
+    const paragraphCount = paragraphs.length || 1;
+    const readingTimeMinutes = Number((wordCount / 220).toFixed(2));
+
+    return {
+      summary: {
+        story: previewLimited,
+        intention: null,
+        readerPoints: [] as string[],
+      },
+      metrics: {
+        wordCount,
+        charCount,
+        paragraphCount,
+        readingTimeMinutes,
+        readingTimeLabel: "",
+      },
+      timestamp: content?.content?.origin?.timestamp ?? null,
+      language:
+        content?.content?.origin?.language ??
+        (content?.content?.origin as { lang?: string } | undefined)?.lang ??
+        null,
+    };
+  }, [content?.content?.origin, originContentAvailable, originProfile]);
+
+  const originSummaryStatus: SummaryStatus = originProfile
+    ? "done"
+    : originContentAvailable
+      ? "done"
+      : "pending";
+
+  const translationSummaryStatus: SummaryStatus = translationProfile
+    ? "done"
+    : translationAgentState.status === "running" ||
+        translationAgentState.status === "queued"
+      ? "running"
+      : translationAgentState.status === "failed"
+        ? "pending"
+        : translationContentAvailable
+          ? "done"
+          : "pending";
   const originLangLabel =
     projectSummary?.origin_lang ??
     content?.projectProfile?.originLang ??
@@ -1728,6 +2203,60 @@ export const RightPanel = ({
     (content?.content?.translation as { lang?: string } | undefined)?.lang ??
     null;
 
+  const translationFallback = useMemo(() => {
+    if (translationProfile) return null;
+    const primary = content?.content?.translation?.content ?? "";
+    const source =
+      appliedTranslation && appliedTranslation.trim().length
+        ? appliedTranslation
+        : primary.trim().length
+          ? primary
+          : translationContentFromBatches ?? "";
+    const trimmed = source.trim();
+    if (!trimmed) return null;
+    const paragraphs = trimmed
+      .split(/\n{2,}/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const preview = paragraphs.length
+      ? paragraphs.slice(0, 2).join("\n\n")
+      : trimmed.slice(0, 600);
+    const previewLimited =
+      preview.length > 600 ? `${preview.slice(0, 600)}…` : preview;
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    const charCount = trimmed.length;
+    const paragraphCount = paragraphs.length || 1;
+    const readingTimeMinutes = Number((wordCount / 220).toFixed(2));
+
+    return {
+      summary: {
+        story: previewLimited,
+        intention: null,
+        readerPoints: [] as string[],
+      },
+      metrics: {
+        wordCount,
+        charCount,
+        paragraphCount,
+        readingTimeMinutes,
+        readingTimeLabel: "",
+      },
+      timestamp:
+        content?.content?.translation?.timestamp ??
+        content?.proofreading?.updatedAt ??
+        null,
+      language:
+        content?.content?.translation?.language ??
+        (content?.content?.translation as { lang?: string } | undefined)?.lang ??
+        null,
+    };
+  }, [
+    content?.content?.translation,
+    content?.proofreading?.updatedAt,
+    translationContentFromBatches,
+    translationProfile,
+  ]);
+
   const serverProofreadingStage = useMemo(() => {
     const proofMeta = content?.proofreading;
     return (
@@ -1737,6 +2266,36 @@ export const RightPanel = ({
       null
     );
   }, [content]);
+
+  const translationRefreshAttemptsRef = useRef(0);
+
+  useEffect(() => {
+    if (translationSummaryStatus !== "done") {
+      translationRefreshAttemptsRef.current = 0;
+      return;
+    }
+    const hasText =
+      Boolean(translationContentAvailable) ||
+      Boolean(translationFallback);
+    if (hasText || !onRefreshContent) {
+      translationRefreshAttemptsRef.current = 0;
+      return;
+    }
+    if (translationRefreshAttemptsRef.current >= 6) {
+      return;
+    }
+    translationRefreshAttemptsRef.current += 1;
+    const delay = 1000 * translationRefreshAttemptsRef.current;
+    const timeoutId = window.setTimeout(() => {
+      void onRefreshContent();
+    }, delay);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    translationSummaryStatus,
+    translationContentAvailable,
+    translationFallback,
+    onRefreshContent,
+  ]);
 
   const handleRefreshContent = useCallback(async () => {
     if (onRefreshContent) {
@@ -1958,7 +2517,7 @@ export const RightPanel = ({
         job.created_at ?? null,
         `${job.type === "translate" ? "Translation" : "Analysis"} job ${job.id} queued`,
       );
-      const sequentialStatus = formatSequentialStageStatus(job);
+      const sequentialStatus = formatSequentialStageStatus(job, localize);
       const statusLabel = sequentialStatus
         ? sequentialStatus
         : `Job ${job.id} status updated to ${job.status}`;
@@ -2214,6 +2773,10 @@ export const RightPanel = ({
                   origin={originProfile}
                   translation={translationProfile}
                   isLoading={Boolean(isContentLoading)}
+                  originStatus={originSummaryStatus}
+                  translationStatus={translationSummaryStatus}
+                  translationFallback={translationFallback}
+                  originFallback={originFallback}
                   onSaveTranslationNotes={handleSaveTranslationNotes}
                   translationNotesEditable={Boolean(
                     token && activeProjectId && originProfile,

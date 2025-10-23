@@ -1,135 +1,101 @@
-# TranslationStudio
+# Soongi Pagers
 
-TranslationStudio는 번역 프로젝트 관리, 번역 품질 평가, 자동 번역, 파일 업로드/드래그앤드롭, 프로젝트별 번역 이력 관리 등 다양한 기능을 제공하는 통합 번역 스튜디오입니다.
+Soongi Pagers is a monorepo for an AI-assisted literary translation studio. The product combines a Vite/React client, a Fastify backend, BullMQ-powered job orchestration, and shared packages that coordinate machine translation, proofreading, quality review, and ebook delivery for long-form projects.
 
-## 주요 폴더 구조
+## Highlights
+- Chat-first workspace that guides novel translations from origin ingest through proofreading, QA, and export.
+- Monaco-powered editors with conversational rewrite tooling, translation memory, and localized UI copy.
+- Fastify API that brokers OpenAI workflows, manages project state across PostgreSQL and MongoDB, and coordinates BullMQ workers via Redis.
+- Modular agents for translation, proofreading, evaluation, dictionaries, and ebook generation, each with dedicated prompts and pipelines.
+- Shared `@bookko/*` packages for AI image generation and strongly typed translation schemas.
 
+## Repository Layout
 ```
-Project-T1/
-├── web/            # 메인 프론트엔드(React+Vite, Tailwind, TypeScript)
-│   ├── src/        # 페이지, 컴포넌트, hooks, store 등 UI 구현
-│   ├── public/     # 정적 자산
-│   ├── vite.config.ts
-│   └── tsconfig.*
-├── server/         # 백엔드(Fastify, TypeScript, PostgreSQL, MongoDB)
-│   ├── routes/     # API 라우트
-│   ├── agents/     # 번역·교정·품질 에이전트 구현
-│   ├── models/     # DB 모델
-│   └── services/   # 공통 서비스 & 설정
+.
+├── web/                    # React + Vite client (src/, routes/, hooks/, components/, lib/)
+├── server/                 # Fastify backend, agents, routes, services, db helpers
 ├── packages/
-│   └── ai-image-gen  # 로컬 AI 이미지 생성 유틸(@bookko/ai-image-gen)
-├── package.json    # 루트 패키지(모노레포)
-├── pnpm-lock.yaml  # 패키지 락파일
-├── .gitignore      # Git 무시 파일
-└── README.md       # 프로젝트 설명서
+│   ├── ai-image-gen/       # Local package with reusable AI image helpers
+│   └── translation-types/  # Shared TypeScript types used by the app and server
+├── docs/                   # Architecture notes and UX plans (chat UX, conversational editing, etc.)
+├── scripts/                # Utility scripts (e.g. SSL certificate generation)
+├── AGENTS.md               # Reference documentation for automation agents
+└── README.md
 ```
 
-## 주요 기능
+## Prerequisites
+- Node.js 20+
+- pnpm or npm (workspace-aware) – the team standardises on npm commands in this repo
+- PostgreSQL 14+
+- MongoDB 6+
+- Redis 6+ (BullMQ queues)
+- OpenAI API access for translation, rewrite, and evaluation agents
 
-- **프로젝트/번역 파일 관리**: 프로젝트 생성, 편집, 삭제, 번역 이력 관리
-- **사이드바/메인 레이아웃**: 좌측 프로젝트 목록, 우측 번역/원문 에디터
-- **드래그앤드롭/파일 업로드**: TXT 파일 업로드 및 자동 저장
-- **언어 감지/자동 번역**: 원문 언어 자동 감지, 번역 API 연동
-- **번역 품질 평가**: 번역 결과에 대한 품질 점수 및 시각화(차트)
-- **MongoDB/PGSQL 하이브리드**: 번역 배치/결과를 MongoDB와 PostgreSQL에 동시 저장
-- **반응형 UI**: 데스크탑/모바일 모두 지원
-
-## 설치 및 실행
-
-### 1. 의존성 설치
-
-루트 및 각 패키지 폴더에서:
+## Installation
+From the repo root install all workspace dependencies:
 
 ```bash
-pnpm install
-# 또는
 npm install
 ```
 
-루트에서 실행하면 로컬 패키지 `@bookko/ai-image-gen`(경로 `packages/ai-image-gen`)이 자동으로 링크됩니다.
+The install step links the local packages (`packages/translation-types`, `packages/ai-image-gen`) so they can be imported as `@bookko/translation-types` and `@bookko/ai-image-gen` throughout the monorepo.
 
-### 2. 개발 서버 실행
+## Local Development
+- Start the Vite client: `npm run dev --prefix web`
+- Start the Fastify API: `npm run dev --prefix server`
+- Run both with one command (uses `concurrently`): `npm run dev`
+- Enable HTTPS locally (generates self-signed certs once): `npm run generate-ssl`
 
-프론트엔드:
+The web dev server defaults to http://localhost:5173 and the API to http://localhost:8080. Adjust ports in the respective `.env` files if needed.
 
-```bash
-cd web
-npm run dev
-```
+## Builds & Testing
+- Create production bundles: `npm run build --prefix web` and `npm run build --prefix server`
+- Front-end unit/component tests (Vitest): `npm test --prefix web`
+- Backend tests (tsx test runner): `npm test --prefix server`
+- Repository formatting (Prettier): `npm run format`
 
-백엔드:
+Always review snapshot diffs and run the relevant test suites before merging changes.
 
-```bash
-cd server
-npm run dev
-```
+## Environment Configuration
+Create `.env` files in both `web/` and `server/` with real credentials before running the stack. Key variables include:
 
-### 3. 환경 변수
+**`web/.env`**
+- `VITE_ALLOWED_HOSTS` – comma-separated hosts permitted for Vite dev server
+- `VITE_HMR_HOST` – host used for hot module reloads behind HTTPS proxies
+- `VITE_OAUTH_URL` – Fastify OAuth entrypoint exposed to the client
 
-`.env` 파일을 각 패키지(web, server)에 복사/생성하여 API 키, DB 접속 정보 등 입력
+**`server/.env`**
+- Database: `DATABASE_URL`, `PG_URI`, `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`
+- Mongo: `MONGO_URI`, `MONGO_DB`
+- Redis: `REDIS_URL` (or individual host/port envs read by `createRedisClient`)
+- Auth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `OAUTH_SUCCESS_REDIRECT`, `JWT_SECRET`
+- AI: `OPENAI_API_KEY`, optional `OPENAI_MODEL`, `OPENAI_EMBED_MODEL`
+- Optional: `PORT`, `HTTPS_ENABLED`, additional agent/model overrides
 
-### 4. DB 초기화(선택)
+Never commit populated `.env` files. Use environment-specific secrets management for production.
 
-- PostgreSQL: `server/db-schema.sql`
-- MongoDB: `server/db-schema-mongo.js`
+## Data & Queue Services
+- PostgreSQL stores project metadata, workflow runs, and translation artifacts.
+- MongoDB stores chat history, proofreading results, and quality assessments.
+- Redis powers BullMQ queues (`translation_drafts`, `translation_synthesis`, sequential stage runners) and needs to be reachable before the API boots.
 
-## 배포
+Utility scripts in `server/db-*.sql` and `server/db-mongo-*.js` help bootstrap schemas for local development; run them manually when seeding fresh databases.
 
-- 빌드: `npm run build` (web, server 각각)
-- 배포: 빌드 산출물을 서버에 업로드
+## Documentation & Design Assets
+- `AGENTS.md` – catalog of translation, proofreading, evaluation, and ebook agents.
+- `docs/chat-ux-enhancement-design.md` – plan for the Soongi assistant conversation model.
+- `docs/conversational-editing-plan.md` – outlines Monaco selection workflows and rewrite flows.
+- `docs/UX 재정비 설계서1.md` – Korean UX overhaul proposal (original reference).
 
-## 기여 및 문의
+Review these documents when making UX or agent changes to stay aligned with the product roadmap.
 
-- Pull Request, Issue 환영
-- 문의: GitHub Issue 또는 이메일
+## Coding Standards & Contributions
+- TypeScript files use explicit return types, 2-space indentation, single quotes, trailing commas, and `async/await`.
+- Name React components in PascalCase, hooks/utilities in camelCase, server agents in kebab-case.
+- Run `npm run format` before committing to ensure Prettier and ESLint rules are satisfied.
+- Follow commit message format `<type>: imperative summary` (≤72 chars) and document manual QA + tests in pull requests.
+
+For security, store credentials in environment-specific `.env` files only, avoid logging sensitive payloads, and request maintainer approval before adding new third-party services.
 
 ---
-
-> 본 프로젝트는 번역 자동화 및 품질 평가를 위한 상용 목적이므로, 사용 승인이 필요합니다.
-
-
-.env file 참조삼아 올려..
-/web/.env
-```
-  VITE_HMR_HOST=project-t1.com
-  VITE_ALLOWED_HOSTS=project-t1.com,project-t1.local,localhost
-```
-/server/.env
-```
-# Environment variables for Project-T1 backend
-# NOTE: if your Postgres password contains special chars like '@', they must be percent-encoded in the DATABASE_URL
-# Password in this file contains an '@' so it's encoded as %40 in DATABASE_URL below.
-DATABASE_URL=postgresql://postgres:_<password>_@localhost:5432/postgres
-# Also provide PG_* (used by some helpers) and PG_URI (used by db-init).
-PG_HOST=localhost
-PG_PORT=5432
-PG_USER=postgres
-PG_PASSWORD=_<password>_
-PG_DATABASE=postgres
-PG_URI=postgresql://postgres:_<password>_@localhost:5432/postgres
-
-MONGO_URI=mongodb://localhost:27017/project_t1
-MONGO_DB=project_t1
-
-#google cloud console에 등록이 맞아야 함.
-GOOGLE_CLIENT_ID=<클라이언트아이디>.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=<클라이언트 시크릿>
-#GOOGLE_CALLBACK_URL=http://192.168.12.137:8080/api/auth/google/callback
-#OAUTH_SUCCESS_REDIRECT=http://192.168.12.137:5174/oauth/callback
-
-GOOGLE_CALLBACK_URL=http://project-t1.com:8080/api/auth/google/callback
-OAUTH_SUCCESS_REDIRECT=http://project-t1.com:5174/oauth/callback
-VITE_OAUTH_URL=http://project-t1.com:8080/api/auth/google
-CLIENT_ORIGIN=http://project-t1.com:5174
-# JWT secret for local dev (change before production)
-JWT_SECRET=dev_jwt_secret_change_me
-
-OPENAI_API_KEY=<OPENAI API KEY>
-# OPENAI_MODEL=gpt-4.1-mini
-OPENAI_EMBED_MODEL=text-embedding-3-small
-
-# Optional overrides
-# PORT=8080
-```
-
-
+The Soongi Pagers stack is evolving quickly; if something in this README falls out of date, please update it alongside your change or open an issue so the team can keep the docs current.

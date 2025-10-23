@@ -17,11 +17,6 @@ interface ChatMessageProps {
   };
   actions?: ChatAction[];
   onAction?: (action: ChatAction) => void;
-  anchorStage?: "origin" | "translation" | "proofreading" | "quality";
-  onAnchorMount?: (
-    stage: "origin" | "translation" | "proofreading" | "quality",
-    element: HTMLElement | null,
-  ) => void;
 }
 
 const renderInlineNodes = (
@@ -168,8 +163,6 @@ export const ChatMessage = ({
   badge,
   actions = [],
   onAction,
-  anchorStage,
-  onAnchorMount,
 }: ChatMessageProps) => {
   const isUser = role === "user";
   const { locale } = useUILocale();
@@ -179,13 +172,6 @@ export const ChatMessage = ({
       return resolved === key ? fallback : resolved;
     },
     [locale],
-  );
-  const handleContainerRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (!anchorStage || !onAnchorMount) return;
-      onAnchorMount(anchorStage, node);
-    },
-    [anchorStage, onAnchorMount],
   );
   const resolveAction = useCallback(
     (actionType: string): ChatAction | null =>
@@ -208,10 +194,7 @@ export const ChatMessage = ({
   const resolvedBadge = showBadge ? badge : undefined;
 
   return (
-    <div
-      ref={handleContainerRef}
-      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-    >
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[75%] rounded-lg px-4 py-3 text-sm ${
           isUser
