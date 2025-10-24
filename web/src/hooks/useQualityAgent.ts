@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useEffect } from "react";
 import { api } from "../services/api";
 import type {
-  ChatAction,
   ProjectSummary,
   QualityAssessmentResultPayload,
 } from "../types/domain";
@@ -9,26 +8,12 @@ import { useWorkflowStore } from "../store/workflow.store";
 import type { QualityAgentState } from "../store/workflow.store";
 import { useProjectStore } from "../store/project.store";
 
-type PushAssistant = (
-  text: string,
-  badge?:
-    | {
-        label: string;
-        description?: string;
-        tone?: "default" | "success" | "error";
-      }
-    | undefined,
-  actions?: ChatAction[] | undefined,
-  persist?: boolean,
-) => void;
-
 interface UseQualityAgentParams {
   token: string | null;
   projectId: string | null;
   originText: string;
   translationText: string;
   translationJobId?: string | null;
-  pushAssistant: PushAssistant;
   onCompleted?: () => void;
   refreshContent?: () => void;
   openQualityDialog?: () => void;
@@ -82,7 +67,6 @@ export const useQualityAgent = ({
   originText,
   translationText,
   translationJobId,
-  pushAssistant,
   onCompleted,
   refreshContent,
   openQualityDialog,
@@ -143,27 +127,12 @@ export const useQualityAgent = ({
   const runQuality = useCallback(
     async (options?: { label?: string | null; allowParallel?: boolean }) => {
       if (quality.status === "running") {
-        pushAssistant("이미 품질 평가가 진행 중입니다.", {
-          label: "Quality in progress",
-          tone: "default",
-        });
         return;
       }
       if (!token || !projectId) {
-        pushAssistant(
-          "인증 또는 프로젝트 정보가 없어 품질 평가를 실행할 수 없습니다.",
-          {
-            label: "Quality blocked",
-            tone: "error",
-          },
-        );
         return;
       }
       if (!originText.trim() || !translationText.trim()) {
-        pushAssistant("원문과 번역본이 모두 준비되었는지 확인해 주세요.", {
-          label: "Missing texts",
-          tone: "error",
-        });
         return;
       }
 
@@ -172,13 +141,6 @@ export const useQualityAgent = ({
         lastError: null,
         updatedAt: new Date().toISOString(),
       });
-      pushAssistant(
-        "품질 평가를 준비 중입니다...",
-        { label: "Quality queued", tone: "default" },
-        undefined,
-        true,
-      );
-
       try {
         const activeProject = projects.find(
           (project) => project.project_id === projectId,
@@ -217,12 +179,6 @@ export const useQualityAgent = ({
           lastError: null,
           updatedAt: new Date().toISOString(),
         });
-        pushAssistant(
-          `품질 평가가 완료되었습니다. 총점 ${overallScore ?? "N/A"}점입니다.`,
-          { label: "Quality done", tone: "success" },
-          [{ type: "viewQualityReport", reason: "View quality report" }],
-          true,
-        );
         refreshContent?.();
         onCompleted?.();
         openQualityDialog?.();
@@ -233,11 +189,6 @@ export const useQualityAgent = ({
           lastError: message,
           updatedAt: new Date().toISOString(),
         });
-        pushAssistant("품질 평가에 실패했습니다.", {
-          label: "Quality failed",
-          description: message,
-          tone: "error",
-        });
       }
     },
     [
@@ -246,9 +197,8 @@ export const useQualityAgent = ({
       projectId,
       originText,
       translationText,
-    translationJobId,
+      translationJobId,
       projects,
-      pushAssistant,
       setQualityForProject,
       refreshContent,
       onCompleted,

@@ -1069,6 +1069,9 @@ export const api = {
     projectId: string,
     payload: {
       title?: string;
+      book_title?: string;
+      author_name?: string | null;
+      translator_name?: string | null;
       description?: string;
       intention?: string;
       memo?: string;
@@ -1084,6 +1087,27 @@ export const api = {
       body: JSON.stringify(payload),
     });
     return handle(res);
+  },
+
+  async userPreferences(token: string): Promise<{
+    preferred_language: string | null;
+  }> {
+    const res = await fetch(`${API_BASE}/api/user/preferences`, {
+      headers: defaultHeaders(token),
+    });
+    return handle<{ preferred_language: string | null }>(res);
+  },
+
+  async updateUserPreferences(
+    token: string,
+    payload: { preferred_language: string | null },
+  ): Promise<{ ok: boolean; preferred_language: string | null }> {
+    const res = await fetch(`${API_BASE}/api/user/preferences`, {
+      method: "PUT",
+      headers: defaultHeaders(token),
+      body: JSON.stringify(payload),
+    });
+    return handle<{ ok: boolean; preferred_language: string | null }>(res);
   },
 
   async qualityHistory(

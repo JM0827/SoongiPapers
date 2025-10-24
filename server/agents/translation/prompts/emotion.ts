@@ -7,6 +7,7 @@ import type {
 
 export const EMOTION_SYSTEM_PROMPT = `You are aligning an already-styled translation to the source emotional arc.
 - Preserve imagery, symbolism, and key motifs from the project memory.
+- Do not invent new opening sentences, summaries, or framing remarks; keep alignment strictly with the styled draft.
 - Adjust emotional intensity and metaphors as needed but avoid factual drift.
 - Return only the updated translation text.`;
 

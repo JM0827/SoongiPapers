@@ -19,6 +19,7 @@ import type {
   ChatAction,
   ChatMessagePayload,
   ProjectContent,
+  WorkflowRunStatus,
 } from "../../types/domain";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { useCreateProject } from "../../hooks/useCreateProject";
@@ -471,7 +472,6 @@ export const ChatOrchestrator = ({
     originText,
     translationText,
     translationJobId,
-    pushAssistant,
     onCompleted: onQualityCompleted,
     refreshContent: refreshContentOnly,
     openQualityDialog: () => triggerQualityDialog(),
@@ -1529,14 +1529,64 @@ export const ChatOrchestrator = ({
     return undefined;
   }, [hasOrigin, translationContentAvailable, translationState.status]);
 
+  const normalizedProofreadingStatus = useMemo(() => {
+    type ProofStatus = "idle" | "queued" | "running" | "done" | "failed";
+
+    const push = (value: ProofStatus | null | undefined, acc: ProofStatus[]) => {
+      if (!value) return;
+      if (value === "idle") return;
+      acc.push(value);
+    };
+
+    const normalizeWorkflowStatus = (
+      status: WorkflowRunStatus | "idle" | null | undefined,
+    ): ProofStatus | null => {
+      if (!status || status === "idle") return null;
+      if (status === "running") return "running";
+      if (status === "pending") return "queued";
+      if (status === "succeeded") return "done";
+      if (status === "failed" || status === "cancelled") return "failed";
+      return null;
+    };
+
+    const normalizeLifecycleStage = (stageValue: string | null): ProofStatus | null => {
+      if (!stageValue) return null;
+      const normalized = stageValue.toLowerCase().replace(/\s+/g, "");
+      if (!normalized || normalized === "none" || normalized === "no-proofreading") {
+        return null;
+      }
+      if (/fail|error|cancel/.test(normalized)) return "failed";
+      if (/run|progress|working/.test(normalized)) return "running";
+      if (/queue|pend|wait/.test(normalized)) return "queued";
+      if (/done|complete|finish|success/.test(normalized)) return "done";
+      return null;
+    };
+
+    const candidates: ProofStatus[] = [];
+    push(proofreadingState.status as ProofStatus, candidates);
+    push(normalizeWorkflowStatus(proofreadingWorkflow?.status), candidates);
+    push(normalizeLifecycleStage(proofreadingStage), candidates);
+
+    if (candidates.includes("failed")) return "failed";
+    if (candidates.includes("running")) return "running";
+    if (candidates.includes("queued")) return "queued";
+    if (candidates.includes("done")) return "done";
+
+    return (proofreadingState.status as ProofStatus) ?? "idle";
+  }, [
+    proofreadingStage,
+    proofreadingState.status,
+    proofreadingWorkflow?.status,
+  ]);
+
   const proofreadingStatusKey = useMemo<StageStatusKey | undefined>(() => {
-    if (proofreadingState.status === "failed") return "failed";
-    if (proofreadingState.status === "running") return "inProgress";
-    if (proofreadingState.status === "queued") return "queued";
-    if (proofreadingState.status === "done") return "completed";
+    if (normalizedProofreadingStatus === "failed") return "failed";
+    if (normalizedProofreadingStatus === "running") return "inProgress";
+    if (normalizedProofreadingStatus === "queued") return "queued";
+    if (normalizedProofreadingStatus === "done") return "completed";
     if (translationStatusKey === "completed") return "ready";
     return undefined;
-  }, [proofreadingState.status, translationStatusKey]);
+  }, [normalizedProofreadingStatus, translationStatusKey]);
 
   const qualityStatusKey = useMemo<StageStatusKey | undefined>(() => {
     if (qualityState.status === "failed" || qualityStage === "failed") {
@@ -2363,14 +2413,6 @@ export const ChatOrchestrator = ({
                 tone: "error",
               },
             );
-          } else if (qualityState.status === "done") {
-            pushAssistant(
-              "품질 평가 결과가 최신 팝업에 표시되었습니다.",
-              {
-                label: "Quality report",
-                tone: "default",
-              },
-            );
           } else {
             pushAssistant(
               "아직 품질 평가를 실행하지 않았습니다. 필요하다면 품질 평가를 요청해 보세요.",
@@ -2776,16 +2818,7 @@ export const ChatOrchestrator = ({
         const filename = response?.origin?.filename ?? file.name;
         const extractor = response?.origin?.metadata?.extractor;
         const description = extractor ? `${filename} · ${extractor}` : filename;
-        pushAssistant(
-          "원문을 저장했습니다.",
-          {
-            label: "Origin saved",
-            description,
-            tone: "success",
-          },
-          undefined,
-          true,
-        );
+        console.info("[origin] saved", description);
         onOriginSaved?.();
         setShowUploader(false);
       } catch (err) {

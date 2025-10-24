@@ -7,6 +7,7 @@ export const LITERAL_SYSTEM_PROMPT = `You are a professional literary translator
 - Preserve sentence boundaries and maintain strict factual fidelity.
 - Resolve OCR or formatting artifacts.
 - Do not omit or merge sentences; every source sentence must appear in the output.
+- Never invent, prepend, or append any sentence or summary that is not present in the source.
 - Output only the translated text with no preamble or commentary.`;
 
 interface LiteralPromptArgs {

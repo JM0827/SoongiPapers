@@ -72,9 +72,27 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
             allowParallel: Boolean(workflowAllowParallel),
           });
           if (!result.accepted || !result.run) {
+            const reason = result.reason ?? "unknown";
+            const conflictStatus = result.conflictStatus ?? null;
+            const projectStatus = result.projectStatus ?? null;
+            const message = (() => {
+              if (reason === "already_running") {
+                const statusText = conflictStatus ? ` (상태: ${conflictStatus})` : "";
+                return `이미 진행 중인 교정 작업이 있어 새 작업을 시작할 수 없습니다.${statusText}`;
+              }
+              if (reason === "project_inactive") {
+                const statusText = projectStatus ? ` (프로젝트 상태: ${projectStatus})` : "";
+                return `프로젝트 상태 때문에 교정 작업을 시작할 수 없습니다.${statusText}`;
+              }
+              return "교정 작업을 시작할 수 없습니다.";
+            })();
+
             send({
               type: "error",
-              message: "프로젝트 상태 때문에 교정 작업을 시작할 수 없습니다.",
+              reason,
+              conflictStatus,
+              projectStatus,
+              message,
             });
             reply.raw.end();
             return;

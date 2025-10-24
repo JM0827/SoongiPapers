@@ -139,7 +139,7 @@ function parseProjectMemo(rawMemo: string | null) {
 async function loadProjectProfile(projectId: string, userId: string) {
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
          FROM translationprojects
          WHERE project_id = $1 AND user_id = $2
          LIMIT 1`,
@@ -161,19 +161,25 @@ async function loadProjectProfile(projectId: string, userId: string) {
       }
     }
 
+    const authorName = row.author_name ?? storedMeta.author ?? parsed.author;
+    const translatorName = row.translator_name ?? storedMeta.translator ?? null;
+
     return {
       id: row.project_id,
       title: row.title,
       status: row.status,
       description: row.description,
       intention: row.intention,
+      bookTitle: row.book_title ?? row.title ?? null,
+      authorName,
+      translatorName,
       memo: row.memo,
       originLang: row.origin_lang,
       targetLang: row.target_lang,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       meta: {
-        author: storedMeta.author ?? parsed.author,
+        author: authorName,
         context:
           storedMeta.context ?? parsed.context ?? row.description ?? null,
         notes: storedMeta.notes ?? parsed.notes,
@@ -188,6 +194,9 @@ async function loadProjectProfile(projectId: string, userId: string) {
       status: "unknown",
       description: null,
       intention: null,
+      bookTitle: null,
+      authorName: null,
+      translatorName: null,
       memo: null,
       originLang: null,
       targetLang: null,
@@ -195,6 +204,7 @@ async function loadProjectProfile(projectId: string, userId: string) {
       updatedAt: new Date().toISOString(),
       meta: {
         author: null,
+        translator: null,
         context: null,
         notes: null,
         translationDirection: null,

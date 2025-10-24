@@ -20,7 +20,6 @@ import type {
 import { useAuthStore } from "../../store/auth.store";
 import { useAuth } from "../../hooks/useAuth";
 import { useProjectStore } from "../../store/project.store";
-import { TranslationCanvas } from "../preview/TranslationCanvas";
 import { ProofList } from "../proofreading/ProofList";
 import {
   ProofreadIssuesProvider,
@@ -384,6 +383,7 @@ const SummaryCard = ({
   autoSaveDelay = 5000,
   placeholder,
   statusLabel,
+  localize,
 }: {
   title: string;
   summary?: string | null;
@@ -397,6 +397,7 @@ const SummaryCard = ({
   autoSaveDelay?: number;
   placeholder?: string;
   statusLabel?: string;
+  localize?: LocalizeFn;
 }) => {
   const baseText = fullText ?? summary ?? "";
   const [draft, setDraft] = useState(baseText);
@@ -407,6 +408,12 @@ const SummaryCard = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+
+  const translateText = (
+    key: string,
+    fallback: string,
+    params?: Record<string, string | number>,
+  ) => (localize ? localize(key, fallback, params) : applyParams(fallback, params));
 
   useEffect(
     () => () => {
@@ -455,7 +462,12 @@ const SummaryCard = ({
       if (!isMountedRef.current) return;
       setStatus("error");
       setErrorMessage(
-        err instanceof Error ? err.message : "저장에 실패했습니다.",
+        err instanceof Error && err.message
+          ? err.message
+          : translateText(
+              "rightpanel_summarycard_error",
+              "Failed to save.",
+            ),
       );
     }
   }, [editable, onSave, dirty, draft]);
@@ -562,6 +574,24 @@ const SummaryCard = ({
   const bodyClass = expanded
     ? "flex-1 overflow-y-auto whitespace-pre-wrap text-slate-700"
     : "max-h-80 overflow-y-auto whitespace-pre-wrap text-slate-700";
+  const timestampLabel = timestamp ? new Date(timestamp).toLocaleString() : null;
+  const collapseLabel = translateText(
+    "rightpanel_summarycard_action_collapse",
+    "Collapse {{title}}",
+    { title },
+  );
+  const expandLabel = translateText(
+    "rightpanel_summarycard_action_expand",
+    "Expand {{title}}",
+    { title },
+  );
+  const emptyText = placeholder
+    ? placeholder
+    : translateText(
+        "rightpanel_summarycard_empty",
+        "{{title}} content is not available yet.",
+        { title },
+      );
 
   return (
     <div className={containerClass}>
@@ -578,17 +608,21 @@ const SummaryCard = ({
           {statusLabel ? (
             <p className="text-xs text-slate-500">{statusLabel}</p>
           ) : null}
-          {timestamp ? (
+          {timestampLabel ? (
             <p className="text-xs text-slate-400">
-              업데이트: {new Date(timestamp).toLocaleString()}
+              {translateText(
+                "rightpanel_summarycard_updated",
+                "Updated: {{timestamp}}",
+                { timestamp: timestampLabel },
+              )}
             </p>
           ) : null}
         </div>
         <button
           className="flex items-center justify-center rounded px-2 py-1 text-slate-600 transition hover:text-slate-800 focus:outline-none"
           onClick={() => onToggle(!expanded)}
-          aria-label={expanded ? `Collapse ${title}` : `Expand ${title}`}
-          title={expanded ? `${title} 접기` : `${title} 펼치기`}
+          aria-label={expanded ? collapseLabel : expandLabel}
+          title={expanded ? collapseLabel : expandLabel}
           data-collapsible-ignore
         >
           {expanded ? <OpenBookIcon /> : <ClosedBookIcon />}
@@ -600,7 +634,7 @@ const SummaryCard = ({
             renderWithHighlights(displayText)
           ) : (
             <span className="text-slate-400">
-              {placeholder ?? `${title} 자료가 아직 없습니다.`}
+              {emptyText}
             </span>
           )}
           {draft && !expanded && truncated && "…"}
@@ -612,7 +646,7 @@ const SummaryCard = ({
             onChange={handleChange}
             onBlur={handleBlur}
             onFocus={handleFocus}
-            placeholder={placeholder}
+            placeholder={placeholder ?? emptyText}
             spellCheck={false}
             style={{ color: "transparent" }}
           />
@@ -621,13 +655,35 @@ const SummaryCard = ({
       {editable && (
         <div className="flex items-center justify-between text-xs text-slate-500">
           <span>
-            {status === "saving" && "저장 중…"}
-            {status === "saved" && "저장되었습니다."}
-            {status === "dirty" && "변경 사항이 자동 저장을 기다리고 있습니다."}
-            {status === "error" && (errorMessage ?? "저장에 실패했습니다.")}
+            {status === "saving" &&
+              translateText(
+                "rightpanel_summarycard_status_saving",
+                "Saving…",
+              )}
+            {status === "saved" &&
+              translateText(
+                "rightpanel_summarycard_status_saved",
+                "Saved.",
+              )}
+            {status === "dirty" &&
+              translateText(
+                "rightpanel_summarycard_status_dirty",
+                "Changes are queued for auto-save.",
+              )}
+            {status === "error" &&
+              (errorMessage ??
+                translateText(
+                  "rightpanel_summarycard_error",
+                  "Failed to save.",
+                ))}
           </span>
           {dirty && status !== "saving" && status !== "error" && (
-            <span>자동 저장 예정</span>
+            <span>
+              {translateText(
+                "rightpanel_summarycard_autosave_hint",
+                "Auto-save scheduled",
+              )}
+            </span>
           )}
         </div>
       )}
@@ -772,18 +828,28 @@ const TranslationSummaryCard = ({
   expanded,
   onToggle,
   onSave,
+  localize,
 }: {
   projectKey: string;
   timestamp?: string | null;
   expanded: boolean;
   onToggle: (expanded: boolean) => void;
   onSave: (nextValue: string) => Promise<void>;
+  localize: LocalizeFn;
 }) => {
   const { translationText, highlights } = useProofreadIssues();
+  const titleLabel = localize(
+    "rightpanel_preview_translation_card_title",
+    "Translation",
+  );
+  const placeholderLabel = localize(
+    "rightpanel_preview_translation_card_placeholder",
+    "Enter the translated text.",
+  );
   return (
     <SummaryCard
       key={`translation-${projectKey}`}
-      title="Translation"
+      title={titleLabel}
       summary={translationText.slice(0, 400)}
       fullText={translationText}
       timestamp={timestamp ?? null}
@@ -792,8 +858,9 @@ const TranslationSummaryCard = ({
       editable
       onSave={onSave}
       autoSaveDelay={5000}
-      placeholder="번역문을 입력해 주세요."
+      placeholder={placeholderLabel}
       highlights={highlights}
+      localize={localize}
     />
   );
 };
@@ -803,6 +870,7 @@ type SummaryStatus = "pending" | "running" | "done";
 const DocumentSummaryCard = ({
   title,
   profile,
+  localize,
   isLoading = false,
   defaultOpen = true,
   status = "pending",
@@ -814,6 +882,7 @@ const DocumentSummaryCard = ({
 }: {
   title: string;
   profile: DocumentProfileSummary | null;
+  localize: LocalizeFn;
   isLoading?: boolean;
   defaultOpen?: boolean;
   status?: SummaryStatus;
@@ -892,10 +961,34 @@ const DocumentSummaryCard = ({
 
   const renderFooter = () => {
     const parts = [
-      wordsLabel ? `${wordsLabel} words` : null,
-      charsLabel ? `${charsLabel} characters` : null,
-      minutesLabel ? `${minutesLabel} mins` : null,
-      timestampLabel ? `update: ${timestampLabel}` : null,
+      wordsLabel
+        ? localize(
+            "rightpanel_summary_metric_words",
+            `${wordsLabel} words`,
+            { count: wordsLabel },
+          )
+        : null,
+      charsLabel
+        ? localize(
+            "rightpanel_summary_metric_characters",
+            `${charsLabel} characters`,
+            { count: charsLabel },
+          )
+        : null,
+      minutesLabel
+        ? localize(
+            "rightpanel_summary_metric_minutes",
+            `${minutesLabel} mins`,
+            { count: minutesLabel },
+          )
+        : null,
+      timestampLabel
+        ? localize(
+            "rightpanel_summary_metric_updated",
+            `update: ${timestampLabel}`,
+            { timestamp: timestampLabel },
+          )
+        : null,
     ].filter(Boolean);
     if (!parts.length) return null;
     return <p className="mt-4 text-[11px] text-slate-400">{parts.join(" ")}</p>;
@@ -923,30 +1016,52 @@ const DocumentSummaryCard = ({
 
   const statusDescription = (() => {
     if (profile) {
+      const languageSuffix = profile.language ? `.${profile.language}` : "";
       return (
         <p className="text-xs text-slate-500">
-          version v{profile.version}
-          {profile.language ? `.${profile.language}` : ""}
+          {localize(
+            "rightpanel_summary_status_version",
+            `Version v${profile.version}${languageSuffix}`,
+            {
+              version: profile.version ?? "",
+              languageSuffix,
+            },
+          )}
         </p>
       );
     }
     if (fallbackSummary) {
+      const versionLabel = fallbackVersion ? ` · v${fallbackVersion}` : "";
+      const languageLabel = fallbackLanguage ? `.${fallbackLanguage}` : "";
       return (
         <p className="text-xs text-slate-500">
-          임시 요약 제공
-          {fallbackVersion ? ` · v${fallbackVersion}` : ""}
-          {fallbackLanguage ? `.${fallbackLanguage}` : ""}
+          {localize(
+            "rightpanel_summary_status_fallback",
+            `Temporary summary${versionLabel}${languageLabel}`,
+            {
+              versionLabel,
+              languageLabel,
+            },
+          )}
         </p>
       );
     }
     if (status === "running" || isLoading) {
       return (
-        <p className="text-xs text-slate-500">분석 정보를 불러오는 중입니다…</p>
+        <p className="text-xs text-slate-500">
+          {localize(
+            "rightpanel_summary_status_loading",
+            "Fetching analysis…",
+          )}
+        </p>
       );
     }
     return (
       <p className="text-xs text-slate-400">
-        아직 분석 정보가 생성되지 않았습니다.
+        {localize(
+          "rightpanel_summary_status_empty",
+          "Summary has not been generated yet.",
+        )}
       </p>
     );
   })();
@@ -973,7 +1088,24 @@ const DocumentSummaryCard = ({
           type="button"
           className="ml-auto flex h-6 w-6 items-center justify-center rounded text-xs text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
           onClick={toggle}
-          aria-label={isOpen ? `${title} 접기` : `${title} 펼치기`}
+          aria-label={
+            isOpen
+              ? localize("rightpanel_summary_action_collapse", `Collapse ${title}`, {
+                  title,
+                })
+              : localize("rightpanel_summary_action_expand", `Expand ${title}`, {
+                  title,
+                })
+          }
+          title={
+            isOpen
+              ? localize("rightpanel_summary_action_collapse", `Collapse ${title}`, {
+                  title,
+                })
+              : localize("rightpanel_summary_action_expand", `Expand ${title}`, {
+                  title,
+                })
+          }
           disabled={isToggleDisabled}
           data-collapsible-ignore
         >
@@ -985,7 +1117,12 @@ const DocumentSummaryCard = ({
           <>
             {summary.intention && (
               <div className="mt-4 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">작가의도:</span>{" "}
+                <span className="font-medium text-slate-800">
+                  {localize(
+                    "rightpanel_summary_intention_label",
+                    "Intention:",
+                  )}
+                </span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
                   {summary.intention}
                 </span>
@@ -993,33 +1130,46 @@ const DocumentSummaryCard = ({
             )}
             {summary.story && (
               <div className="mt-3 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">줄거리:</span>{" "}
+                <span className="font-medium text-slate-800">
+                  {localize("rightpanel_summary_story_label", "Story:")}
+                </span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
                   {summary.story}
                 </span>
               </div>
             )}
-        {summary.readerPoints?.length ? (
-          <div className="mt-4 space-y-1 text-sm text-slate-700">
-            <p className="font-medium text-slate-800">독자 포인트</p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
-              {summary.readerPoints.map((point, index) => (
-                <li key={`${profile?.id ?? "fallback"}-point-${index}`}>
-                  {point}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {renderFooter()}
-      </>
-    ) : status === "running" || isLoading ? (
+            {summary.readerPoints?.length ? (
+              <div className="mt-4 space-y-1 text-sm text-slate-700">
+                <p className="font-medium text-slate-800">
+                  {localize(
+                    "rightpanel_summary_reader_points_label",
+                    "Reader points",
+                  )}
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
+                  {summary.readerPoints.map((point, index) => (
+                    <li key={`${profile?.id ?? "fallback"}-point-${index}`}>
+                      {point}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {renderFooter()}
+          </>
+        ) : status === "running" || isLoading ? (
           <p className="mt-4 text-sm text-slate-500">
-            분석 정보를 불러오는 중입니다…
+            {localize(
+              "rightpanel_summary_loading",
+              "Fetching analysis…",
+            )}
           </p>
         ) : (
           <p className="mt-4 text-sm text-slate-500">
-            텍스트가 저장되면 자동으로 문서 요약이 생성됩니다.
+            {localize(
+              "rightpanel_summary_generation_hint",
+              "A summary will be generated once the text is saved.",
+            )}
           </p>
         ))}
     </section>
@@ -1028,6 +1178,7 @@ const DocumentSummaryCard = ({
 const DocumentSummarySection = ({
   origin,
   translation,
+  localize,
   isLoading = false,
   onSaveTranslationNotes,
   translationNotesEditable = false,
@@ -1040,6 +1191,7 @@ const DocumentSummarySection = ({
 }: {
   origin: DocumentProfileSummary | null;
   translation: DocumentProfileSummary | null;
+  localize: LocalizeFn;
   isLoading?: boolean;
   onSaveTranslationNotes?: (
     notes: DocumentProfileSummary["translationNotes"] | null,
@@ -1084,7 +1236,11 @@ const DocumentSummarySection = ({
 }) => (
   <div className="space-y-4">
     <DocumentSummaryCard
-      title="Origin summary"
+      title={localize(
+        "rightpanel_origin_summary_title",
+        "Summary of manuscript",
+      )}
+      localize={localize}
       profile={origin}
       isLoading={isLoading && !origin}
       status={originStatus}
@@ -1096,13 +1252,18 @@ const DocumentSummarySection = ({
     />
     <TranslationNotesSection
       notes={origin?.translationNotes ?? null}
+      localize={localize}
       editable={translationNotesEditable}
       onSave={onSaveTranslationNotes}
       isSaving={translationNotesSaving}
       error={translationNotesError}
     />
     <DocumentSummaryCard
-      title="Translation summary"
+      title={localize(
+        "rightpanel_translation_summary_title",
+        "Summary of translation",
+      )}
+      localize={localize}
       profile={translation}
       isLoading={isLoading && !translation}
       status={translationStatus}
@@ -1258,12 +1419,14 @@ const draftToNotes = (
 
 const TranslationNotesSection = ({
   notes,
+  localize,
   editable = false,
   onSave,
   isSaving = false,
   error,
 }: {
   notes: DocumentProfileSummary["translationNotes"] | null;
+  localize: LocalizeFn;
   editable?: boolean;
   onSave?: (
     next: DocumentProfileSummary["translationNotes"] | null,
@@ -1277,6 +1440,156 @@ const TranslationNotesSection = ({
   );
   const [formError, setFormError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(true);
+
+  const titleLabel = localize(
+    "rightpanel_translation_notes_title",
+    "Translation notes",
+  );
+  const editLabel = localize(
+    "rightpanel_translation_notes_edit",
+    "Edit notes",
+  );
+  const addLabel = localize(
+    "rightpanel_translation_notes_add",
+    "Add notes",
+  );
+  const editingLabel = localize(
+    "rightpanel_translation_notes_editing",
+    "Editing translation notes",
+  );
+  const clearAllLabel = localize(
+    "rightpanel_translation_notes_clear_all",
+    "Clear all",
+  );
+  const cancelLabel = localize(
+    "rightpanel_translation_notes_cancel",
+    "Cancel",
+  );
+  const saveLabel = localize(
+    "rightpanel_translation_notes_save",
+    "Save",
+  );
+  const savingLabel = localize(
+    "rightpanel_translation_notes_saving",
+    "Saving…",
+  );
+  const timePeriodLabel = localize(
+    "rightpanel_translation_notes_time_period",
+    "Time period",
+  );
+  const timePeriodPlaceholder = localize(
+    "rightpanel_translation_notes_time_period_placeholder",
+    "e.g., Late Joseon Dynasty",
+  );
+  const measurementUnitsLabel = localize(
+    "rightpanel_translation_notes_measurement_units",
+    "Measurement units",
+  );
+  const measurementUnitsPlaceholder = localize(
+    "rightpanel_translation_notes_measurement_units_placeholder",
+    "One unit per line",
+  );
+  const linguisticFeaturesLabel = localize(
+    "rightpanel_translation_notes_linguistic_features",
+    "Linguistic features / slang",
+  );
+  const linguisticFeaturesPlaceholder = localize(
+    "rightpanel_translation_notes_linguistic_features_placeholder",
+    "One entry per line",
+  );
+  const charactersLabel = localize(
+    "rightpanel_translation_notes_characters",
+    "Characters",
+  );
+  const addCharacterLabel = localize(
+    "rightpanel_translation_notes_add_character",
+    "Add character",
+  );
+  const removeLabel = localize(
+    "rightpanel_translation_notes_remove",
+    "Remove",
+  );
+  const nameLabel = localize(
+    "rightpanel_translation_notes_name",
+    "Name",
+  );
+  const characterNamePlaceholder = localize(
+    "rightpanel_translation_notes_character_name_placeholder",
+    "Character name",
+  );
+  const ageLabel = localize(
+    "rightpanel_translation_notes_age",
+    "Age",
+  );
+  const agePlaceholder = localize(
+    "rightpanel_translation_notes_age_placeholder",
+    "Age or descriptor",
+  );
+  const genderLabel = localize(
+    "rightpanel_translation_notes_gender",
+    "Gender",
+  );
+  const genderPlaceholder = localize(
+    "rightpanel_translation_notes_gender_placeholder",
+    "Gender or pronouns",
+  );
+  const traitsLabel = localize(
+    "rightpanel_translation_notes_traits",
+    "Traits (comma-separated)",
+  );
+  const traitsPlaceholder = localize(
+    "rightpanel_translation_notes_traits_placeholder",
+    "e.g., stubborn, loyal",
+  );
+  const noCharactersLabel = localize(
+    "rightpanel_translation_notes_no_characters",
+    "No characters added yet.",
+  );
+  const namedEntitiesLabel = localize(
+    "rightpanel_translation_notes_named_entities",
+    "Named entities",
+  );
+  const locationsLabel = localize(
+    "rightpanel_translation_notes_locations",
+    "Locations",
+  );
+  const addEntryLabel = localize(
+    "rightpanel_translation_notes_add_entry",
+    "Add",
+  );
+  const entryNamePlaceholder = localize(
+    "rightpanel_translation_notes_entry_name_placeholder",
+    "Name",
+  );
+  const entryFrequencyPlaceholder = localize(
+    "rightpanel_translation_notes_entry_frequency_placeholder",
+    "Freq",
+  );
+  const noEntriesLabel = localize(
+    "rightpanel_translation_notes_no_entries",
+    "No entries yet.",
+  );
+  const measurementUnitsViewLabel = localize(
+    "rightpanel_translation_notes_measurement_units_view",
+    "Measurement units",
+  );
+  const linguisticFeaturesViewLabel = localize(
+    "rightpanel_translation_notes_linguistic_features_view",
+    "Linguistic features",
+  );
+  const emptyStateMessage = localize(
+    "rightpanel_translation_notes_empty",
+    `Translation notes have not been documented yet. Click "${addLabel}" to capture key characters, entities, and terminology before synthesis.`,
+    { action: addLabel },
+  );
+  const saveErrorFallback = localize(
+    "rightpanel_translation_notes_error_save",
+    "Failed to save notes.",
+  );
+  const clearErrorFallback = localize(
+    "rightpanel_translation_notes_error_clear",
+    "Failed to clear notes.",
+  );
 
   useEffect(() => {
     if (mode === "view") {
@@ -1316,7 +1629,10 @@ const TranslationNotesSection = ({
       setMode("view");
       setFormError(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "저장에 실패했습니다.";
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : saveErrorFallback;
       setFormError(message);
     }
   };
@@ -1329,7 +1645,10 @@ const TranslationNotesSection = ({
       setMode("view");
       setFormError(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "삭제에 실패했습니다.";
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : clearErrorFallback;
       setFormError(message);
     }
   };
@@ -1373,7 +1692,7 @@ const TranslationNotesSection = ({
             className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
             onClick={handleEdit}
           >
-            {hasNotes ? "Edit notes" : "Add notes"}
+            {hasNotes ? editLabel : addLabel}
           </button>
         )
       : undefined;
@@ -1381,9 +1700,7 @@ const TranslationNotesSection = ({
   const editContent = (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-slate-800">
-          Editing translation notes
-        </p>
+        <p className="text-sm font-semibold text-slate-800">{editingLabel}</p>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1391,7 +1708,7 @@ const TranslationNotesSection = ({
             onClick={handleClear}
             disabled={isSaving}
           >
-            Clear all
+            {clearAllLabel}
           </button>
           <button
             type="button"
@@ -1399,7 +1716,7 @@ const TranslationNotesSection = ({
             onClick={handleCancel}
             disabled={isSaving}
           >
-            Cancel
+            {cancelLabel}
           </button>
           <button
             type="button"
@@ -1407,14 +1724,14 @@ const TranslationNotesSection = ({
             onClick={handleSave}
             disabled={isSaving}
           >
-            {isSaving ? "Saving…" : "Save"}
+            {isSaving ? savingLabel : saveLabel}
           </button>
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Time period
+            {timePeriodLabel}
           </label>
           <input
             value={draft.timePeriod}
@@ -1425,12 +1742,12 @@ const TranslationNotesSection = ({
               }))
             }
             className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder="e.g., Late Joseon Dynasty"
+            placeholder={timePeriodPlaceholder}
           />
         </div>
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Measurement units
+            {measurementUnitsLabel}
           </label>
           <textarea
             value={draft.measurementUnits}
@@ -1441,12 +1758,12 @@ const TranslationNotesSection = ({
               }))
             }
             className="h-24 w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder="One unit per line"
+            placeholder={measurementUnitsPlaceholder}
           />
         </div>
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Linguistic features / slang
+            {linguisticFeaturesLabel}
           </label>
           <textarea
             value={draft.linguisticFeatures}
@@ -1457,14 +1774,14 @@ const TranslationNotesSection = ({
               }))
             }
             className="h-24 w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder="One entry per line"
+            placeholder={linguisticFeaturesPlaceholder}
           />
         </div>
       </div>
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Characters
+            {charactersLabel}
           </p>
           <button
             type="button"
@@ -1477,7 +1794,7 @@ const TranslationNotesSection = ({
             }
             disabled={isSaving}
           >
-            Add character
+            {addCharacterLabel}
           </button>
         </div>
         {draft.characters.length ? (
@@ -1486,7 +1803,11 @@ const TranslationNotesSection = ({
               <div key={character.id} className="rounded border border-slate-200 p-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-medium text-slate-600">
-                    Character #{index + 1}
+                    {localize(
+                      "rightpanel_translation_notes_character_label",
+                      `Character #${index + 1}`,
+                      { index: index + 1 },
+                    )}
                   </p>
                   <button
                     type="button"
@@ -1501,13 +1822,13 @@ const TranslationNotesSection = ({
                     }
                     disabled={isSaving}
                   >
-                    Remove
+                    {removeLabel}
                   </button>
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <div className="space-y-1">
                     <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      Name
+                      {nameLabel}
                     </label>
                     <input
                       value={character.name}
@@ -1525,12 +1846,12 @@ const TranslationNotesSection = ({
                         }))
                       }
                       className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="Character name"
+                      placeholder={characterNamePlaceholder}
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      Age
+                      {ageLabel}
                     </label>
                     <input
                       value={character.age}
@@ -1548,12 +1869,12 @@ const TranslationNotesSection = ({
                         }))
                       }
                       className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="Age or descriptor"
+                      placeholder={agePlaceholder}
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      Gender
+                      {genderLabel}
                     </label>
                     <input
                       value={character.gender}
@@ -1571,12 +1892,12 @@ const TranslationNotesSection = ({
                         }))
                       }
                       className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="Gender or pronouns"
+                      placeholder={genderPlaceholder}
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      Traits (comma-separated)
+                      {traitsLabel}
                     </label>
                     <input
                       value={character.traits}
@@ -1594,7 +1915,7 @@ const TranslationNotesSection = ({
                         }))
                       }
                       className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="e.g., stubborn, loyal"
+                      placeholder={traitsPlaceholder}
                     />
                   </div>
                 </div>
@@ -1602,20 +1923,20 @@ const TranslationNotesSection = ({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-slate-500">No characters added yet.</p>
+          <p className="text-xs text-slate-500">{noCharactersLabel}</p>
         )}
       </section>
       <section className="grid gap-4 md:grid-cols-2">
         {[
           {
-            label: "Named entities",
+            label: namedEntitiesLabel,
             items: draft.namedEntities,
             setter: (next: NotesEntityDraft[]) =>
               setDraft((prev) => ({ ...prev, namedEntities: next })),
             create: () => createEntityDraft("entity"),
           },
           {
-            label: "Locations",
+            label: locationsLabel,
             items: draft.locations,
             setter: (next: NotesEntityDraft[]) =>
               setDraft((prev) => ({ ...prev, locations: next })),
@@ -1633,7 +1954,7 @@ const TranslationNotesSection = ({
                 onClick={() => setter([...items, create()])}
                 disabled={isSaving}
               >
-                Add
+                {addEntryLabel}
               </button>
             </div>
             {items.length ? (
@@ -1658,7 +1979,7 @@ const TranslationNotesSection = ({
                         )
                       }
                       className="flex-1 rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="Name"
+                    placeholder={entryNamePlaceholder}
                     />
                     <input
                       value={item.frequency}
@@ -1675,7 +1996,7 @@ const TranslationNotesSection = ({
                         )
                       }
                       className="w-24 rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder="Freq"
+                    placeholder={entryFrequencyPlaceholder}
                     />
                     <button
                       type="button"
@@ -1683,13 +2004,13 @@ const TranslationNotesSection = ({
                       onClick={() => setter(items.filter((entry) => entry.id !== item.id))}
                       disabled={isSaving}
                     >
-                      Remove
+                    {removeLabel}
                     </button>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-slate-500">No entries yet.</p>
+              <p className="text-xs text-slate-500">{noEntriesLabel}</p>
             )}
           </div>
         ))}
@@ -1702,7 +2023,7 @@ const TranslationNotesSection = ({
       {notes?.timePeriod ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Time period
+            {timePeriodLabel}
           </p>
           <p className="mt-1 text-slate-700">{notes.timePeriod}</p>
         </div>
@@ -1710,7 +2031,7 @@ const TranslationNotesSection = ({
       {notes?.characters?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Characters
+            {charactersLabel}
           </p>
           <ul className="mt-2 space-y-2 text-slate-700">
             {notes.characters.map((character) => {
@@ -1738,7 +2059,7 @@ const TranslationNotesSection = ({
       {notes?.namedEntities?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Named entities
+            {namedEntitiesLabel}
           </p>
           <ul className="mt-2 grid gap-1 text-slate-700 sm:grid-cols-2">
             {notes.namedEntities.map((entity) => (
@@ -1757,7 +2078,7 @@ const TranslationNotesSection = ({
       {notes?.locations?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Locations
+            {locationsLabel}
           </p>
           <ul className="mt-2 grid gap-1 text-slate-700 sm:grid-cols-2">
             {notes.locations.map((location) => (
@@ -1779,7 +2100,7 @@ const TranslationNotesSection = ({
       {notes?.measurementUnits?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Measurement units
+            {measurementUnitsViewLabel}
           </p>
           {renderTagList(notes.measurementUnits)}
         </div>
@@ -1787,22 +2108,19 @@ const TranslationNotesSection = ({
       {notes?.linguisticFeatures?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Linguistic features
+            {linguisticFeaturesViewLabel}
           </p>
           {renderTagList(notes.linguisticFeatures)}
         </div>
       ) : null}
     </div>
   ) : editable ? (
-    <p className="text-xs text-slate-500">
-      Translation notes have not been documented yet. Click “Add notes” to
-      capture key characters, entities, and terminology before synthesis.
-    </p>
+    <p className="text-xs text-slate-500">{emptyStateMessage}</p>
   ) : null;
 
   return (
     <Collapsible
-      title="Translation notes"
+      title={titleLabel}
       isOpen={mode === "edit" ? true : isOpen}
       onToggle={handleToggle}
       keepMounted
@@ -2060,16 +2378,28 @@ export const RightPanel = ({
   const resolvedTabs = useMemo<Array<{ key: RightPanelBaseTab; label: string }>>(
     () => {
       const tabs: Array<{ key: RightPanelBaseTab; label: string }> = [
-        { key: 'preview', label: 'Overview' },
-        { key: 'proofread:editing', label: 'Editor' },
+        {
+          key: "preview",
+          label: localize("rightpanel_tab_overview", "Overview"),
+        },
+        {
+          key: "proofread:editing",
+          label: localize("rightpanel_tab_editor", "Editor"),
+        },
       ];
       if (advancedProofreadEnabled) {
-        tabs.push({ key: 'proofread:findings', label: 'Finder' });
+        tabs.push({
+          key: "proofread:findings",
+          label: localize("rightpanel_tab_finder", "Finder"),
+        });
       }
-      tabs.push({ key: 'export', label: 'eBook' });
+      tabs.push({
+        key: "export",
+        label: localize("rightpanel_tab_export", "eBook"),
+      });
       return tabs;
     },
-    [advancedProofreadEnabled],
+    [advancedProofreadEnabled, localize],
   );
 
   const prevAdvancedRef = useRef(advancedProofreadEnabled);
@@ -2713,65 +3043,49 @@ export const RightPanel = ({
         </div>
         <div className="flex-1 overflow-y-auto">
           {activeTab === "preview" && (
-            <div className="flex h-full flex-col p-4">
-              <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                  <header className="mb-3 flex flex-col gap-1">
-                    <h2 className="text-base font-semibold text-slate-800">
-                      {projectSummary?.title ?? "Untitled project"}
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      {originLangLabel && targetLangLabel
-                        ? `${originLangLabel} → ${targetLangLabel}`
-                        : originLangLabel || targetLangLabel || "언어 정보 없음"}
-                    </p>
-                    {projectSummary?.updated_at && (
-                      <p className="text-xs text-slate-400">
-                        {new Date(projectSummary.updated_at).toLocaleString()}
-                      </p>
-                    )}
-                  </header>
-                  <TranslationCanvas
-                    content={content}
-                    isLoading={isContentLoading}
-                  />
-                </section>
-                <Collapsible
-                  title="Profile"
-                  isOpen={profileOpen}
-                  onToggle={() => setProfileOpen((prev) => !prev)}
-                  showDivider={false}
-                  keepMounted
-                  action={
-                    profileControls && !profileControls.isEditing ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!profileOpen) {
-                            setProfileOpen(true);
-                          }
-                          profileControls.startEdit();
-                        }}
-                        className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                        aria-label="Edit profile"
-                        title="Edit profile"
-                      >
-                        <Pencil className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    ) : null
-                  }
-                >
-                  <ProjectProfileCard
-                    content={content}
-                    onUpdated={onProfileUpdated}
-                    onActionReady={setProfileControls}
-                  />
-                </Collapsible>
-              </div>
-              <div className="mt-4 space-y-4">
+            <div className="flex h-full flex-col gap-4 p-4">
+              <Collapsible
+                title={localize("rightpanel_preview_profile_title", "Profile")}
+                isOpen={profileOpen}
+                onToggle={() => setProfileOpen((prev) => !prev)}
+                showDivider={false}
+                keepMounted
+                action={
+                  profileControls && !profileControls.isEditing ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!profileOpen) {
+                          setProfileOpen(true);
+                        }
+                        profileControls.startEdit();
+                      }}
+                      className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+                      aria-label={localize(
+                        "rightpanel_preview_profile_edit",
+                        "Edit profile",
+                      )}
+                      title={localize(
+                        "rightpanel_preview_profile_edit",
+                        "Edit profile",
+                      )}
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  ) : null
+                }
+              >
+                <ProjectProfileCard
+                  content={content}
+                  onUpdated={onProfileUpdated}
+                  onActionReady={setProfileControls}
+                />
+              </Collapsible>
+              <div className="space-y-4">
                 <DocumentSummarySection
                   origin={originProfile}
                   translation={translationProfile}
+                  localize={localize}
                   isLoading={Boolean(isContentLoading)}
                   originStatus={originSummaryStatus}
                   translationStatus={translationSummaryStatus}
@@ -2787,7 +3101,10 @@ export const RightPanel = ({
                 <div className="grid gap-4 md:grid-cols-2">
                   <SummaryCard
                     key={`origin-${content?.projectId ?? activeProjectId ?? "unknown"}`}
-                    title="Origin"
+                    title={localize(
+                      "rightpanel_preview_origin_card_title",
+                      "Origin",
+                    )}
                     summary={
                       content?.content?.origin?.content?.slice(0, 400) ?? ""
                     }
@@ -2800,7 +3117,11 @@ export const RightPanel = ({
                     editable
                     onSave={handleSaveOrigin}
                     autoSaveDelay={5000}
-                    placeholder="원문을 입력해 주세요."
+                    placeholder={localize(
+                      "rightpanel_preview_origin_card_placeholder",
+                      "Enter the manuscript text.",
+                    )}
+                    localize={localize}
                   />
                   <TranslationSummaryCard
                     projectKey={
@@ -2812,6 +3133,7 @@ export const RightPanel = ({
                       setPreviewExpanded("translation", expanded)
                     }
                     onSave={handleSaveTranslation}
+                    localize={localize}
                   />
                 </div>
               </div>

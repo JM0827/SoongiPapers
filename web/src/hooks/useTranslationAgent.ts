@@ -122,6 +122,7 @@ export const useTranslationAgent = ({
   const lastStageRef = useRef<string | null>(null);
   const finalizingRef = useRef(false);
   const finalizationTimeoutRef = useRef<number | null>(null);
+  const pollingErrorShownRef = useRef(false);
 
   useEffect(() => {
     // Reset translation state when project changes
@@ -254,19 +255,11 @@ export const useTranslationAgent = ({
       reason?: string | null;
     } = {}) => {
       if (!token || !projectId) {
-        pushAssistant("로그인 상태를 확인해 주세요.", {
-          label: "Authentication required",
-          tone: "error",
-        });
         return;
       }
 
       const targetJobId = jobId ?? translation.jobId;
       if (!targetJobId) {
-        pushAssistant("중지할 진행 중인 번역 작업을 찾지 못했습니다.", {
-          label: "No translation job",
-          tone: "default",
-        });
         return;
       }
 
@@ -342,24 +335,12 @@ export const useTranslationAgent = ({
         return;
       }
       if (!token) {
-        pushAssistant("인증이 만료되었습니다. 다시 로그인해 주세요.", {
-          label: "Authentication required",
-          tone: "error",
-        });
         return;
       }
       if (!projectId) {
-        pushAssistant("프로젝트를 먼저 선택하세요.", {
-          label: "No project selected",
-          tone: "error",
-        });
         return;
       }
       if (!originText.trim()) {
-        pushAssistant("먼저 원문을 업로드하거나 입력해 주세요.", {
-          label: "No origin text",
-          tone: "error",
-        });
         return;
       }
 
@@ -384,16 +365,6 @@ export const useTranslationAgent = ({
         guardFailures: {},
         flaggedSegments: [],
       });
-      pushAssistant(
-        "번역 작업을 준비 중입니다...",
-        {
-          label: "Translation queued",
-          tone: "default",
-        },
-        undefined,
-        true,
-      );
-
       try {
         const response = await api.startTranslation(token, {
           documentId: projectId,
@@ -431,21 +402,7 @@ export const useTranslationAgent = ({
           needsReviewCount: 0,
           totalSegments: 0,
         });
-        pushAssistant(
-          sequentialBaseMessage,
-          {
-            label: "Job started",
-            description: `Job ID: ${response.jobId}`,
-            tone: "default",
-          },
-          [
-            {
-              type: "viewTranslationStatus",
-              reason: "Check translation status",
-            },
-          ],
-          true,
-        );
+        console.info("[translation] job started", response.jobId);
       } catch (err) {
         const fallbackMessage =
           err instanceof Error ? err.message : "Unknown error";
@@ -618,6 +575,12 @@ export const useTranslationAgent = ({
         const job = await api.getJob(token, jobId);
         if (cancelled) return;
         if (!job) return;
+
+        if (pollingErrorShownRef.current) {
+          pollingErrorShownRef.current = false;
+        }
+
+        const currentTranslation = useWorkflowStore.getState().translation;
 
         const sequential = job.sequential ?? null;
 
@@ -869,7 +832,7 @@ export const useTranslationAgent = ({
         const failedDraft = drafts.find((draft) => draft.status === "failed") ?? null;
         const plannedPasses = drafts.length;
         const knownTotalPasses =
-          plannedPasses || translation.progressTotal || 0;
+          plannedPasses || currentTranslation.progressTotal || 0;
         const runStatusMessage = (() => {
           if (job.status === "succeeded" || completedPasses >= knownTotalPasses) {
             return "번역이 완료되었습니다.";
@@ -1061,33 +1024,25 @@ export const useTranslationAgent = ({
           };
         });
       } catch (err) {
-        if (!cancelled) {
-          pushAssistant(
-            "번역 상태를 확인하지 못했습니다.",
-            {
-              label: "Polling error",
-              description: err instanceof Error ? err.message : "Unknown error",
-              tone: "error",
-            },
-            undefined,
-            true,
-          );
-          setTranslation(projectId, {
-            status: "failed",
-            lastError: err instanceof Error ? err.message : "Unknown error",
-            stageCounts: {},
-            completedStages: [],
-            currentStage: null,
-            needsReviewCount: 0,
-            totalSegments: 0,
-            guardFailures: {},
-            flaggedSegments: [],
-          });
-          stopPolling();
-          clearFinalizationTimer();
-          finalizingRef.current = false;
-          return;
+        if (cancelled) return;
+
+        const errorMessage =
+          err instanceof Error ? err.message : "Unknown error";
+
+        if (!pollingErrorShownRef.current) {
+          console.warn("[translation] polling warning", errorMessage);
+          pollingErrorShownRef.current = true;
+        } else {
+          console.warn("[translation] polling error", errorMessage);
         }
+
+        setTranslation(projectId, (current) => ({
+          ...current,
+          lastError: errorMessage,
+          updatedAt: new Date().toISOString(),
+        }));
+
+        return;
       }
     };
 
@@ -1098,6 +1053,7 @@ export const useTranslationAgent = ({
       cancelled = true;
       stopPolling();
       clearFinalizationTimer();
+      pollingErrorShownRef.current = false;
     };
   }, [
     translation.jobId,
@@ -1107,7 +1063,6 @@ export const useTranslationAgent = ({
     setTranslation,
     onCompleted,
     refreshContent,
-    translation.progressTotal,
     waitForTranslationResult,
   ]);
 
