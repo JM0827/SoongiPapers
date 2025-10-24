@@ -96,6 +96,8 @@ export interface TranslationFinalSummary {
   sourceHash?: string | null;
 }
 
+export type TranslationStageKey = "literal" | "style" | "emotion" | "qa";
+
 export type WorkflowType = "translation" | "proofread" | "quality";
 
 export type WorkflowRunStatus =
@@ -331,6 +333,28 @@ export interface ProofreadEditorPatchPayload {
 
 export interface ProofreadEditorPatchResponse extends ProofreadEditorResponse {
   clientMutationId?: string | null;
+}
+
+export interface TranslationStageDraftSegment {
+  segmentId: string;
+  segmentIndex: number;
+  text: string;
+  textSource?: string | null;
+  needsReview?: boolean;
+}
+
+export interface TranslationStageDraftResponse {
+  projectId: string;
+  jobId: string;
+  translationFileId?: string | null;
+  stage: TranslationStageKey;
+  availableStages: TranslationStageKey[];
+  segments: TranslationStageDraftSegment[];
+  counts: {
+    total: number;
+    needsReview: number;
+  };
+  joinedText: string;
 }
 
 export interface ProofreadEditorConflictResponse {

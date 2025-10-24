@@ -2390,7 +2390,7 @@ export const RightPanel = ({
       if (advancedProofreadEnabled) {
         tabs.push({
           key: "proofread:findings",
-          label: localize("rightpanel_tab_finder", "Finder"),
+          label: localize("rightpanel_tab_finder", "Proofread"),
         });
       }
       tabs.push({
@@ -2522,17 +2522,6 @@ export const RightPanel = ({
         : translationContentAvailable
           ? "done"
           : "pending";
-  const originLangLabel =
-    projectSummary?.origin_lang ??
-    content?.projectProfile?.originLang ??
-    (content?.content?.origin as { lang?: string } | undefined)?.lang ??
-    null;
-  const targetLangLabel =
-    projectSummary?.target_lang ??
-    content?.projectProfile?.targetLang ??
-    (content?.content?.translation as { lang?: string } | undefined)?.lang ??
-    null;
-
   const translationFallback = useMemo(() => {
     if (translationProfile) return null;
     const primary = content?.content?.translation?.content ?? "";

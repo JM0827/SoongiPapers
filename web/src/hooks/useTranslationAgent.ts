@@ -141,6 +141,7 @@ export const useTranslationAgent = ({
   useEffect(() => {
     if (!lifecycle) return;
     const stage = lifecycle.stage?.toLowerCase() ?? null;
+    const stageIncludes = (value: string) => Boolean(stage?.includes(value));
     const translationReady = translationReadyFlag;
     if (!stage && !translationReady) return;
     const hasJob = Boolean(lifecycle.jobId);
@@ -148,7 +149,7 @@ export const useTranslationAgent = ({
     if (!projectId) return;
 
     if (
-      (stage.includes("translate") || stage === "translating") &&
+      (stageIncludes("translate") || stage === "translating") &&
       hasJob &&
       translation.status === "idle"
     ) {
@@ -161,7 +162,7 @@ export const useTranslationAgent = ({
         lastMessage: "번역이 진행 중입니다.",
       });
     } else if (
-      stage.includes("fail") &&
+      stageIncludes("fail") &&
       hasJob &&
       translation.status === "idle"
     ) {
@@ -170,10 +171,10 @@ export const useTranslationAgent = ({
         lastError: "이전 번역 작업이 실패했습니다.",
       });
     } else if (
-      (stage.includes("done") ||
-        stage.includes("complete") ||
+      (stageIncludes("done") ||
+        stageIncludes("complete") ||
         stage === "translated" ||
-        (stage.includes("final") && translationReady)) &&
+        (stageIncludes("final") && translationReady)) &&
       translation.status !== "done"
     ) {
       finalizingRef.current = false;
@@ -198,7 +199,7 @@ export const useTranslationAgent = ({
     } else if (
       translationReady &&
       translation.status !== "done" &&
-      (!stage || !stage.includes("fail"))
+      !stageIncludes("fail")
     ) {
       setTranslation(projectId, {
         status: "done",

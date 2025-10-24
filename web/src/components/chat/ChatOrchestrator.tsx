@@ -181,6 +181,26 @@ export const ChatOrchestrator = ({
   onProfileUpdated,
 }: ChatOrchestratorProps) => {
   const { locale } = useUILocale();
+  const lastProofSummaryRef = useRef<{
+    counts: Record<'critical' | 'high' | 'medium' | 'low', number>;
+  } | null>(null);
+  const normalizeProofSeverity = useCallback((value?: string | null) => {
+    if (!value) return undefined;
+    const normalized = value.toLowerCase();
+    if (normalized.includes('critical') || normalized.includes('extreme')) {
+      return 'critical';
+    }
+    if (normalized.includes('high') || normalized.includes('severe')) {
+      return 'high';
+    }
+    if (normalized.includes('medium') || normalized.includes('moderate')) {
+      return 'medium';
+    }
+    if (normalized.includes('low') || normalized.includes('minor')) {
+      return 'low';
+    }
+    return undefined;
+  }, []);
   const localize = useCallback(
     (key: string, fallback: string, params?: Record<string, string | number>) => {
       const resolved = translate(key, locale, params);
@@ -252,6 +272,42 @@ export const ChatOrchestrator = ({
     () => projects.find((project) => project.project_id === projectId) ?? null,
     [projects, projectId],
   );
+
+  useEffect(() => {
+    const bucketSources = [
+      content?.proofreading?.report?.results,
+      content?.proofreading?.quickReport?.results,
+      content?.proofreading?.deepReport?.results,
+    ];
+    const buckets = bucketSources.find((entry) => Array.isArray(entry));
+    if (!buckets) {
+      lastProofSummaryRef.current = null;
+      return;
+    }
+    const counts: Record<'critical' | 'high' | 'medium' | 'low', number> = {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+    (buckets as Array<{ items?: Array<{ severity?: string | null }> }>).forEach(
+      (bucket) => {
+        (bucket.items ?? []).forEach((issue) => {
+          const normalized = normalizeProofSeverity(issue.severity);
+          if (normalized) {
+            counts[normalized] += 1;
+          }
+        });
+      },
+    );
+    const total = counts.critical + counts.high + counts.medium + counts.low;
+    lastProofSummaryRef.current = total > 0 ? { counts } : null;
+  }, [
+    content?.proofreading?.deepReport?.results,
+    content?.proofreading?.quickReport?.results,
+    content?.proofreading?.report?.results,
+    normalizeProofSeverity,
+  ]);
 
   const originText = content?.content?.origin?.content ?? "";
   const hasOrigin = Boolean(originText.trim());
@@ -326,6 +382,7 @@ export const ChatOrchestrator = ({
       badge?: Message["badge"],
       actions?: ChatAction[],
       persist = false,
+      _contextId?: string,
     ) => {
       validateAssistantMessage(text);
       let appended = false;
@@ -3097,23 +3154,33 @@ export const ChatOrchestrator = ({
             <div className="space-y-3 pb-28">
               <div className="contents">
                 <div
-                  ref={(node) => (stageAnchorRefs.current.origin = node)}
+                  ref={(node) => {
+                    stageAnchorRefs.current.origin = node;
+                  }}
                   className="h-0"
                 />
                 <div
-                  ref={(node) => (stageAnchorRefs.current.translation = node)}
+                  ref={(node) => {
+                    stageAnchorRefs.current.translation = node;
+                  }}
                   className="h-0"
                 />
                 <div
-                  ref={(node) => (stageAnchorRefs.current.proofreading = node)}
+                  ref={(node) => {
+                    stageAnchorRefs.current.proofreading = node;
+                  }}
                   className="h-0"
                 />
                 <div
-                  ref={(node) => (stageAnchorRefs.current.quality = node)}
+                  ref={(node) => {
+                    stageAnchorRefs.current.quality = node;
+                  }}
                   className="h-0"
                 />
                 <div
-                  ref={(node) => (stageAnchorRefs.current.publishing = node)}
+                  ref={(node) => {
+                    stageAnchorRefs.current.publishing = node;
+                  }}
                   className="h-0"
                 />
               </div>

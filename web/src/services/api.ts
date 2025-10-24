@@ -29,6 +29,8 @@ import type {
   ProofreadEditorPatchResponse,
   ProofreadEditorConflictResponse,
   ProofreadEditorStreamEvent,
+  TranslationStageDraftResponse,
+  TranslationStageKey,
   EditingSelectionPayload,
   EditingSuggestionResponse,
 } from "../types/domain";
@@ -1502,6 +1504,29 @@ export const api = {
       headers: defaultHeaders(token),
     });
     return handle<ProofreadEditorResponse>(res);
+  },
+
+  async fetchTranslationStageDrafts(config: {
+    token: string;
+    projectId: string;
+    stage: TranslationStageKey;
+    jobId?: string | null;
+    translationFileId?: string | null;
+  }): Promise<TranslationStageDraftResponse> {
+    const { token, projectId, stage, jobId = null, translationFileId = null } =
+      config;
+    const search = new URLSearchParams({ stage });
+    if (jobId) search.set("jobId", jobId);
+    if (translationFileId) search.set("translationFileId", translationFileId);
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/translations/stage-drafts${
+      query ? `?${query}` : ""
+    }`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: defaultHeaders(token),
+    });
+    return handle<TranslationStageDraftResponse>(res);
   },
 
   async patchProofreadEditorSegments(config: {

@@ -16,26 +16,18 @@ interface SidebarQuickActionsProps {
   isOpen: boolean;
   onToggle: (open: boolean) => void;
   actions: QuickAction[];
+  localize: (
+    key: string,
+    fallback: string,
+    params?: Record<string, string | number>,
+  ) => string;
 }
-
-const describeStatus = (
-  label: string,
-  status: "default" | "running" | "done",
-) => {
-  switch (status) {
-    case "running":
-      return `${label} 실행 상태: 진행 중`;
-    case "done":
-      return `${label} 실행 상태: 완료됨`;
-    default:
-      return `${label} 실행 상태: 대기 중`;
-  }
-};
 
 export const SidebarQuickActions = ({
   isOpen,
   onToggle,
   actions,
+  localize,
 }: SidebarQuickActionsProps) => {
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(
@@ -46,6 +38,31 @@ export const SidebarQuickActions = ({
 
   const isBusy = useCallback((key: string) => pendingKey === key, [pendingKey]);
 
+  const describeStatus = useCallback(
+    (label: string, status: "default" | "running" | "done") => {
+      if (status === "running") {
+        return localize(
+          "sidebar_quick_status_running",
+          "{{label}} status: In progress",
+          { label },
+        );
+      }
+      if (status === "done") {
+        return localize(
+          "sidebar_quick_status_done",
+          "{{label}} status: Completed",
+          { label },
+        );
+      }
+      return localize(
+        "sidebar_quick_status_default",
+        "{{label}} status: Pending",
+        { label },
+      );
+    },
+    [localize],
+  );
+
   const handleClick = useCallback(
     async (action: QuickAction) => {
       if (action.disabled || isBusy(action.key)) return;
@@ -53,18 +70,29 @@ export const SidebarQuickActions = ({
       setPendingKey(action.key);
       try {
         await action.onClick();
-        setToast({ id, message: `${action.label} 요청을 처리 중입니다.` });
+        setToast({
+          id,
+          message: localize(
+            'sidebar_quick_toast_processing',
+            '{{label}} request is being processed.',
+            { label: action.label },
+          ),
+        });
       } catch (error) {
         const message =
           error instanceof Error
             ? error.message
-            : `${action.label} 요청을 완료할 수 없습니다.`;
+            : localize(
+                'sidebar_quick_error_generic',
+                'Unable to complete {{label}}.',
+                { label: action.label },
+              );
         setToast({ id, message });
       } finally {
         setPendingKey(null);
       }
     },
-    [isBusy],
+    [isBusy, localize],
   );
 
   useEffect(() => {
@@ -75,8 +103,11 @@ export const SidebarQuickActions = ({
 
   return (
     <SidebarSection
-      title="빠른 액션"
-      subtitle="주요 워크플로를 바로 실행합니다"
+      title={localize('sidebar_quick_title', 'Quick actions')}
+      subtitle={localize(
+        'sidebar_quick_subtitle',
+        'Launch essential workflows instantly.',
+      )}
       isOpen={isOpen}
       onToggle={onToggle}
     >
@@ -169,7 +200,7 @@ export const SidebarQuickActions = ({
               <span className="leading-tight">{action.label}</span>
               {busy ? (
                 <span className="text-[10px] text-indigo-500" aria-hidden="true">
-                  진행 중…
+                  {localize('sidebar_quick_running_label', 'In progress…')}
                 </span>
               ) : null}
             </button>
