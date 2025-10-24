@@ -15,6 +15,9 @@ export interface ProjectMeta {
 export interface ProjectSummary {
   project_id: string;
   title: string;
+  book_title?: string | null;
+  author_name?: string | null;
+  translator_name?: string | null;
   description?: string;
   intention?: string;
   status?: string;
@@ -408,8 +411,15 @@ export interface ProjectContent {
     targetLang?: string | null;
     createdAt?: string | null;
     updatedAt?: string | null;
+    bookTitle?: string | null;
+    authorName?: string | null;
+    translatorName?: string | null;
     meta?: {
       author?: string | null;
+      translator?: string | null;
+      bookTitleEn?: string | null;
+      originalAuthorNotes?: string | null;
+      translatorNotes?: string | null;
       context?: string | null;
       notes?: string | null;
       translationDirection?: string | null;
@@ -440,6 +450,7 @@ export interface ProjectContent {
       content?: string;
       timestamp?: string;
       filename?: string | null;
+      language?: string | null;
     };
     translation?: {
       content?: string;
@@ -447,6 +458,7 @@ export interface ProjectContent {
       timestamp?: string;
       jobId?: string | null;
       translationFileId?: string | null;
+      language?: string | null;
     };
     batchesMetadata?: Array<{
       batchId: string;
@@ -489,6 +501,7 @@ export interface ProjectContent {
     quickReport?: ProofreadingReport | null;
     deepReport?: ProofreadingReport | null;
     timestamp?: string;
+    updatedAt?: string | null;
   } | null;
   translationStage?: string;
   qualityAssessmentStage?: string;

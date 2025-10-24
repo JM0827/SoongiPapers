@@ -492,10 +492,26 @@ function mapProjectRow(row: any) {
     }
   }
 
+  const authorName = row.author_name ?? meta.author ?? null;
+  if (authorName !== null && authorName !== undefined) {
+    meta.author = authorName;
+  }
+
+  if (row.book_title && !meta.bookTitle) {
+    meta.bookTitle = row.book_title;
+  }
+
+  if (row.translator_name && !meta.translator) {
+    meta.translator = row.translator_name;
+  }
+
   return {
     project_id: row.project_id,
     user_id: row.user_id,
     title: row.title,
+    book_title: row.book_title,
+    author_name: row.author_name,
+    translator_name: row.translator_name,
     description: row.description,
     intention: row.intention,
     memo: row.memo,
@@ -506,6 +522,29 @@ function mapProjectRow(row: any) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+const trimOrNull = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+};
+
+async function getUserDisplayName(userId: string): Promise<string | null> {
+  try {
+    const { rows } = await query(
+      `SELECT name FROM users WHERE user_id = $1 LIMIT 1`,
+      [userId],
+    );
+    const name = rows?.[0]?.name;
+    return typeof name === "string" ? name.trim() : null;
+  } catch (error) {
+    app.log?.warn?.(
+      { error, userId },
+      "[PROJECT] Failed to fetch user display name",
+    );
+    return null;
+  }
 }
 
 // OAuth callback
@@ -612,7 +651,7 @@ app.get("/api/projects", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE user_id = $1
        ORDER BY updated_at DESC NULLS LAST, created_at DESC`,
@@ -626,6 +665,50 @@ app.get("/api/projects", async (req, reply) => {
   }
 });
 
+app.get("/api/user/preferences", async (req, reply) => {
+  await requireAuthAndPlanCheck(req, reply);
+  if ((reply as any).sent) return;
+
+  const userId = (req as any).user_id;
+
+  try {
+    const { rows } = await query(
+      `SELECT preferred_language FROM users WHERE user_id = $1 LIMIT 1`,
+      [userId],
+    );
+
+    const preferredLanguage = rows?.[0]?.preferred_language ?? null;
+    reply.send({ preferred_language: preferredLanguage });
+  } catch (error) {
+    app.log.error(error, "[USER] Failed to load preferences");
+    reply.status(500).send({ error: "Failed to load user preferences" });
+  }
+});
+
+app.put("/api/user/preferences", async (req, reply) => {
+  await requireAuthAndPlanCheck(req, reply);
+  if ((reply as any).sent) return;
+
+  const userId = (req as any).user_id;
+  const body = req.body as { preferred_language?: string | null } | undefined;
+  const preferredLanguage =
+    typeof body?.preferred_language === "string"
+      ? body.preferred_language.trim() || null
+      : null;
+
+  try {
+    await query(
+      `UPDATE users SET preferred_language = $1 WHERE user_id = $2`,
+      [preferredLanguage, userId],
+    );
+
+    reply.send({ ok: true, preferred_language: preferredLanguage });
+  } catch (error) {
+    app.log.error(error, "[USER] Failed to update preferences");
+    reply.status(500).send({ error: "Failed to update user preferences" });
+  }
+});
+
 app.get("/api/projects/latest", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
   if ((reply as any).sent) return;
@@ -634,7 +717,7 @@ app.get("/api/projects/latest", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE user_id = $1
        ORDER BY updated_at DESC NULLS LAST, created_at DESC
@@ -658,7 +741,7 @@ app.get("/api/projects/:projectId", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE project_id = $1 AND user_id = $2
        LIMIT 1`,
@@ -685,6 +768,9 @@ app.post("/api/projects", async (req, reply) => {
     title: string;
     description: string;
     intention: string;
+    book_title: string;
+    author_name: string;
+    translator_name: string;
     memo: string;
     meta: any;
     status: string;
@@ -692,20 +778,35 @@ app.post("/api/projects", async (req, reply) => {
     target_lang: string;
   }>;
 
-  if (!body?.title) {
+  const requestedTitle = trimOrNull(body?.title);
+
+  if (!requestedTitle) {
     return reply.status(400).send({ error: "title is required" });
   }
 
   try {
+    const description = trimOrNull(body.description) ?? "";
+    const intention = trimOrNull(body.intention) ?? "";
+    const bookTitle = trimOrNull(body.book_title) ?? requestedTitle;
+    const authorName = trimOrNull(body.author_name);
+    let translatorName = trimOrNull(body.translator_name);
+
+    if (!translatorName) {
+      translatorName = await getUserDisplayName(userId);
+    }
+
     const { rows } = await query(
-      `INSERT INTO translationprojects (user_id, title, description, intention, memo, meta, status, origin_lang, target_lang)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
-       RETURNING project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
+      `INSERT INTO translationprojects (user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
+       RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
       [
         userId,
-        body.title,
-        body.description ?? "",
-        body.intention ?? "",
+        requestedTitle,
+        description,
+        intention,
+        bookTitle,
+        authorName,
+        translatorName,
         body.memo ?? "",
         JSON.stringify(body.meta ?? {}),
         body.status ?? "active",
@@ -736,6 +837,9 @@ app.put("/api/projects/:projectId", async (req, reply) => {
     title: string;
     description: string;
     intention: string;
+    book_title: string;
+    author_name: string;
+    translator_name: string;
     memo: string;
     meta: any;
     status: string;
@@ -745,7 +849,7 @@ app.put("/api/projects/:projectId", async (req, reply) => {
 
   try {
     const existing = await query(
-      `SELECT project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE project_id = $1 AND user_id = $2
        LIMIT 1`,
@@ -768,23 +872,56 @@ app.put("/api/projects/:projectId", async (req, reply) => {
       }
     })();
 
+    const currentBookTitle = current.book_title ?? current.title ?? null;
+    const currentAuthorName = current.author_name ?? currentMeta.author ?? null;
+    const currentTranslatorName =
+      current.translator_name ?? currentMeta.translator ?? null;
+
+    const nextTitle = trimOrNull(body.title) ?? current.title;
+    const nextDescription = trimOrNull(body.description) ?? current.description;
+    const nextIntention = trimOrNull(body.intention) ?? current.intention;
+
+    const nextBookTitle =
+      trimOrNull(body.book_title) ??
+      trimOrNull(body.title) ??
+      currentBookTitle ??
+      null;
+
+    const resolvedBookTitle = nextBookTitle ?? nextTitle ?? null;
+
+    const nextAuthorName =
+      trimOrNull(body.author_name) ?? currentAuthorName ?? null;
+
+    let nextTranslatorName =
+      trimOrNull(body.translator_name) ?? currentTranslatorName ?? null;
+
+    if (!nextTranslatorName) {
+      nextTranslatorName = await getUserDisplayName(userId);
+    }
+
     const { rows } = await query(
       `UPDATE translationprojects
          SET title = $1,
              description = $2,
              intention = $3,
-             memo = $4,
-             meta = $5::jsonb,
-             status = $6,
-             origin_lang = $7,
-             target_lang = $8,
+             book_title = $4,
+             author_name = $5,
+             translator_name = $6,
+             memo = $7,
+             meta = $8::jsonb,
+             status = $9,
+             origin_lang = $10,
+             target_lang = $11,
              updated_at = NOW()
-      WHERE project_id = $9 AND user_id = $10
-      RETURNING project_id, user_id, title, description, intention, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
+     WHERE project_id = $12 AND user_id = $13
+     RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
       [
-        body.title ?? current.title,
-        body.description ?? current.description,
-        body.intention ?? current.intention,
+        nextTitle,
+        nextDescription,
+        nextIntention,
+        resolvedBookTitle,
+        nextAuthorName,
+        nextTranslatorName,
         body.memo ?? current.memo,
         JSON.stringify(body.meta ?? currentMeta ?? {}),
         body.status ?? current.status,
@@ -3043,7 +3180,10 @@ async function handleTranslationSynthesisJob(job: TranslationSynthesisJob) {
   await markJobRunning(data.jobId);
 
   try {
-    const drafts = await loadDraftsByIds(data.candidateDraftIds);
+    const drafts = await loadDraftsByIds(data.candidateDraftIds, {
+      projectId: data.projectId,
+      jobId: data.jobId,
+    });
     if (!drafts.length) {
       throw new Error("No translation drafts available for synthesis");
     }

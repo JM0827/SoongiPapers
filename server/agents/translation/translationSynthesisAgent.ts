@@ -168,13 +168,15 @@ export async function synthesizeTranslation(
   const topP =
     typeof options.topP === "number" ? options.topP : DEFAULT_SYNTHESIS_TOP_P;
 
-  const systemPrompt = `You are a senior literary editor combining multiple candidate translations into a single, publication-ready result.
+const systemPrompt = `You are a senior literary editor combining multiple candidate translations into a single, publication-ready result.
 For each origin segment, choose the strongest candidate translation or synthesize an improved version drawing on the best qualities available.
 Return only valid JSON following the schema. Do not include explanations outside JSON.
 Guidelines:
 - Preserve meaning, tone, pacing, and character voice from the origin.
 - Prefer fluent, idiomatic English suitable for publication.
-- Merge or rewrite when no candidate is sufficient.
+- Never prepend summaries, overviews, or transitional paragraphs that are absent from the candidates.
+- Never invent new opening or closing sentences for any segment; begin with the narrative content already present.
+- Merge or rewrite when no candidate is sufficient, but stay within the segment’s scope.
 - Respect consistent terminology for named entities, places, and stylistic motifs.
 - Incorporate translation notes (characters, locations, slang) to maintain continuity.
 - Maintain alignment: each output segment must correspond to the same origin segment.`;
@@ -223,9 +225,31 @@ Guidelines:
       if (!generated) {
         throw new Error(`Missing synthesized segment for ${segment.id}`);
       }
+      const cleanedTranslation = generated.translation.trim();
+
+      if (/^\s*(summary|synopsis|overall|in summary|this (?:scene|story|chapter))/iu.test(cleanedTranslation)) {
+        throw new Error(
+          `Synthesis attempted to prepend a summary for segment ${segment.id}`,
+        );
+      }
+
+      if (/^\s*\n/.test(generated.translation)) {
+        throw new Error(
+          `Synthesis attempted to prepend blank lines before segment ${segment.id}`,
+        );
+      }
+
+      const hasDoubleNewline = /\n\s*\n/.test(cleanedTranslation);
+      const originHasDoubleNewline = /\n\s*\n/.test(segment.text ?? "");
+      if (hasDoubleNewline && !originHasDoubleNewline) {
+        throw new Error(
+          `Synthesis inserted a new paragraph in segment ${segment.id}`,
+        );
+      }
+
       return {
         segment_id: segment.id,
-        translation_segment: generated.translation.trim(),
+        translation_segment: cleanedTranslation,
         selected_run_order:
           typeof generated.selectedRunOrder === "number"
             ? generated.selectedRunOrder

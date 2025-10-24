@@ -6,6 +6,8 @@ import type {
 } from "../types/domain";
 import type { ProjectContextSnapshot } from "../hooks/useProjectContext";
 import { useWorkflowStore } from "../store/workflow.store";
+import { useUILocale } from "../hooks/useUILocale";
+import { translate } from "../lib/locale";
 
 export type WorkflowTaskType =
   | "collectMetadata"
@@ -94,6 +96,14 @@ export const useWorkflowGuideAgent = ({
   content,
   queueTask,
 }: WorkflowGuideAgentOptions) => {
+  const { locale } = useUILocale();
+  const localize = useCallback(
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
+      const resolved = translate(key, locale, params);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
   const translationState = useWorkflowStore((state) => state.translation);
   const proofreadingState = useWorkflowStore((state) => state.proofreading);
   const qualityState = useWorkflowStore((state) => state.quality);
@@ -186,18 +196,17 @@ export const useWorkflowGuideAgent = ({
     scheduleTask({
       type: "collectMetadata",
       message: prompts.join(" "),
-      badge: { label: "Metadata needed", tone: "default" },
+      badge: {
+        label: localize(
+          "workflow_badge_metadata_needed",
+          "Metadata needed",
+        ),
+        tone: "default",
+      },
       autoStart: false,
       stage: "origin",
     });
   }, [projectId, originAvailable, projectProfile, projectTitle, scheduleTask]);
-
-  const determineTargetLang = useCallback(() => {
-    return (
-      (snapshot?.targetLang ?? projectProfile?.targetLang ?? "")
-        .trim() || "English"
-    );
-  }, [snapshot?.targetLang, projectProfile?.targetLang]);
 
   const scheduleTranslationPrompt = useCallback(() => {
     if (!projectId || !originAvailable) return;
@@ -210,28 +219,11 @@ export const useWorkflowGuideAgent = ({
     if (guideStateRef.current.translationPrompted) return;
 
     guideStateRef.current.translationPrompted = true;
-    const lang = determineTargetLang();
-    scheduleTask({
-      type: "startTranslation",
-      message: `원문을 확인했습니다. 기본 설정에 따라 ${lang} 번역을 시작할까요? 필요하면 다른 언어를 말씀해 주세요!`,
-      badge: { label: "Origin captured", tone: "default" },
-      autoStart: false,
-      actions: [
-        {
-          type: "startTranslation" as const,
-          reason: "Begin translation",
-          autoStart: false,
-        },
-      ],
-      stage: "translation",
-    });
   }, [
     projectId,
     originAvailable,
     translationAvailable,
     translationState.status,
-    determineTargetLang,
-    scheduleTask,
   ]);
 
   const maybeGuideOrigin = useCallback(() => {
@@ -250,13 +242,6 @@ export const useWorkflowGuideAgent = ({
 
     if (!guideStateRef.current.originSummaryPendingNotified) {
       guideStateRef.current.originSummaryPendingNotified = true;
-      scheduleTask({
-        type: "shareOriginSummaryPending",
-        message: "원문을 분석 중입니다. 잠시만 기다려 주세요.",
-        badge: { label: "Origin summary prepping", tone: "default" },
-        autoStart: false,
-        stage: "origin",
-      });
     }
   }, [
     projectId,
@@ -278,7 +263,13 @@ export const useWorkflowGuideAgent = ({
     scheduleTask({
       type: "shareOriginSummary",
       message: summary,
-      badge: { label: "Origin summary", tone: "default" },
+      badge: {
+        label: localize(
+          "rightpanel_origin_summary_title",
+          "Summary of manuscript",
+        ),
+        tone: "default",
+      },
       autoStart: false,
       stage: "origin",
     });
@@ -305,23 +296,7 @@ export const useWorkflowGuideAgent = ({
     guideStateRef.current.proofreadingReadyHandled = false;
     guideStateRef.current.workflowCompleted = false;
 
-    scheduleTask({
-      type: "startProofread",
-      message: "번역이 완료되었습니다. 교정을 시작해 드릴까요?",
-      badge: { label: "Translation done", tone: "success" },
-      autoStart: false,
-      actions: [
-        { type: "startProofread" as const, reason: "Begin proofreading" },
-      ],
-      stage: "translation",
-    });
-  }, [
-    projectId,
-    translationAvailable,
-    translationStage,
-    translationState.projectId,
-    scheduleTask,
-  ]);
+  }, [projectId, translationAvailable, translationStage, translationState.projectId]);
 
   const maybeShareTranslationSummary = useCallback(() => {
     if (!projectId || !translationAvailable) return;
@@ -335,7 +310,13 @@ export const useWorkflowGuideAgent = ({
     scheduleTask({
       type: "shareTranslationSummary",
       message: summary,
-      badge: { label: "Translation summary", tone: "default" },
+      badge: {
+        label: localize(
+          "rightpanel_translation_summary_title",
+          "Summary of translation",
+        ),
+        tone: "default",
+      },
       autoStart: false,
       stage: "translation",
     });
@@ -362,23 +343,7 @@ export const useWorkflowGuideAgent = ({
     guideStateRef.current.proofreadingReadyHandled = true;
     guideStateRef.current.workflowCompleted = false;
 
-    scheduleTask({
-      type: "startQuality",
-      message: "교정이 완료되었습니다. 품질 평가를 실행할까요?",
-      badge: { label: "Proofreading done", tone: "success" },
-      autoStart: false,
-      actions: [
-        { type: "startQuality" as const, reason: "Run quality assessment" },
-      ],
-      stage: "proofreading",
-    });
-  }, [
-    projectId,
-    proofreadingState.projectId,
-    proofreadingState.status,
-    proofreadingStage,
-    scheduleTask,
-  ]);
+  }, [projectId, proofreadingState.projectId, proofreadingState.status, proofreadingStage]);
 
   const maybeHandleQualityReady = useCallback(() => {
     if (!projectId) return;
@@ -393,7 +358,13 @@ export const useWorkflowGuideAgent = ({
       type: "celebrateComplete",
       message:
         "품질 평가까지 완료했습니다. 필요하시면 전자책 내보내기나 추가 교정을 요청해 주세요!",
-      badge: { label: "Workflow complete", tone: "success" },
+      badge: {
+        label: localize(
+          "workflow_badge_complete",
+          "Workflow complete",
+        ),
+        tone: "success",
+      },
       autoStart: false,
       actions: [
         { type: "viewQualityReport" as const, reason: "Review quality report" },
@@ -443,57 +414,13 @@ export const useWorkflowGuideAgent = ({
         case "redoTranslation":
           guideStateRef.current.translationReadyHandled = false;
           guideStateRef.current.translationSummaryShared = false;
-      scheduleTask({
-        type: "startTranslation",
-        message:
-          "요청하신 대로 번역을 다시 시작합니다. 잠시만 기다려 주세요.",
-        badge: { label: "Translation redo", tone: "default" },
-        actions: [
-          {
-            type: "startTranslation" as const,
-            reason: "Restart translation",
-            autoStart: true,
-          },
-        ],
-        autoStart: true,
-        payload: { mode: intent.mode ?? "full" },
-      });
           break;
         case "redoProofread":
           guideStateRef.current.proofreadingReadyHandled = false;
           guideStateRef.current.workflowCompleted = false;
-          scheduleTask({
-            type: "startProofread",
-            message:
-              "교정을 다시 진행할게요. 필요한 범위를 말씀해 주셔도 좋아요.",
-            badge: { label: "Proofread redo", tone: "default" },
-        actions: [
-          {
-            type: "startProofread" as const,
-            reason: "Restart proofreading",
-            autoStart: true,
-          },
-        ],
-        autoStart: true,
-        payload: { mode: intent.mode ?? "quick" },
-      });
           break;
         case "redoQuality":
           guideStateRef.current.workflowCompleted = false;
-          scheduleTask({
-            type: "startQuality",
-            message: "품질 평가를 다시 수행할게요.",
-            badge: { label: "Quality redo", tone: "default" },
-        actions: [
-          {
-            type: "startQuality" as const,
-            reason: "Restart quality assessment",
-            autoStart: true,
-          },
-        ],
-        autoStart: true,
-        payload: { mode: intent.mode ?? "full" },
-      });
           break;
         case "updateMetadata":
           guideStateRef.current.metadataPrompted = false;
@@ -501,7 +428,13 @@ export const useWorkflowGuideAgent = ({
             type: "collectMetadata",
             message:
               "메타데이터를 업데이트했습니다. 다른 정보도 있으면 알려주세요.",
-            badge: { label: "Metadata updated", tone: "default" },
+            badge: {
+              label: localize(
+                "workflow_badge_metadata_updated",
+                "Metadata updated",
+              ),
+              tone: "default",
+            },
             autoStart: false,
             payload: intent.payload,
           });

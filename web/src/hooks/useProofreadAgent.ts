@@ -108,46 +108,48 @@ export const useProofreadAgent = ({
   }, [projectId, resetProofreading]);
 
   useEffect(() => {
-    if (!lifecycle) return;
-    const stage = lifecycle.stage?.toLowerCase() ?? null;
-    if (!stage) return;
-    if (!projectId) return;
-    if (
-      (stage.includes("running") || stage.includes("queue")) &&
-      proofreading.status === "idle"
-    ) {
-      setProofreadingForProject((current) => ({
+    if (!lifecycle || !projectId) return;
+    const stageRaw = lifecycle.stage;
+    if (!stageRaw) return;
+
+    const stage = stageRaw.toLowerCase();
+    const normalized = stage.replace(/\s+/g, "");
+
+    const detectStageStatus = (): ProofreadingAgentState["status"] | null => {
+      if (/fail|error|cancel/.test(normalized)) return "failed";
+      if (/run|progress|working/.test(normalized)) return "running";
+      if (/queue|pend|wait/.test(normalized)) return "queued";
+      if (/done|complete|finish|success/.test(normalized)) return "done";
+      return null;
+    };
+
+    const nextStatus = detectStageStatus();
+    if (!nextStatus) return;
+
+    setProofreadingForProject((current) => {
+      const nextProofreadingId = lifecycle.jobId ?? current.proofreadingId;
+      if (current.status === nextStatus && current.proofreadingId === nextProofreadingId) {
+        return current;
+      }
+
+      return {
         ...current,
-        status: "running",
-        proofreadingId: lifecycle.jobId ?? proofreading.proofreadingId,
-        lastMessage: "교정이 진행 중입니다.",
-        lastError: null,
-      }));
-    } else if (
-      (stage.includes("done") || stage.includes("complete")) &&
-      proofreading.status === "idle"
-    ) {
-      setProofreadingForProject((current) => ({
-        ...current,
-        status: "done",
-        proofreadingId: lifecycle.jobId ?? proofreading.proofreadingId,
-        updatedAt: lifecycle.lastUpdatedAt ?? proofreading.updatedAt,
-      }));
-    } else if (stage.includes("fail") && proofreading.status === "idle") {
-      setProofreadingForProject((current) => ({
-        ...current,
-        status: "failed",
-        lastError: "이전 교정 작업이 실패했습니다.",
-      }));
-    }
-  }, [
-    lifecycle,
-    proofreading.proofreadingId,
-    proofreading.status,
-    proofreading.updatedAt,
-    setProofreadingForProject,
-    projectId,
-  ]);
+        status: nextStatus,
+        proofreadingId: nextProofreadingId,
+        lastError: nextStatus === "failed" ? current.lastError : null,
+        lastMessage:
+          nextStatus === "running"
+            ? current.lastMessage ?? "교정이 진행 중입니다."
+            : nextStatus === "queued"
+              ? current.lastMessage ?? "교정 작업이 대기 중입니다."
+              : nextStatus === "done"
+                ? current.lastMessage ?? "교정이 완료되었습니다."
+                : nextStatus === "failed"
+                  ? current.lastMessage ?? "최근 교정이 실패했습니다."
+                  : current.lastMessage,
+      };
+    });
+  }, [lifecycle, projectId, setProofreadingForProject]);
 
   const startProofread = useCallback(
     async (
@@ -168,23 +170,9 @@ export const useProofreadAgent = ({
         return;
       }
       if (!token || !projectId) {
-        pushAssistant(
-          "인증 또는 프로젝트 정보가 없어 교정을 시작할 수 없습니다.",
-          {
-            label: "Proofread blocked",
-            tone: "error",
-          },
-        );
         return;
       }
       if (!translationJobId || !hasTranslation) {
-        pushAssistant(
-          "최근 번역 작업을 찾지 못했습니다. 번역을 완료한 후 다시 시도해 주세요.",
-          {
-            label: "No translation job",
-            tone: "error",
-          },
-        );
         return;
       }
 
@@ -209,6 +197,7 @@ export const useProofreadAgent = ({
 
       let completed = false;
       let encounteredError = false;
+      let skippedBecauseDuplicate = false;
       try {
         await api.requestProofreading(token, projectId, translationJobId, {
           label: options?.label ?? null,
@@ -231,12 +220,6 @@ export const useProofreadAgent = ({
                 isStalled: false,
               });
               appendActivity("progress", progressMessage);
-              pushAssistant(
-                `진행 중: ${progressMessage}`,
-                { label: "Proofread progress", tone: "default" },
-                undefined,
-                true,
-              );
               return;
             }
 
@@ -373,9 +356,12 @@ export const useProofreadAgent = ({
               });
 
               if (status === "completed") {
+                completed = true;
                 refreshContent?.();
                 onCompleted?.();
                 openProofreadTab?.();
+              } else if (status === "running") {
+                skippedBecauseDuplicate = true;
               }
 
               return;
@@ -534,14 +520,35 @@ export const useProofreadAgent = ({
 
             if (eventType === "error") {
               encounteredError = true;
+              const reason =
+                typeof event.reason === "string" ? event.reason : null;
+              const projectStatus =
+                typeof event.projectStatus === "string"
+                  ? event.projectStatus
+                  : null;
+              const conflictStatus =
+                typeof event.conflictStatus === "string"
+                  ? event.conflictStatus
+                  : null;
               const errorMessage =
                 typeof event.message === "string"
                   ? event.message
                   : "Unknown error";
+
+              const nextLastMessage = (() => {
+                if (reason === "already_running") {
+                  return "이미 진행 중인 교정 작업이 있어 새 작업을 시작하지 않았습니다.";
+                }
+                if (reason === "project_inactive" && projectStatus) {
+                  return `프로젝트 상태(${projectStatus}) 때문에 교정을 시작할 수 없습니다.`;
+                }
+                return "교정 중 오류가 발생했습니다.";
+              })();
+
               setProofreadingForProject((current) => ({
                 status: "failed",
                 lastError: errorMessage,
-                lastMessage: "교정 중 오류가 발생했습니다.",
+                lastMessage: nextLastMessage,
                 stageStatuses: (current.stageStatuses ?? []).map((entry) => ({
                   ...entry,
                   status: entry.status === "done" ? entry.status : "failed",
@@ -549,21 +556,48 @@ export const useProofreadAgent = ({
                 lastHeartbeatAt: new Date().toISOString(),
                 isStalled: false,
               }));
-              appendActivity("error", errorMessage, event);
-              pushAssistant(
-                `교정 중 오류가 발생했습니다: ${errorMessage}`,
-                {
+
+              appendActivity("error", errorMessage, {
+                ...event,
+                reason,
+                projectStatus,
+                conflictStatus,
+              });
+
+              const badge = (() => {
+                if (reason === "already_running") {
+                  return {
+                    label: "Proofread already running",
+                    tone: "default" as const,
+                    description: conflictStatus
+                      ? `기존 작업 상태: ${conflictStatus}`
+                      : undefined,
+                  };
+                }
+                if (reason === "project_inactive") {
+                  return {
+                    label: "Proofread blocked",
+                    tone: "error" as const,
+                    description: projectStatus
+                      ? `프로젝트 상태: ${projectStatus}`
+                      : undefined,
+                  };
+                }
+                return {
                   label: "Proofread error",
-                  tone: "error",
-                },
-                undefined,
-                true,
-              );
+                  tone: "error" as const,
+                  description: conflictStatus
+                    ? `추가 정보: ${conflictStatus}`
+                    : undefined,
+                };
+              })();
+
+              pushAssistant(nextLastMessage, badge, undefined, true);
             }
           },
         });
 
-        if (!completed && !encounteredError) {
+        if (!completed && !encounteredError && !skippedBecauseDuplicate) {
           setProofreadingForProject((current) => ({
             ...current,
             status: "failed",
@@ -595,26 +629,18 @@ export const useProofreadAgent = ({
           ...current,
           status: "failed",
           lastError: message,
-          lastMessage: "교정 작업을 시작하지 못했습니다.",
+          lastMessage: message
+            ? `교정 중 오류가 발생했습니다: ${message}`
+            : "교정 중 오류가 발생했습니다.",
           stageStatuses: (current.stageStatuses ?? []).map((entry) => ({
             ...entry,
             status: entry.status === "done" ? entry.status : "failed",
           })),
           isStalled: false,
         }));
-        appendActivity("error", "교정 작업을 시작하지 못했습니다.", {
+        appendActivity("error", "교정 중 오류가 발생했습니다.", {
           message,
         });
-        pushAssistant(
-          "교정 작업을 시작하지 못했습니다.",
-          {
-            label: "Proofread failed",
-            description: message,
-            tone: "error",
-          },
-          undefined,
-          true,
-        );
       }
     },
     [

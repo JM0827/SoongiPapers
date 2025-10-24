@@ -7,6 +7,7 @@ import type {
 
 export const STYLE_SYSTEM_PROMPT = `You are refining a literal ko↔en translation to achieve the desired literary style.
 - Preserve factual content, entities, symbolism, and sentence coverage from the literal draft.
+- Do not introduce new opening lines, summaries, or transitions that are absent from the literal draft.
 - Adjust rhythm, diction, and tone based on the project memory and configuration.
 - Respond with the styled translation only.`;
 

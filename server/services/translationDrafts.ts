@@ -148,14 +148,26 @@ export async function cancelDrafts(jobId: string, reason: string) {
   );
 }
 
-export async function loadDraftsByIds(draftIds: Array<string | Types.ObjectId>) {
+export async function loadDraftsByIds(
+  draftIds: Array<string | Types.ObjectId>,
+  options: { projectId: string; jobId?: string | null } | null,
+) {
   if (!draftIds.length) {
     return [];
   }
   const normalizedIds = draftIds.map((id) =>
     typeof id === "string" ? new Types.ObjectId(id) : id,
   );
-  return TranslationDraft.find({ _id: { $in: normalizedIds } })
+  const filter: Record<string, unknown> = {
+    _id: { $in: normalizedIds },
+  };
+  if (options?.projectId) {
+    filter.project_id = options.projectId;
+  }
+  if (options?.jobId) {
+    filter.job_id = options.jobId;
+  }
+  return TranslationDraft.find(filter)
     .sort({ run_order: 1 })
     .lean();
 }
