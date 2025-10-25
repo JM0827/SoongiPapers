@@ -23,6 +23,7 @@ import TranslationSegment from "./models/TranslationSegment";
 import TranslationBatch from "./models/TranslationBatch";
 import DocumentProfile, {
   type TranslationNotes,
+  normalizeTranslationNotes,
 } from "./models/DocumentProfile";
 import { ensureTranslationPrereqs } from "./services/originPrep";
 import Proofreading from "./models/Proofreading";
@@ -1923,7 +1924,9 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       })
         .sort({ version: -1 })
         .lean();
-      translationNotes = (originProfile as any)?.translation_notes ?? null;
+      translationNotes = normalizeTranslationNotes(
+        originProfile?.translation_notes ?? null,
+      );
     } catch (err) {
       app.log.warn(
         { err, projectId: project_id },
@@ -2922,6 +2925,7 @@ function startProfileWorker() {
         text: textToAnalyze,
         variant: payload.variant,
         language,
+        targetLanguage: projectRow?.target_lang ?? null,
         summaryLocale,
       });
 
@@ -3901,9 +3905,10 @@ function buildSequentialSummary(
 }
 
 function buildMemorySeed(
-  notes: TranslationNotes | null,
+  notesInput: TranslationNotes | null,
   segments: OriginSegment[],
 ): Partial<ProjectMemory> {
+  const notes = normalizeTranslationNotes(notesInput ?? null);
   const sceneSummaries: Record<string, string> = {};
   for (const segment of segments.slice(0, 5)) {
     sceneSummaries[segment.id] = segment.text;
@@ -3911,6 +3916,23 @@ function buildMemorySeed(
 
   const seed: Partial<ProjectMemory> = {
     scene_summaries: sceneSummaries,
+  };
+
+  const sourceToTarget: Record<string, string> = {};
+  const targetToSource: Record<string, string> = {};
+  const unitMap: Record<string, string> = {};
+
+  const registerTerm = (
+    source?: string | null,
+    target?: string | null,
+    { force }: { force?: boolean } = {},
+  ) => {
+    const cleanSource = source?.trim();
+    if (!cleanSource) return;
+    const resolvedTarget = target?.trim() || (force ? cleanSource : null);
+    if (!resolvedTarget) return;
+    sourceToTarget[cleanSource] = resolvedTarget;
+    targetToSource[resolvedTarget] = cleanSource;
   };
 
   if (notes?.timePeriod) {
@@ -3922,44 +3944,83 @@ function buildMemorySeed(
 
   if (notes?.characters?.length) {
     seed.character_sheet = notes.characters.map((character) => ({
-      name: { source: character.name, target: character.name },
+      name: {
+        source: character.name,
+        target: character.targetName ?? character.name,
+      },
       role: character.traits?.join(", ") ?? "character",
     }));
+    notes.characters.forEach((character) => {
+      if (character.targetName) {
+        registerTerm(character.name, character.targetName, { force: true });
+      }
+    });
   }
 
-  const namedEntities: Array<{ name: string; type: string }> = [];
+  const namedEntities: Array<{ name: string; targetName: string | null; type: string }> = [];
   notes?.namedEntities?.forEach((entity) => {
-    namedEntities.push({ name: entity.name, type: "person" });
+    namedEntities.push({
+      name: entity.name,
+      targetName: entity.targetName ?? null,
+      type: "person",
+    });
   });
   notes?.locations?.forEach((location) => {
-    namedEntities.push({ name: location.name, type: "place" });
+    namedEntities.push({
+      name: location.name,
+      targetName: location.targetName ?? null,
+      type: "place",
+    });
   });
   if (namedEntities.length) {
     seed.named_entities = namedEntities.map((entity) => ({
-      label: { source: entity.name, target: entity.name },
+      label: {
+        source: entity.name,
+        target: entity.targetName ?? entity.name,
+      },
       type: entity.type as "place" | "person" | "org" | "object",
     }));
+    namedEntities.forEach((entity) => {
+      if (entity.targetName) {
+        registerTerm(entity.name, entity.targetName, { force: true });
+      }
+    });
   }
 
-  if (notes?.measurementUnits?.length) {
-    seed.term_map = {
-      source_to_target: {},
-      target_to_source: {},
-      units: notes.measurementUnits.reduce<Record<string, string>>((acc, unit) => {
-        acc[unit] = unit;
-        return acc;
-      }, {}),
+  notes?.measurementUnits?.forEach((unit) => {
+    const source = unit?.source?.trim();
+    if (!source) return;
+    const target = unit?.target?.trim() || null;
+    unitMap[source] = target ?? source;
+    registerTerm(source, target ?? source, { force: true });
+  });
+
+  if (notes?.linguisticFeatures?.length) {
+    const sourceFeatures: Record<string, string> = {};
+    const targetFeatures: Record<string, string> = {};
+    notes.linguisticFeatures.forEach((feature, index) => {
+      const key = `feature_${index + 1}`;
+      sourceFeatures[key] = feature.source;
+      if (feature.target) {
+        targetFeatures[key] = feature.target;
+      }
+      registerTerm(feature.source, feature.target ?? undefined, { force: true });
+    });
+    seed.linguistic_features = {
+      source: sourceFeatures,
+      target: Object.keys(targetFeatures).length ? targetFeatures : undefined,
     };
   }
 
-  if (notes?.linguisticFeatures?.length) {
-    seed.linguistic_features = {
-      target: notes.linguisticFeatures.reduce<Record<string, string>>(
-        (acc, feature, index) => {
-          acc[`feature_${index + 1}`] = feature;
-          return acc;
-        },
-      {}),
+  if (
+    Object.keys(sourceToTarget).length ||
+    Object.keys(targetToSource).length ||
+    Object.keys(unitMap).length
+  ) {
+    seed.term_map = {
+      source_to_target: sourceToTarget,
+      target_to_source: targetToSource,
+      units: unitMap,
     };
   }
 

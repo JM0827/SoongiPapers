@@ -404,15 +404,16 @@ export interface DocumentProfileSummary {
   translationNotes: {
     characters: Array<{
       name: string;
+      targetName: string | null;
       age: string | null;
       gender: string | null;
       traits: string[];
     }>;
-    namedEntities: Array<{ name: string; frequency: number }>;
+    namedEntities: Array<{ name: string; targetName: string | null; frequency: number }>;
     timePeriod: string | null;
-    locations: Array<{ name: string; frequency: number }>;
-    measurementUnits: string[];
-    linguisticFeatures: string[];
+    locations: Array<{ name: string; targetName: string | null; frequency: number }>;
+    measurementUnits: Array<{ source: string; target: string | null }>;
+    linguisticFeatures: Array<{ source: string; target: string | null }>;
   } | null;
   source?: {
     hash: string | null;

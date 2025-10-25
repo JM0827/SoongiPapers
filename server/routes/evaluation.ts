@@ -9,7 +9,9 @@ import TranslationFile from "../models/TranslationFile";
 import OriginFile from "../models/OriginFile";
 import TranslationBatch from "../models/TranslationBatch";
 import Proofreading from "../models/Proofreading";
-import DocumentProfile from "../models/DocumentProfile";
+import DocumentProfile, {
+  normalizeTranslationNotes,
+} from "../models/DocumentProfile";
 import { query } from "../db";
 import { recordTokenUsage } from "../services/usage";
 import {
@@ -55,7 +57,7 @@ function serializeDocumentProfile(doc: any) {
         : null,
       proofreadingId: doc.proofreading_id ? String(doc.proofreading_id) : null,
     },
-    translationNotes: doc.translation_notes ?? null,
+    translationNotes: normalizeTranslationNotes(doc.translation_notes ?? null),
     source: {
       hash: doc.source_hash ?? null,
       preview: doc.source_preview ?? null,
