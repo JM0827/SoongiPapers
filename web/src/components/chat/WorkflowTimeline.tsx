@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { CheckCircle2 } from "lucide-react";
 
 type StageKey =
   | "origin"
@@ -44,11 +45,21 @@ const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProp
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-800">{stage.label}</span>
               {stage.status && (
-                <span
-                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${toneClass(stage.status.tone)}`}
-                >
-                  {stage.status.label}
-                </span>
+                stage.status.tone === "success" ? (
+                  <span
+                    className="inline-flex items-center text-emerald-600"
+                    title={stage.status.label}
+                  >
+                    <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                    <span className="sr-only">{stage.status.label}</span>
+                  </span>
+                ) : (
+                  <span
+                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${toneClass(stage.status.tone)}`}
+                  >
+                    {stage.status.label}
+                  </span>
+                )
               )}
             </div>
             {stage.detail ? (
