@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, Loader2, CheckCircle2, Circle } from "lucide-react";
+import { Pencil, X, Loader2, CheckCircle2, Circle, RefreshCcw } from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -1184,6 +1184,10 @@ const DocumentSummarySection = ({
   translationNotesEditable = false,
   translationNotesSaving = false,
   translationNotesError = null,
+  onReanalyze,
+  isReanalyzing = false,
+  canReanalyze = true,
+  reanalysisError = null,
   originStatus = "pending",
   translationStatus = "pending",
   translationFallback = null,
@@ -1199,6 +1203,10 @@ const DocumentSummarySection = ({
   translationNotesEditable?: boolean;
   translationNotesSaving?: boolean;
   translationNotesError?: string | null;
+  onReanalyze?: () => void;
+  isReanalyzing?: boolean;
+  canReanalyze?: boolean;
+  reanalysisError?: string | null;
   originStatus?: SummaryStatus;
   translationStatus?: SummaryStatus;
   translationFallback?: {
@@ -1257,6 +1265,10 @@ const DocumentSummarySection = ({
       onSave={onSaveTranslationNotes}
       isSaving={translationNotesSaving}
       error={translationNotesError}
+      onRefresh={onReanalyze}
+      isRefreshing={isReanalyzing}
+      canRefresh={canReanalyze}
+      refreshError={reanalysisError}
     />
     <DocumentSummaryCard
       title={localize(
@@ -1424,6 +1436,10 @@ const TranslationNotesSection = ({
   onSave,
   isSaving = false,
   error,
+  onRefresh,
+  isRefreshing = false,
+  canRefresh = true,
+  refreshError,
 }: {
   notes: DocumentProfileSummary["translationNotes"] | null;
   localize: LocalizeFn;
@@ -1433,6 +1449,10 @@ const TranslationNotesSection = ({
   ) => Promise<void>;
   isSaving?: boolean;
   error?: string | null;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+  canRefresh?: boolean;
+  refreshError?: string | null;
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draft, setDraft] = useState<TranslationNotesDraft>(() =>
@@ -1472,6 +1492,10 @@ const TranslationNotesSection = ({
   const savingLabel = localize(
     "rightpanel_translation_notes_saving",
     "Saving…",
+  );
+  const refreshTooltip = localize(
+    "rightpanel_translation_notes_refresh_tooltip",
+    "Refresh analysis",
   );
   const timePeriodLabel = localize(
     "rightpanel_translation_notes_time_period",
@@ -1684,16 +1708,42 @@ const TranslationNotesSection = ({
     setIsOpen((prev) => !prev);
   };
 
-  const actionNode =
-    editable && mode === "view"
+  const refreshButton =
+    onRefresh && mode === "view"
       ? (
           <button
             type="button"
-            className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
-            onClick={handleEdit}
+            className="flex h-7 w-7 items-center justify-center rounded border border-slate-200 text-slate-500 transition hover:bg-slate-100 disabled:opacity-60"
+            onClick={onRefresh}
+            disabled={!canRefresh || isRefreshing}
+            title={refreshTooltip}
+            aria-label={refreshTooltip}
+            data-collapsible-ignore
           >
-            {hasNotes ? editLabel : addLabel}
+            {isRefreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
           </button>
+        )
+      : null;
+
+  const actionNode =
+    refreshButton || (editable && mode === "view")
+      ? (
+          <div className="flex items-center gap-2" data-collapsible-ignore>
+            {refreshButton}
+            {editable && mode === "view" ? (
+              <button
+                type="button"
+                className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                onClick={handleEdit}
+              >
+                {hasNotes ? editLabel : addLabel}
+              </button>
+            ) : null}
+          </div>
         )
       : undefined;
 
@@ -2127,9 +2177,9 @@ const TranslationNotesSection = ({
       action={actionNode}
     >
       {mode === "edit" ? editContent : viewContent}
-      {(formError || error) && (
+      {(formError || error || refreshError) && (
         <p className="text-xs text-rose-500">
-          {formError || error || ""}
+          {formError || error || refreshError || ""}
         </p>
       )}
     </Collapsible>
@@ -2329,10 +2379,17 @@ export const RightPanel = ({
   const [translationNotesError, setTranslationNotesError] = useState<string | null>(
     null,
   );
+  const [isReanalyzingOrigin, setReanalyzingOrigin] = useState(false);
+  const [reanalyzeError, setReanalyzeError] = useState<string | null>(null);
 
   useEffect(() => {
     setTranslationNotesError(null);
     setSavingTranslationNotes(false);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    setReanalyzingOrigin(false);
+    setReanalyzeError(null);
   }, [activeProjectId]);
 
   const projectSummary = useMemo(
@@ -2343,6 +2400,17 @@ export const RightPanel = ({
   );
 
   const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
+  const originPrepSnapshot = content?.originPrep ?? null;
+  const canManuallyRefreshOrigin = Boolean(
+    token &&
+      content?.projectId &&
+      originPrepSnapshot &&
+      originPrepSnapshot.upload.status === 'uploaded',
+  );
+  const canTriggerReanalysis = Boolean(
+    canManuallyRefreshOrigin &&
+      originPrepSnapshot?.analysis.status !== 'running',
+  );
 
   const originFilename = useMemo(() => {
     const originMeta = content?.content?.origin;
@@ -2371,6 +2439,37 @@ export const RightPanel = ({
     }
     return content?.latestJob?.jobId ?? null;
   }, [content]);
+
+  const handleReanalyzeOrigin = useCallback(async () => {
+    if (!token || !content?.projectId) return;
+    setReanalyzingOrigin(true);
+    setReanalyzeError(null);
+    try {
+      await api.retryOriginAnalysis(token, content.projectId);
+      await queryClient.invalidateQueries({
+        queryKey: projectKeys.content(content.projectId),
+        exact: true,
+      });
+      await onRefreshContent?.();
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : localize(
+              'origin_prep_refresh_error',
+              'Failed to re-run analysis.',
+            );
+      setReanalyzeError(message);
+    } finally {
+      setReanalyzingOrigin(false);
+    }
+  }, [
+    token,
+    content?.projectId,
+    queryClient,
+    onRefreshContent,
+    localize,
+  ]);
 
   const translationAgentState = useWorkflowStore((state) => state.translation);
   const proofreadingAgentState = useWorkflowStore((state) => state.proofreading);
@@ -3086,6 +3185,12 @@ export const RightPanel = ({
                   )}
                   translationNotesSaving={isSavingTranslationNotes}
                   translationNotesError={translationNotesError}
+                  onReanalyze={
+                    canManuallyRefreshOrigin ? handleReanalyzeOrigin : undefined
+                  }
+                  isReanalyzing={isReanalyzingOrigin}
+                  canReanalyze={canTriggerReanalysis}
+                  reanalysisError={reanalyzeError}
                 />
                 <div className="grid gap-4 md:grid-cols-2">
                   <SummaryCard

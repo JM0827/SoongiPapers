@@ -18,6 +18,7 @@ import {
   failAction as failWorkflowRun,
   WorkflowRunRecord,
 } from "../services/workflowManager";
+import { loadOriginPrepSnapshot } from "../services/originPrep";
 
 // ---------- helpers ----------
 function getUserId(request: FastifyRequest): string | null {
@@ -755,9 +756,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         // load origin_files (Mongo) as primary origin source
         let originDoc: any = null;
         try {
-          const OriginModel =
-            mongoose.models.OriginFile || mongoose.model("OriginFile");
-          originDoc = await OriginModel.findOne({ project_id: projectId })
+          originDoc = await OriginFile.findOne({ project_id: projectId })
             .sort({ updated_at: -1 })
             .lean()
             .exec();
@@ -929,23 +928,31 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           origin: null as any,
           translation: null as any,
         };
+        let originProfileDoc: any = null;
+        let translationProfileDoc: any = null;
         try {
-          const [originProfileDoc, translationProfileDoc] = await Promise.all([
-            DocumentProfile.findOne({ project_id: projectId, type: "origin" })
-              .sort({ version: -1 })
-              .lean()
-              .exec(),
-            DocumentProfile.findOne({
-              project_id: projectId,
-              type: "translation",
-            })
-              .sort({ version: -1 })
-              .lean()
-              .exec(),
-          ]);
+          const [originProfileDocResult, translationProfileDocResult] =
+            await Promise.all([
+              DocumentProfile.findOne({
+                project_id: projectId,
+                type: "origin",
+              })
+                .sort({ version: -1 })
+                .lean()
+                .exec(),
+              DocumentProfile.findOne({
+                project_id: projectId,
+                type: "translation",
+              })
+                .sort({ version: -1 })
+                .lean()
+                .exec(),
+            ]);
+          originProfileDoc = originProfileDocResult;
+          translationProfileDoc = translationProfileDocResult;
           documentProfiles = {
-            origin: serializeDocumentProfile(originProfileDoc),
-            translation: serializeDocumentProfile(translationProfileDoc),
+            origin: serializeDocumentProfile(originProfileDocResult),
+            translation: serializeDocumentProfile(translationProfileDocResult),
           };
 
           const latestTranslationFileId =
@@ -1009,6 +1016,20 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           );
         }
 
+        let originPrep = null;
+        try {
+          originPrep = await loadOriginPrepSnapshot({
+            projectId,
+            originDoc,
+            originProfile: originProfileDoc,
+          });
+        } catch (err) {
+          request.log.warn(
+            { err, projectId },
+            "[ORIGIN_PREP] Failed to load prep snapshot",
+          );
+        }
+
         return ok(reply, {
           projectId,
           projectProfile,
@@ -1033,6 +1054,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           qualityAssessmentStage,
           proofreadingStage,
           available,
+          originPrep,
         });
       } catch (err) {
         return handleError(

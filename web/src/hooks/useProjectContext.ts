@@ -8,6 +8,7 @@ import {
   useProjectJobs,
 } from "./useProjectData";
 import type { ProjectContextSnapshotPayload } from "../types/domain";
+import { isOriginPrepReady } from "../lib/originPrep";
 
 export type ProjectContextSnapshot = ProjectContextSnapshotPayload;
 
@@ -54,6 +55,7 @@ const buildSnapshot = (params: {
     params;
   const originMeta = content?.content?.origin ?? null;
   const translationMeta = content?.content?.translation ?? null;
+  const originPrep = content?.originPrep ?? null;
   const latestJobRaw = content?.latestJob ?? null;
   const proofreadingMeta = content?.proofreading ?? null;
   const qualityMeta = content?.qualityAssessment ?? null;
@@ -160,14 +162,73 @@ const buildSnapshot = (params: {
   })();
 
   const timeline: ProjectContextSnapshot["timeline"] = [];
-  if (originMeta?.content?.trim()) {
-    timeline.push({
-      phase: "origin",
-      status: "origin-saved",
-      updatedAt: originUpdatedAt,
-      note: originMeta?.filename ?? undefined,
-    });
-  }
+  const originTimelineState = (() => {
+    const filenameNote = originMeta?.filename ?? undefined;
+    const analysisUpdatedAt =
+      originPrep?.analysis.updatedAt ?? originPrep?.analysis.job?.updatedAt ?? null;
+    const notesUpdatedAt = originPrep?.notes.updatedAt ?? null;
+
+    if (!originPrep) {
+      return {
+        status: originMeta?.content?.trim()
+          ? "origin-uploaded"
+          : "origin-upload-pending",
+        updatedAt: originMeta?.content?.trim() ? originUpdatedAt : null,
+        note: filenameNote,
+      };
+    }
+
+    if (originPrep.analysis.status === "running") {
+      return {
+        status: "origin-analysis-running",
+        updatedAt: analysisUpdatedAt,
+        note: originPrep.analysis.job?.jobId ?? filenameNote,
+      };
+    }
+
+    if (
+      originPrep.analysis.status === "stale" ||
+      originPrep.notes.status === "stale"
+    ) {
+      return {
+        status: "origin-analysis-stale",
+        updatedAt: analysisUpdatedAt,
+        note: filenameNote,
+      };
+    }
+
+    if (
+      originPrep.analysis.status === "missing" &&
+      originPrep.upload.status === "uploaded"
+    ) {
+      return {
+        status: "origin-analysis-pending",
+        updatedAt: originPrep.upload.updatedAt ?? originUpdatedAt,
+        note: filenameNote,
+      };
+    }
+
+    if (isOriginPrepReady(originPrep)) {
+      return {
+        status: "origin-ready",
+        updatedAt: notesUpdatedAt ?? analysisUpdatedAt ?? originUpdatedAt,
+        note: filenameNote,
+      };
+    }
+
+    return {
+      status: "origin-uploaded",
+      updatedAt: originPrep.upload.updatedAt ?? originUpdatedAt,
+      note: filenameNote,
+    };
+  })();
+
+  timeline.push({
+    phase: "origin",
+    status: originTimelineState.status,
+    updatedAt: originTimelineState.updatedAt,
+    note: originTimelineState.note,
+  });
   if (translationStage !== "none" && translationStage !== "origin-only") {
     timeline.push({
       phase: "translation",
@@ -272,6 +333,7 @@ const buildSnapshot = (params: {
       hasContent: Boolean(translationMeta?.content?.trim?.()),
       lastUpdatedAt: translationUpdatedAt,
     },
+    originPrep,
     excerpts: {
       originPreview: truncateText(originMeta?.content),
       translationPreview: truncateText(translationMeta?.content),

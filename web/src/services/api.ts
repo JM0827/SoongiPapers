@@ -997,6 +997,17 @@ export const api = {
     return handleWrapped<ProjectContent>(res);
   },
 
+  async retryOriginAnalysis(token: string, projectId: string) {
+    const res = await fetch(
+      `${API_BASE}/api/projects/${projectId}/origin/reanalyze`,
+      {
+        method: "POST",
+        headers: defaultHeaders(token),
+      },
+    );
+    return handle<{ jobId: string }>(res);
+  },
+
   async workflowSummary(
     token: string,
     projectId: string,

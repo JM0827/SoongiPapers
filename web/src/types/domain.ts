@@ -422,6 +422,52 @@ export interface DocumentProfileSummary {
   updatedAt: string | null;
 }
 
+export type OriginPrepUploadStatus = 'missing' | 'uploaded';
+export type OriginPrepAnalysisStatus =
+  | 'missing'
+  | 'running'
+  | 'stale'
+  | 'complete';
+export type OriginPrepNotesStatus = 'missing' | 'stale' | 'complete';
+
+export interface OriginPrepSnapshot {
+  projectId: string;
+  upload: {
+    status: OriginPrepUploadStatus;
+    updatedAt: string | null;
+    originFileId: string | null;
+  };
+  analysis: {
+    status: OriginPrepAnalysisStatus;
+    updatedAt: string | null;
+    profileId: string | null;
+    originFileId: string | null;
+    sourceHash: string | null;
+    job: {
+      jobId: string;
+      status: string | null;
+      createdAt: string | null;
+      updatedAt: string | null;
+      finishedAt: string | null;
+    } | null;
+  };
+  notes: {
+    status: OriginPrepNotesStatus;
+    updatedAt: string | null;
+    profileId: string | null;
+    hasContent: boolean;
+  };
+  blockingReasons: Array<{
+    step: 'upload' | 'analysis' | 'notes';
+    status:
+      | OriginPrepUploadStatus
+      | OriginPrepAnalysisStatus
+      | OriginPrepNotesStatus;
+    updatedAt: string | null;
+    jobId?: string | null;
+  }>;
+}
+
 export interface ProjectContent {
   projectId: string;
   projectProfile?: {
@@ -544,6 +590,7 @@ export interface ProjectContent {
     storageRef?: string;
     updatedAt?: string | null;
   } | null;
+  originPrep?: OriginPrepSnapshot | null;
 }
 
 export interface TranslationRecommendation {
@@ -727,6 +774,7 @@ export interface ProjectContextSnapshotPayload {
     hasContent: boolean;
     lastUpdatedAt: string | null;
   };
+  originPrep?: OriginPrepSnapshot | null;
   excerpts: {
     originPreview: string | null;
     translationPreview: string | null;

@@ -45,6 +45,10 @@ import type { EditingSelectionPayload } from "../../types/domain";
 import { translate } from "../../lib/locale";
 import { useUILocale } from "../../hooks/useUILocale";
 import { Upload } from "lucide-react";
+import {
+  getOriginPrepGuardMessage,
+  isOriginPrepReady,
+} from "../../lib/originPrep";
 
 type MessageTone = "default" | "success" | "error";
 
@@ -311,6 +315,9 @@ export const ChatOrchestrator = ({
 
   const originText = content?.content?.origin?.content ?? "";
   const hasOrigin = Boolean(originText.trim());
+  const originPrep = snapshot.originPrep ?? content?.originPrep ?? null;
+  const translationPrepReady = hasOrigin && isOriginPrepReady(originPrep);
+  const prepGuardMessage = getOriginPrepGuardMessage(originPrep, localize);
   const translationText = content?.content?.translation?.content ?? "";
   const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
 
@@ -509,6 +516,8 @@ export const ChatOrchestrator = ({
     refreshContent: refreshContentOnly,
     isTranslationReady: () => translationContentLoaded,
     lifecycle: snapshot.lifecycle.translation,
+    originPrep,
+    localize,
   });
 
   const { state: proofreadingState, startProofread } = useProofreadAgent({
@@ -569,6 +578,20 @@ export const ChatOrchestrator = ({
             return;
           }
 
+          if (!translationPrepReady) {
+            adapted.push({
+              type: "acknowledge",
+              label: localize("origin_prep_guard_label", "Prep needed"),
+              reason:
+                getOriginPrepGuardMessage(originPrep, localize) ??
+                localize(
+                  "origin_prep_guard_generic",
+                  "Finish the manuscript prep steps before translating.",
+                ),
+            });
+            return;
+          }
+
           if (
             translationState.status === "running" ||
             translationState.status === "queued" ||
@@ -583,7 +606,13 @@ export const ChatOrchestrator = ({
 
       return adapted.length ? adapted : undefined;
     },
-    [hasOrigin, translationState.status],
+    [
+      hasOrigin,
+      translationState.status,
+      translationPrepReady,
+      originPrep,
+      localize,
+    ],
   );
 
   const toSelectionPayload = useCallback(
@@ -1700,6 +1729,83 @@ export const ChatOrchestrator = ({
     translationVisual.sequential,
   ]);
 
+  const originStageInfo = useMemo(() => {
+    const baseLabel = stageLabels.origin;
+    const formatTimestamp = (value?: string | null) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      return date.toLocaleString();
+    };
+
+    if (!hasOrigin) {
+      return {
+        label: baseLabel,
+        statusKey: undefined as StageStatusKey | undefined,
+        detail: undefined,
+      };
+    }
+
+    const prep = snapshot.originPrep;
+
+    if (!prep) {
+      return {
+        label: baseLabel,
+        statusKey: 'ready' as StageStatusKey,
+        detail: undefined,
+      };
+    }
+
+    if (prep.analysis.status === 'running') {
+      return {
+        label: baseLabel,
+        statusKey: 'inProgress' as StageStatusKey,
+        detail: undefined,
+      };
+    }
+
+    if (
+      prep.analysis.status === 'stale' ||
+      prep.notes.status === 'stale'
+    ) {
+      return {
+        label: baseLabel,
+        statusKey: 'queued' as StageStatusKey,
+        detail: localize(
+          'timeline_origin_detail_refresh',
+          'The manuscript changed. Re-run the analysis to refresh notes.',
+        ),
+      };
+    }
+
+    if (prep.analysis.status === 'missing') {
+      return {
+        label: baseLabel,
+        statusKey: 'queued' as StageStatusKey,
+        detail: undefined,
+      };
+    }
+
+    if (prep.analysis.status === 'complete' && prep.notes.status === 'complete') {
+      return {
+        label: baseLabel,
+        statusKey: 'completed' as StageStatusKey,
+        detail: undefined,
+      };
+    }
+
+    return {
+      label: baseLabel,
+      statusKey: 'ready' as StageStatusKey,
+      detail: undefined,
+    };
+  }, [
+    hasOrigin,
+    localize,
+    snapshot.originPrep,
+    stageLabels.origin,
+  ]);
+
   const timelineStages = useMemo(
     () => {
       const items: Array<{
@@ -1713,16 +1819,23 @@ export const ChatOrchestrator = ({
         key: "origin" | "translation" | "proofreading" | "quality" | "publishing",
         statusKey?: StageStatusKey,
         detail?: string,
+        labelOverride?: string,
       ) => {
         items.push({
           key,
-          label: stageLabels[key],
+          label: labelOverride ?? stageLabels[key],
           status: statusKey ? statusMeta[statusKey] : undefined,
           detail,
         });
       };
 
-      pushStage("origin", hasOrigin ? "completed" : undefined);
+      const originLabel = originStageInfo?.label ?? stageLabels.origin;
+      pushStage(
+        "origin",
+        originStageInfo?.statusKey,
+        originStageInfo?.detail,
+        originLabel,
+      );
       pushStage("translation", translationStatusKey, translationDetail);
       pushStage("proofreading", proofreadingStatusKey);
       pushStage("quality", qualityStatusKey);
@@ -1731,7 +1844,7 @@ export const ChatOrchestrator = ({
       return items;
     },
     [
-      hasOrigin,
+      originStageInfo,
       publishingStatusKey,
       proofreadingStatusKey,
       stageLabels,
@@ -1779,6 +1892,7 @@ export const ChatOrchestrator = ({
     }
 
     if (
+      translationPrepReady &&
       !translationRunning &&
       !translationCompleted &&
       translationState.status !== "failed"
@@ -1926,8 +2040,25 @@ export const ChatOrchestrator = ({
 
     const stageLabel = (stage: string) => stage.replace(/-/g, " ");
 
+    const prepGuardForSummary = getOriginPrepGuardMessage(
+      snapshot.originPrep,
+      (key, _fallback, params) => translate(key, "en", params),
+    );
     const originDetails = snapshot.origin.hasContent
-      ? `Origin text is saved${snapshot.origin.filename ? ` as ${snapshot.origin.filename}` : ""} and last updated ${snapshot.origin.lastUpdatedAt ?? "at an unknown time"}; it is ${snapshot.ui.originExpanded ? "already open" : "available"} in the preview panel.`
+      ? (() => {
+          const filename = snapshot.origin.filename
+            ? ` as ${snapshot.origin.filename}`
+            : "";
+          const updatedAt =
+            snapshot.origin.lastUpdatedAt ?? "at an unknown time";
+          if (prepGuardForSummary) {
+            return `Origin text is saved${filename} and last updated ${updatedAt}, but ${prepGuardForSummary}`;
+          }
+          if (snapshot.originPrep) {
+            return `Origin text is saved${filename} and last updated ${updatedAt}; prep checklist is complete.`;
+          }
+          return `Origin text is saved${filename} and last updated ${updatedAt}; it is ${snapshot.ui.originExpanded ? "already open" : "available"} in the preview panel.`;
+        })()
       : "Origin text has not been provided yet; invite the user to upload or paste it.";
 
     const translationLifecycle = snapshot.lifecycle.translation;
@@ -2329,9 +2460,25 @@ export const ChatOrchestrator = ({
             openFileDialog();
             return;
           }
+          if (!translationPrepReady) {
+            const guardMessage =
+              prepGuardMessage ??
+              localize(
+                "origin_prep_guard_generic",
+                "Finish the manuscript prep steps before translating.",
+              );
+            pushAssistant(guardMessage, {
+              label: localize("origin_prep_guard_label", "Prep needed"),
+              tone: "default",
+            });
+            setTab("preview");
+            setPreviewExpanded("origin", true);
+            return;
+          }
           await startTranslation({
             label: action.label ?? nextTranslationLabel ?? null,
             allowParallel: action.allowParallel ?? false,
+            originPrep,
           });
           refreshWorkflowView();
           return;
@@ -2700,9 +2847,25 @@ export const ChatOrchestrator = ({
           }
           switch (action.type) {
             case "startTranslation":
+              if (!translationPrepReady) {
+                const guardMessage =
+                  prepGuardMessage ??
+                  localize(
+                    "origin_prep_guard_generic",
+                    "Finish the manuscript prep steps before translating.",
+                  );
+                pushAssistant(guardMessage, {
+                  label: localize("origin_prep_guard_label", "Prep needed"),
+                  tone: "default",
+                });
+                setTab("preview");
+                setPreviewExpanded("origin", true);
+                break;
+              }
               await startTranslation({
                 label: action.label ?? nextTranslationLabel ?? null,
                 allowParallel: action.allowParallel ?? false,
+                originPrep,
               });
               refreshWorkflowView();
               break;
@@ -3031,6 +3194,27 @@ export const ChatOrchestrator = ({
     setIsAtBottom(true);
     scrollMessagesToBottom("smooth");
   }, [scrollMessagesToBottom]);
+
+  const originAnalysisStatus = snapshot.originPrep?.analysis.status ?? null;
+  const prevOriginAnalysisStatusRef = useRef<string | null>(originAnalysisStatus);
+
+  useEffect(() => {
+    if (prevOriginAnalysisStatusRef.current === 'running' && originAnalysisStatus && originAnalysisStatus !== 'running') {
+      refreshProjectContext('content');
+    }
+    prevOriginAnalysisStatusRef.current = originAnalysisStatus;
+  }, [originAnalysisStatus, refreshProjectContext]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    if (originAnalysisStatus !== 'running') return;
+
+    const intervalId = window.setInterval(() => {
+      refreshProjectContext('content');
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [originAnalysisStatus, projectId, refreshProjectContext]);
 
   return (
     <div

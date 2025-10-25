@@ -2,6 +2,11 @@ import { createHash } from "crypto";
 import { OpenAI } from "openai";
 
 import type { TranslationNotes } from "../../models/DocumentProfile";
+import {
+  DEFAULT_LOCALE,
+  resolveLocale as resolveOutputLocale,
+  type UILocale,
+} from "../../services/localeService";
 
 const DEFAULT_MODEL =
   process.env.PROFILE_AGENT_MODEL || process.env.CHAT_MODEL || "gpt-4o-mini";
@@ -20,6 +25,7 @@ export interface ProfileAgentInput {
   variant: ProfileVariant;
   language?: string | null;
   snippetLabel?: string;
+  summaryLocale?: string | null;
 }
 
 export interface ProfileAgentOutput {
@@ -222,7 +228,13 @@ export async function analyzeDocumentProfile(
     ? `Expected language: ${input.language}.`
     : "";
 
-  const systemPrompt = `You are a seasoned Korean literature critic and translation analyst.
+  const outputLocale: UILocale = resolveOutputLocale(input.summaryLocale ?? null);
+  const localeInstruction =
+    outputLocale === "ko"
+      ? "Write the summary, intention, and readerPoints in Korean using natural Korean sentences."
+      : "Write the summary, intention, and readerPoints in English.";
+
+const systemPrompt = `You are a seasoned Korean literature critic and translation analyst.
 You study manuscripts and produce structured insights that downstream translation agents consume.
 Keep the voice professional, fact-driven, and under 250 words overall.`;
 
@@ -241,6 +253,7 @@ Tasks:
    - measurementUnits: up to 20 strings
    - linguisticFeatures: up to 20 strings (slang, idioms, dialect markers)
 
+${localeInstruction}
 Respond strictly as JSON with keys: summary (string), intention (string), readerPoints (string[]), translationNotes (object).
 
 Text to analyze:

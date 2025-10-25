@@ -24,6 +24,7 @@ import TranslationBatch from "./models/TranslationBatch";
 import DocumentProfile, {
   type TranslationNotes,
 } from "./models/DocumentProfile";
+import { ensureTranslationPrereqs } from "./services/originPrep";
 import Proofreading from "./models/Proofreading";
 import EbookFile from "./models/EbookFile";
 import { recordTokenUsage } from "./services/usage";
@@ -56,6 +57,7 @@ import ebooksRoutes from "./routes/ebooks";
 import modelsRoutes from "./routes/models";
 import workflowRoutes from "./routes/workflow";
 import memoryRoutes from "./routes/memory";
+import { resolveLocale } from "./services/localeService";
 import {
   cancelAction as cancelWorkflowRun,
   completeAction as completeWorkflowRun,
@@ -1850,6 +1852,32 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       .send({ error: "documentId and originalText are required" });
   }
 
+  if (project_id) {
+    let originPrepSnapshot;
+    let unmet: Array<'analysis' | 'notes'> = [];
+    try {
+      const result = await ensureTranslationPrereqs(project_id);
+      originPrepSnapshot = result.originPrep;
+      unmet = result.unmet;
+    } catch (error) {
+      app.log.error(
+        { err: error, projectId: project_id },
+        "[TRANSLATE] Failed to load origin prep snapshot",
+      );
+      return reply
+        .status(500)
+        .send({ error: "원문 준비 상태를 확인하지 못했습니다." });
+    }
+
+    if (unmet.length) {
+      return reply.status(409).send({
+        error: 'translation_prereq_incomplete',
+        unmet,
+        originPrep: originPrepSnapshot,
+      });
+    }
+  }
+
   const segmentationMode = getTranslationSegmentationMode();
   const projectKey = project_id || documentId;
 
@@ -2089,6 +2117,108 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     batches: batchCount,
   });
 });
+
+app.post(
+  "/api/projects/:projectId/origin/reanalyze",
+  async (req, reply) => {
+    await requireAuthAndPlanCheck(req, reply);
+    if ((reply as any).sent) return;
+
+    const { projectId } = req.params as { projectId: string };
+    const userId = (req as any).user_id as string | undefined;
+    if (!projectId || !userId) {
+      return reply.status(400).send({ error: "Invalid request" });
+    }
+
+    try {
+      const { rows } = await query(
+        `SELECT 1 FROM translationprojects WHERE project_id = $1 AND user_id = $2 LIMIT 1`,
+        [projectId, userId],
+      );
+      if (!rows.length) {
+        return reply.status(404).send({ error: "Project not found" });
+      }
+    } catch (error) {
+      req.log.error(
+        { err: error, projectId },
+        "[PROFILE] Failed to validate project access",
+      );
+      return reply.status(500).send({ error: "Failed to validate project" });
+    }
+
+    let hasQueuedOriginJob = false;
+    try {
+      const { rows } = await query(
+        `SELECT document_id FROM jobs WHERE project_id = $1 AND type = 'profile' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 10`,
+        [projectId],
+      );
+      hasQueuedOriginJob = rows.some((row) => {
+        const payloadRaw = row?.document_id;
+        if (typeof payloadRaw !== "string") return false;
+        const payload = parseProfileJobPayload(payloadRaw);
+        return payload?.variant === "origin";
+      });
+    } catch (error) {
+      req.log.warn(
+        { err: error, projectId },
+        "[PROFILE] Failed to inspect queued origin jobs",
+      );
+    }
+
+    if (hasQueuedOriginJob) {
+      return reply
+        .status(409)
+        .send({ error: "origin_analysis_in_progress" });
+    }
+
+    let originDocId: string | null = null;
+    try {
+      const originDoc = (await OriginFile.findOne({ project_id: projectId })
+        .sort({ updated_at: -1 })
+        .lean()
+        .exec()) as { _id?: unknown } | null;
+      if (!originDoc) {
+        return reply
+          .status(404)
+          .send({ error: "Origin manuscript not found" });
+      }
+      originDocId =
+        originDoc && typeof originDoc._id !== "undefined"
+          ? String(originDoc._id)
+          : null;
+    } catch (error) {
+      req.log.error(
+        { err: error, projectId },
+        "[PROFILE] Failed to load origin document",
+      );
+      return reply
+        .status(500)
+        .send({ error: "Failed to load origin document" });
+    }
+
+    try {
+      const jobId = await enqueueProfileAnalysisJob({
+        projectId,
+        userId,
+        payload: {
+          variant: "origin",
+          originFileId: originDocId ?? undefined,
+          triggeredBy: "manual-refresh",
+        },
+      });
+
+      return reply.send({ jobId });
+    } catch (error) {
+      req.log.error(
+        { err: error, projectId },
+        "[PROFILE] Failed to enqueue origin profile job",
+      );
+      return reply
+        .status(500)
+        .send({ error: "Failed to enqueue origin analysis" });
+    }
+  },
+);
 
 app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
@@ -2759,11 +2889,17 @@ function startProfileWorker() {
         payload.variant === "origin"
           ? (projectRow?.origin_lang ?? null)
           : (projectRow?.target_lang ?? null);
+      const summaryLocale = resolveLocale(
+        projectMeta?.uiLocale ?? null,
+        projectMeta?.preferredLocale ?? null,
+        projectMeta?.locale ?? null,
+      );
       const analysis = await analyzeDocumentProfile({
         projectId: job.project_id,
         text: textToAnalyze,
         variant: payload.variant,
         language,
+        summaryLocale,
       });
 
       const latestProfile = await DocumentProfile.findOne({

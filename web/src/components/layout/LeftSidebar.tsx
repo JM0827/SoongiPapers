@@ -31,6 +31,10 @@ import { SidebarQuickActions } from "./sidebar/SidebarQuickActions";
 import type { QuickAction } from "./sidebar/SidebarQuickActions";
 import { SidebarActivitySection } from "./sidebar/SidebarActivitySection";
 import { useProjectContext } from "../../hooks/useProjectContext";
+import {
+  getOriginPrepGuardMessage,
+  isOriginPrepReady,
+} from "../../lib/originPrep";
 
 const languageOptions = [
   { value: "Korean", labelKey: "language_korean", fallback: "Korean" },
@@ -558,6 +562,8 @@ export const LeftSidebar = () => {
   }, [localize, snapshot]);
 
   const originReady = snapshot.origin.hasContent;
+  const originPrepSnapshot = snapshot.originPrep ?? null;
+  const translationPrepReady = originReady && isOriginPrepReady(originPrepSnapshot);
   const translationRunning =
     translationAgentState.status === "running" ||
     translationAgentState.status === "queued";
@@ -565,6 +571,24 @@ export const LeftSidebar = () => {
     translationAgentState.status === "done" || snapshot.translation.hasContent;
   const translationFailed = translationAgentState.status === "failed";
   const hasTranslation = snapshot.translation.hasContent;
+  const translationGuardReason = (() => {
+    if (!originReady) {
+      return localize(
+        'sidebar_quick_translation_tooltip_no_origin',
+        'Upload the manuscript to start translation.',
+      );
+    }
+    if (!translationPrepReady) {
+      return (
+        getOriginPrepGuardMessage(originPrepSnapshot, localize) ??
+        localize(
+          'origin_prep_guard_generic',
+          'Finish the manuscript prep steps before translating.',
+        )
+      );
+    }
+    return null;
+  })();
 
   const proofreadingRunning =
     proofreadingAgentState.status === "running" ||
@@ -629,11 +653,8 @@ export const LeftSidebar = () => {
       icon: <RefreshCcw size={18} />,
       tooltip: !chatExecutorReady
         ? assistantPendingTooltip
-        : !originReady
-          ? localize(
-              'sidebar_quick_translation_tooltip_no_origin',
-              'Upload the manuscript to start translation.',
-            )
+        : translationGuardReason
+          ? translationGuardReason
           : translationRunning
             ? localize(
                 'sidebar_quick_translation_tooltip_running',
@@ -654,14 +675,20 @@ export const LeftSidebar = () => {
                     'Translate the entire manuscript.',
                   ),
       disabled:
-        !chatExecutorReady || translationRunning || !originReady,
+        !chatExecutorReady || translationRunning || Boolean(translationGuardReason),
       status: translationRunning
         ? "running"
         : translationDone
           ? "done"
           : "default",
       onClick: async () => {
-        if (!chatExecutorReady || translationRunning || !originReady) return;
+        if (
+          !chatExecutorReady ||
+          translationRunning ||
+          translationGuardReason
+        ) {
+          return;
+        }
         if (translationDone || translationFailed) {
           resetTranslation(activeProjectId ?? null);
         }

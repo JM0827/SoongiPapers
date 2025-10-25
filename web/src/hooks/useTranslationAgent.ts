@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { api, ApiError } from "../services/api";
-import type { ChatAction, JobSummary } from "../types/domain";
+import type {
+  ChatAction,
+  JobSummary,
+  OriginPrepSnapshot,
+} from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
 import type { TranslationAgentState } from "../store/workflow.store";
+import {
+  getOriginPrepGuardMessage,
+  isOriginPrepReady,
+} from "../lib/originPrep";
 
 const SEQUENTIAL_STAGE_ORDER = [
   "literal",
@@ -100,6 +108,12 @@ interface UseTranslationAgentParams {
     batchesTotal?: number | null;
     lastUpdatedAt?: string | null;
   };
+  originPrep?: OriginPrepSnapshot | null;
+  localize: (
+    key: string,
+    fallback: string,
+    params?: Record<string, string | number>,
+  ) => string;
 }
 
 export const useTranslationAgent = ({
@@ -112,6 +126,8 @@ export const useTranslationAgent = ({
   refreshContent,
   isTranslationReady,
   lifecycle,
+  originPrep,
+  localize,
 }: UseTranslationAgentParams) => {
   const translation = useWorkflowStore((state) => state.translation);
   const setTranslation = useWorkflowStore((state) => state.setTranslation);
@@ -123,6 +139,11 @@ export const useTranslationAgent = ({
   const finalizingRef = useRef(false);
   const finalizationTimeoutRef = useRef<number | null>(null);
   const pollingErrorShownRef = useRef(false);
+  const originPrepRef = useRef<OriginPrepSnapshot | null>(originPrep ?? null);
+
+  useEffect(() => {
+    originPrepRef.current = originPrep ?? null;
+  }, [originPrep]);
 
   useEffect(() => {
     // Reset translation state when project changes
@@ -327,7 +348,13 @@ export const useTranslationAgent = ({
   );
 
   const startTranslation = useCallback(
-    async (options?: { label?: string | null; allowParallel?: boolean }) => {
+    async (
+      options?: {
+        label?: string | null;
+        allowParallel?: boolean;
+        originPrep?: OriginPrepSnapshot | null;
+      },
+    ) => {
       if (translation.status === "running" || translation.status === "queued") {
         pushAssistant("이미 번역 작업이 진행 중입니다.", {
           label: "Translation in progress",
@@ -342,6 +369,21 @@ export const useTranslationAgent = ({
         return;
       }
       if (!originText.trim()) {
+        return;
+      }
+
+      const prepSnapshot = options?.originPrep ?? originPrepRef.current;
+      if (!isOriginPrepReady(prepSnapshot)) {
+        const guardMessage =
+          getOriginPrepGuardMessage(prepSnapshot, localize) ??
+          localize(
+            'origin_prep_guard_generic',
+            'Finish the manuscript prep steps before translating.',
+          );
+        pushAssistant(guardMessage, {
+          label: localize('origin_prep_guard_label', 'Prep needed'),
+          tone: 'default',
+        });
         return;
       }
 
@@ -409,6 +451,34 @@ export const useTranslationAgent = ({
           err instanceof Error ? err.message : "Unknown error";
 
         if (projectId && err instanceof ApiError && err.status === 409) {
+          const payload = err.payload as Record<string, unknown> | undefined;
+          if (
+            payload &&
+            typeof payload === 'object' &&
+            payload.error === 'translation_prereq_incomplete'
+          ) {
+            const prepFromServer =
+              (payload.originPrep as OriginPrepSnapshot | undefined) ?? null;
+            if (prepFromServer) {
+              originPrepRef.current = prepFromServer;
+            }
+            const guardMessage =
+              getOriginPrepGuardMessage(
+                prepFromServer ?? originPrepRef.current,
+                localize,
+              ) ??
+              localize(
+                'origin_prep_guard_generic',
+                'Finish the manuscript prep steps before translating.',
+              );
+            pushAssistant(guardMessage, {
+              label: localize('origin_prep_guard_label', 'Prep needed'),
+              tone: 'default',
+            });
+            await refreshContent?.();
+            return;
+          }
+
           const { reason, projectStatus } = extractWorkflowConflict(
             err.payload,
           );
@@ -542,6 +612,8 @@ export const useTranslationAgent = ({
       pushAssistant,
       setTranslation,
       resetTranslation,
+      refreshContent,
+      localize,
     ],
   );
 
