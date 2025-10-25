@@ -340,6 +340,7 @@
   "origin_prep_refresh_error": "분석을 다시 실행하지 못했습니다.",
   "origin_prep_guard_label": "준비 필요",
   "origin_prep_guard_generic": "번역을 시작하기 전에 원문 준비 단계를 마쳐 주세요.",
+  "origin_prep_guard_loading": "원문 준비 상태를 불러오는 중입니다. 잠시만 기다려 주세요.",
   "origin_prep_guard_analysis_missing": "먼저 원문 분석을 실행해 주세요.",
   "origin_prep_guard_analysis_running": "원문 분석이 진행 중입니다. 완료될 때까지 기다려 주세요.",
   "origin_prep_guard_analysis_stale": "원문이 변경되었습니다. 분석을 다시 실행해 번역 노트를 새로고침해 주세요.",

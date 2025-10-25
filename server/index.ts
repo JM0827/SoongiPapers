@@ -1967,6 +1967,27 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   let originDocId: string | null = null;
   const originFileSize = Buffer.byteLength(originalText, "utf8");
 
+  if (project_id && projectMetadata?.origin_file) {
+    originDocId = String(projectMetadata.origin_file);
+  }
+
+  if (project_id && !originDocId) {
+    try {
+      const latestOrigin = (await OriginFile.findOne({ project_id })
+        .sort({ updated_at: -1 })
+        .select({ _id: 1 })
+        .lean()) as { _id?: unknown } | null;
+      if (latestOrigin?._id) {
+        originDocId = String(latestOrigin._id as any);
+      }
+    } catch (err) {
+      app.log.warn(
+        { err, projectId: project_id },
+        "[TRANSLATE] Failed to reuse existing origin file",
+      );
+    }
+  }
+
   try {
     jobId = await enqueue({
       documentId,
@@ -1979,23 +2000,25 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       workflow_run_id: workflowRun?.runId ?? null,
     });
 
-    const originFile = await OriginFile.create({
-      project_id: projectKey,
-      job_id: jobId,
-      file_type: "text",
-      file_size: originFileSize,
-      original_filename: `origin-${jobId}.txt`,
-      text_content: originalText,
-      created_at: new Date(),
-      updated_at: new Date(),
-    });
-    originDocId = originFile._id.toString();
+    if (!originDocId) {
+      const originFile = await OriginFile.create({
+        project_id: projectKey,
+        job_id: jobId,
+        file_type: "text",
+        file_size: originFileSize,
+        original_filename: `origin-${jobId}.txt`,
+        text_content: originalText,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      originDocId = originFile._id.toString();
 
-    if (project_id) {
-      await query(
-        "UPDATE translationprojects SET origin_file = $1, updated_at = NOW() WHERE project_id = $2",
-        [originDocId, project_id],
-      );
+      if (project_id) {
+        await query(
+          "UPDATE translationprojects SET origin_file = $1, updated_at = NOW() WHERE project_id = $2",
+          [originDocId, project_id],
+        );
+      }
     }
   } catch (error) {
     if (workflowRun) {

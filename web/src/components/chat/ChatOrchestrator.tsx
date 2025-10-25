@@ -153,11 +153,8 @@ const validateAssistantMessage = (text: string) => {
     length > MAX_ASSISTANT_MESSAGE_CHARS ||
     sentenceCount > MAX_ASSISTANT_MESSAGE_SENTENCES
   ) {
-    const preview = trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
-    console.warn(
-      `[chat] assistant message exceeds UX guard (length=${length}, sentences=${sentenceCount})`,
-      preview,
-    );
+    // Quietly flag the breach so designers can wire telemetry later without
+    // spamming the console during local development.
   }
 };
 
@@ -604,7 +601,29 @@ export const ChatOrchestrator = ({
         adapted.push(action);
       });
 
-      return adapted.length ? adapted : undefined;
+      if (!adapted.length) {
+        return undefined;
+      }
+
+      const deduped: ChatAction[] = [];
+      const seen = new Set<string>();
+
+      adapted.forEach((action) => {
+        const key = [
+          action.type,
+          action.jobId ?? "",
+          action.workflowRunId ?? "",
+          action.reason ?? "",
+          action.label ?? "",
+        ].join("|");
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        deduped.push(action);
+      });
+
+      return deduped.length ? deduped : undefined;
     },
     [
       hasOrigin,
@@ -613,6 +632,36 @@ export const ChatOrchestrator = ({
       originPrep,
       localize,
     ],
+  );
+
+  const formatActionsForDisplay = useCallback(
+    (actions?: ChatAction[] | null): ChatAction[] | undefined => {
+      if (!actions || actions.length === 0) {
+        return undefined;
+      }
+
+      const seen = new Set<string>();
+      const filtered = actions.filter((action) => {
+        if (action.autoStart) {
+          return false;
+        }
+        const key = [
+          action.type,
+          action.jobId ?? "",
+          action.workflowRunId ?? "",
+          action.reason ?? "",
+          action.label ?? "",
+        ].join("|");
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+
+      return filtered.length ? filtered : undefined;
+    },
+    [],
   );
 
   const toSelectionPayload = useCallback(
@@ -2840,7 +2889,9 @@ export const ChatOrchestrator = ({
           filteredActions as ChatAction[],
         );
 
-        pushAssistant(response.reply, undefined, adaptedActions);
+        const displayableActions = formatActionsForDisplay(adaptedActions);
+
+        pushAssistant(response.reply, undefined, displayableActions);
         for (const action of adaptedActions ?? []) {
           if (!action.autoStart) {
             continue;
@@ -2952,6 +3003,7 @@ export const ChatOrchestrator = ({
       snapshot,
       selectedModel,
       adaptActionsForOrigin,
+      formatActionsForDisplay,
       refreshWorkflowView,
       nextTranslationLabel,
       cancelTranslation,
