@@ -47,6 +47,7 @@ import {
 import evaluationRoutes from "./routes/evaluation";
 import proofreadingRoutes from "./routes/proofreading";
 import proofreadEditorRoutes from "./routes/proofreadEditor";
+import translationDraftRoutes from "./routes/translationDrafts";
 import dictionaryRoutes from "./routes/dictionary";
 import chatRoutes from "./routes/chat";
 import editingRoutes from "./routes/editing";
@@ -466,6 +467,7 @@ app.register(fastifyOauth2, {
 app.register(evaluationRoutes);
 app.register(proofreadingRoutes);
 app.register(proofreadEditorRoutes);
+app.register(translationDraftRoutes);
 app.register(dictionaryRoutes);
 app.register(chatRoutes);
 app.register(editingRoutes);

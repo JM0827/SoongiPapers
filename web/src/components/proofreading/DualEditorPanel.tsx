@@ -1,13 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnChange, type OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { ShieldCheck, Loader2, XCircle, Check } from 'lucide-react';
+import {
+  ShieldCheck,
+  Loader2,
+  XCircle,
+  Check,
+  Layers,
+  Sparkles,
+  Heart,
+  Shield,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   useEditingCommandStore,
   type EditingEditorAdapter,
   type EditorSelectionContext,
 } from '../../store/editingCommand.store';
-import type { SelectionRange, ProofreadingIssue } from '../../types/domain';
+import type {
+  SelectionRange,
+  ProofreadingIssue,
+  TranslationStageKey,
+} from '../../types/domain';
 import { useProofreadEditorContext } from '../../context/proofreadEditor';
 import {
   useProofreadIssues,
@@ -15,6 +29,11 @@ import {
   type ProofreadHighlightSegment,
 } from '../../context/ProofreadIssuesContext';
 import { useUIStore } from '../../store/ui.store';
+import { useAuthStore } from '../../store/auth.store';
+import { useUILocale } from '../../hooks/useUILocale';
+import { translate } from '../../lib/locale';
+import { useTranslationStageDrafts } from '../../hooks/useTranslationStageDrafts';
+import { Modal } from '../common/Modal';
 
 const RECORD_SEPARATOR = '\u241E';
 const SEGMENT_DELIMITER = `\n${RECORD_SEPARATOR}\n`;
@@ -37,6 +56,20 @@ interface AggregatedModel {
 }
 
 const PLAIN_SEGMENT_SEPARATOR = '\n\n';
+
+const STAGE_ORDER: TranslationStageKey[] = [
+  'literal',
+  'style',
+  'emotion',
+  'qa',
+];
+
+const STAGE_META: Record<TranslationStageKey, { icon: LucideIcon; fallback: string; toneClass: string }> = {
+  literal: { icon: Layers, fallback: 'Literal pass', toneClass: 'text-sky-600' },
+  style: { icon: Sparkles, fallback: 'Style pass', toneClass: 'text-indigo-600' },
+  emotion: { icon: Heart, fallback: 'Emotion pass', toneClass: 'text-rose-600' },
+  qa: { icon: Shield, fallback: 'QA review', toneClass: 'text-emerald-600' },
+};
 
 const buildAggregatedModel = (
   items: {
@@ -312,6 +345,7 @@ const editorSupportsHiddenAreas = (
 
 export const DualEditorPanel = () => {
   const {
+    dataset,
     segments,
     issues,
     issueAssignments,
@@ -364,6 +398,136 @@ export const DualEditorPanel = () => {
     });
     return map;
   }, [issues]);
+
+  const token = useAuthStore((state) => state.token);
+  const projectId = dataset?.projectId ?? null;
+  const datasetJobId = dataset?.jobId ?? null;
+  const datasetTranslationFileId = dataset?.translationFileId ?? null;
+  const canLoadStageDrafts = Boolean(
+    token && projectId && (datasetJobId || datasetTranslationFileId),
+  );
+  const { locale } = useUILocale();
+  const localize = useCallback(
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
+      const resolved = translate(key, locale, params);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
+  const getStageLabel = useCallback(
+    (stage: TranslationStageKey) =>
+      localize(
+        `translation_stage_${stage}`,
+        STAGE_META[stage].fallback,
+      ),
+    [localize],
+  );
+  const stageButtonTitle = useCallback(
+    (stage: TranslationStageKey) =>
+      localize(
+        'proofread_stage_button_view',
+        'View {{stage}} draft',
+        { stage: getStageLabel(stage) },
+      ),
+    [getStageLabel, localize],
+  );
+  const [stageViewer, setStageViewer] = useState<{
+    stage: TranslationStageKey | null;
+    isOpen: boolean;
+  }>({ stage: null, isOpen: false });
+  const [knownAvailableStages, setKnownAvailableStages] = useState<
+    TranslationStageKey[]
+  >([]);
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+
+  const stageDraftQuery = useTranslationStageDrafts({
+    token,
+    projectId,
+    jobId: datasetJobId,
+    translationFileId: datasetTranslationFileId,
+    stage: stageViewer.stage,
+    enabled: stageViewer.isOpen,
+  });
+
+  useEffect(() => {
+    if (stageDraftQuery.data?.availableStages?.length) {
+      setKnownAvailableStages((prev) => {
+        const merged = new Set<TranslationStageKey>([
+          ...prev,
+          ...stageDraftQuery.data!.availableStages,
+        ]);
+        return Array.from(merged);
+      });
+    }
+  }, [stageDraftQuery.data]);
+
+  useEffect(() => {
+    setCopyState('idle');
+  }, [stageViewer.stage, stageViewer.isOpen]);
+
+  const availableStageSet = useMemo(
+    () => new Set<TranslationStageKey>(knownAvailableStages),
+    [knownAvailableStages],
+  );
+
+  const handleStageButtonClick = useCallback(
+    (stageKey: TranslationStageKey) => {
+      if (!canLoadStageDrafts) return;
+      setStageViewer({ stage: stageKey, isOpen: true });
+    },
+    [canLoadStageDrafts],
+  );
+
+  const handleCloseStageViewer = useCallback(() => {
+    setStageViewer({ stage: null, isOpen: false });
+  }, []);
+
+  const handleCopyStageDraft = useCallback(async () => {
+    if (!stageDraftQuery.data?.joinedText) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(stageDraftQuery.data.joinedText);
+        setCopyState('copied');
+        window.setTimeout(() => setCopyState('idle'), 2000);
+      }
+    } catch (error) {
+      console.warn('[DualEditor] Failed to copy stage draft', error);
+    }
+  }, [stageDraftQuery.data]);
+
+  const stageViewerTitle = stageViewer.stage
+    ? localize(
+        'proofread_stage_viewer_title',
+        `${getStageLabel(stageViewer.stage)} draft`,
+        { stageLabel: getStageLabel(stageViewer.stage) },
+      )
+    : localize('proofread_stage_viewer_title', 'Stage draft');
+
+  const viewerCountsLabel = stageDraftQuery.data?.counts
+    ? localize(
+        'proofread_stage_viewer_counts',
+        'Segments: {{total}} · Needs review: {{needsReview}}',
+        {
+          total: stageDraftQuery.data.counts.total,
+          needsReview: stageDraftQuery.data.counts.needsReview,
+        },
+      )
+    : undefined;
+
+  const stageDraftErrorMessage =
+    stageDraftQuery.error instanceof Error
+      ? stageDraftQuery.error.message
+      : localize('proofread_stage_viewer_error', 'Failed to load stage draft.');
+
+  const stageDraftData = stageDraftQuery.data ?? null;
+  const stageDraftSegments = stageDraftData?.segments ?? [];
+  const stageDraftHasText = Boolean(
+    stageDraftData?.joinedText && stageDraftData.joinedText.trim().length,
+  );
+  const copyLabel =
+    copyState === 'copied'
+      ? localize('proofread_stage_viewer_copy_done', 'Copied!')
+      : localize('proofread_stage_viewer_copy', 'Copy text');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const translationEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(
@@ -1910,7 +2074,7 @@ export const DualEditorPanel = () => {
       )}
       <div className="flex h-full flex-col overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
         <header className="border-b border-emerald-200 bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">
-          Origin
+          {localize('proofread_editor_origin_label', 'Manuscript')}
         </header>
         <div className="flex-1">
           <Editor
@@ -1942,10 +2106,10 @@ export const DualEditorPanel = () => {
       </div>
       <div className="flex h-full flex-col overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
         <header className="border-b border-emerald-200 bg-sky-50 px-4 py-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Translation
+                {localize('proofread_editor_translation_label', 'Translation')}
               </span>
               <button
                 type="button"
@@ -1957,6 +2121,44 @@ export const DualEditorPanel = () => {
               >
                 <ShieldCheck className="h-4 w-4" />
               </button>
+            </div>
+            <div className="flex items-center gap-1">
+              {STAGE_ORDER.map((stageKey) => {
+                const meta = STAGE_META[stageKey];
+                const Icon = meta.icon;
+                const isActive = stageViewer.isOpen && stageViewer.stage === stageKey;
+                const isAvailable = availableStageSet.has(stageKey);
+                const disabled = !canLoadStageDrafts;
+                const showSpinner =
+                  isActive && stageDraftQuery.isLoading && stageViewer.stage === stageKey;
+                const buttonClass = [
+                  'inline-flex items-center justify-center rounded-full border px-2 py-1 text-[11px] transition',
+                  disabled
+                    ? 'cursor-not-allowed border-slate-100 text-slate-300'
+                    : 'border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700',
+                  isAvailable ? meta.toneClass : '',
+                  isActive ? 'bg-slate-100 border-slate-200' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+                return (
+                  <button
+                    key={stageKey}
+                    type="button"
+                    className={buttonClass}
+                    title={stageButtonTitle(stageKey)}
+                    aria-pressed={isActive}
+                    disabled={disabled}
+                    onClick={() => handleStageButtonClick(stageKey)}
+                  >
+                    {showSpinner ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Icon className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
             <div className="min-w-[80px] text-right">
               {isSaving ? (
@@ -2008,6 +2210,108 @@ export const DualEditorPanel = () => {
           setError={setPopoverError}
           issueState={issueStateById[issuePopover.issueId] ?? 'pending'}
         />
+      )}
+      {stageViewer.isOpen && (
+        <Modal
+          title={stageViewerTitle}
+          description={viewerCountsLabel}
+          onClose={handleCloseStageViewer}
+          maxWidthClass="max-w-3xl"
+        >
+          <div className="space-y-4 text-sm text-slate-700">
+            {knownAvailableStages.length ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span className="font-semibold">
+                  {localize(
+                    'proofread_stage_viewer_available_label',
+                    'Captured stages:',
+                  )}
+                </span>
+                {knownAvailableStages.map((stageKey) => (
+                  <span
+                    key={`${stageKey}-chip`}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600"
+                  >
+                    {getStageLabel(stageKey)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+              {viewerCountsLabel ? <span>{viewerCountsLabel}</span> : <span />}
+              {stageDraftHasText && (
+                <button
+                  type="button"
+                  onClick={handleCopyStageDraft}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                >
+                  {copyLabel}
+                </button>
+              )}
+            </div>
+            {stageDraftQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {localize(
+                  'proofread_stage_viewer_loading',
+                  'Loading stage draft…',
+                )}
+              </div>
+            ) : stageDraftQuery.error ? (
+              <p className="text-sm text-rose-600">{stageDraftErrorMessage}</p>
+            ) : stageDraftSegments.length ? (
+              <>
+                <div className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                  {stageDraftHasText
+                    ? stageDraftData?.joinedText
+                    : localize(
+                        'proofread_stage_viewer_empty',
+                        'No draft output is available for this stage yet.',
+                      )}
+                </div>
+                <div className="max-h-60 overflow-y-auto rounded border border-slate-100">
+                  <ul className="divide-y divide-slate-100 text-xs text-slate-600">
+                    {stageDraftSegments.map((segment) => (
+                      <li key={`${segment.segmentId}-${segment.segmentIndex}`} className="px-3 py-2">
+                        <p className="font-semibold text-slate-700">
+                          {localize(
+                            'proofread_stage_viewer_segment_label',
+                            'Segment {{index}}',
+                            { index: segment.segmentIndex + 1 },
+                          )}
+                        </p>
+                        <p className="whitespace-pre-wrap text-slate-600">
+                          {segment.text?.trim().length
+                            ? segment.text
+                            : localize(
+                                'proofread_stage_viewer_segment_empty',
+                                'No text captured for this segment.',
+                              )}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {localize(
+                  'proofread_stage_viewer_empty',
+                  'No draft output is available for this stage yet.',
+                )}
+              </p>
+            )}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleCloseStageViewer}
+                className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+              >
+                {localize('proofread_stage_viewer_close', 'Close')}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

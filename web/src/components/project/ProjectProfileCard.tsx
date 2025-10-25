@@ -12,6 +12,8 @@ import { useAuthStore } from "../../store/auth.store";
 import { useProjectStore } from "../../store/project.store";
 import { api } from "../../services/api";
 import type { ProjectContent } from "../../types/domain";
+import { translate } from "../../lib/locale";
+import { useUILocale } from "../../hooks/useUILocale";
 
 interface ProjectProfileCardProps {
   content?: ProjectContent | null;
@@ -94,6 +96,14 @@ export const ProjectProfileCard = ({
   onActionReady,
   requireAuthor = false,
 }: ProjectProfileCardProps) => {
+  const { locale } = useUILocale();
+  const localize = useCallback(
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
+      const resolved = translate(key, locale, params);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
   const userName = (user?.name ?? "").trim();
@@ -133,16 +143,22 @@ export const ProjectProfileCard = ({
       const errors: { bookTitleKo?: string; authorNameKo?: string } = {};
 
       if (!sanitized.bookTitleKo) {
-        errors.bookTitleKo = "도서 제목(원문)을 입력해 주세요.";
+        errors.bookTitleKo = localize(
+          "project_profile_error_book_title",
+          "Please enter the original book title.",
+        );
       }
 
       if (requireAuthor && !sanitized.authorNameKo) {
-        errors.authorNameKo = "저자를 입력해 주세요.";
+        errors.authorNameKo = localize(
+          "project_profile_error_author",
+          "Please enter the author.",
+        );
       }
 
       return { sanitized, errors };
     },
-    [requireAuthor],
+    [localize, requireAuthor],
   );
 
   const externalDraft = useMemo(() => {
@@ -182,7 +198,12 @@ export const ProjectProfileCard = ({
     async (snapshot: ProfileDraft) => {
       if (!token || !projectId) {
         setStatus("error");
-        setError("프로젝트 정보를 저장하려면 다시 로그인해 주세요.");
+        setError(
+          localize(
+            "project_profile_error_auth",
+            "Please sign in again to save project information.",
+          ),
+        );
         return;
       }
 
@@ -192,7 +213,12 @@ export const ProjectProfileCard = ({
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors);
         setStatus("error");
-        setError("필수 항목을 입력해 주세요.");
+        setError(
+          localize(
+            "project_profile_error_required",
+            "Please fill in the required fields.",
+          ),
+        );
         return;
       }
 
@@ -206,11 +232,11 @@ export const ProjectProfileCard = ({
       try {
         await api.updateProject(token, projectId, {
           book_title: sanitized.bookTitleKo || undefined,
-          author_name: sanitized.authorNameKo || null,
-          translator_name: effectiveTranslator,
-          description: sanitized.originalAuthorNotes || null,
-          intention: null,
-          memo: payloadMemo || null,
+          author_name: sanitized.authorNameKo || undefined,
+          translator_name: effectiveTranslator ?? undefined,
+          description: sanitized.originalAuthorNotes || undefined,
+          intention: undefined,
+          memo: payloadMemo || undefined,
           meta: {
             author: sanitized.authorNameKo || null,
             translator: effectiveTranslator,
@@ -246,11 +272,14 @@ export const ProjectProfileCard = ({
         setError(
           err instanceof Error
             ? err.message
-            : "프로젝트 정보를 저장하지 못했습니다.",
+            : localize(
+                'project_profile_error_generic',
+                'Unable to save the project information.',
+              ),
         );
       }
     },
-    [computeValidation, onUpdated, projectId, token, userName],
+    [computeValidation, localize, onUpdated, projectId, token, userName],
   );
 
   const scheduleSave = useCallback(
@@ -294,33 +323,40 @@ export const ProjectProfileCard = ({
       case "saving":
         return {
           icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />,
-          label: "저장 중입니다…",
+          label: localize('project_profile_status_saving', 'Saving…'),
           tone: "info" as const,
         };
       case "dirty":
         return {
           icon: <Circle className="h-3.5 w-3.5 text-amber-500" />,
-          label: "변경 사항이 저장 대기 중입니다.",
+          label: localize(
+            "project_profile_status_dirty",
+            "Changes are waiting to be saved.",
+          ),
           tone: "warn" as const,
         };
       case "saved":
         return {
           icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />,
           label: lastSavedAt
-            ? `마지막 저장 ${new Date(lastSavedAt).toLocaleTimeString()}`
-            : "저장되었습니다.",
+            ? localize(
+                "project_profile_status_saved_at",
+                "Last saved {{time}}",
+                { time: new Date(lastSavedAt).toLocaleTimeString() },
+              )
+            : localize("project_profile_status_saved", "Saved."),
           tone: "success" as const,
         };
       case "error":
         return {
           icon: <AlertCircle className="h-3.5 w-3.5 text-rose-500" />,
-          label: error ?? "프로필 저장 오류",
+          label: error ?? localize('project_profile_status_error', 'Failed to save profile.'),
           tone: "error" as const,
         };
       default:
         return null;
     }
-  }, [status, lastSavedAt, error]);
+  }, [error, lastSavedAt, localize, status]);
 
   return (
     <section className="space-y-3">
@@ -332,7 +368,7 @@ export const ProjectProfileCard = ({
       )}
       <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          도서 제목 (원문)*
+          {localize('project_profile_field_book_title', 'Original title (required)')}
           <input
             value={draft.bookTitleKo}
             onChange={handleFieldChange("bookTitleKo")}
@@ -341,7 +377,10 @@ export const ProjectProfileCard = ({
                 ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
                 : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
             }`}
-            placeholder="예: 한국어 책 제목"
+            placeholder={localize(
+              'project_profile_placeholder_book_title',
+              'e.g., Korean title',
+            )}
           />
           {fieldErrors.bookTitleKo ? (
             <span className="text-[11px] text-rose-500">
@@ -350,7 +389,8 @@ export const ProjectProfileCard = ({
           ) : null}
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          저자 (원문){requireAuthor ? "*" : ""}
+          {localize('project_profile_field_author', 'Author (original)')}
+          {requireAuthor ? '*' : ''}
           <input
             value={draft.authorNameKo}
             onChange={handleFieldChange("authorNameKo")}
@@ -359,7 +399,10 @@ export const ProjectProfileCard = ({
                 ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
                 : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
             }`}
-            placeholder="예: 홍길동"
+            placeholder={localize(
+              'project_profile_placeholder_author',
+              'e.g., Hong Gildong',
+            )}
           />
           {fieldErrors.authorNameKo ? (
             <span className="text-[11px] text-rose-500">
@@ -368,47 +411,63 @@ export const ProjectProfileCard = ({
           ) : null}
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          Book Title (English)
+          {localize('project_profile_field_book_title_en', 'Book title (English)')}
           <input
             value={draft.bookTitleEn}
             onChange={handleFieldChange("bookTitleEn")}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-            placeholder="예: English Title"
+            placeholder={localize(
+              'project_profile_placeholder_book_title_en',
+              'e.g., English Title',
+            )}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          번역가
+          {localize('project_profile_field_translator', 'Translator')}
           <input
             value={draft.translatorName}
             onChange={handleFieldChange("translatorName")}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-            placeholder="예: Translator Name"
+            placeholder={localize(
+              'project_profile_placeholder_translator',
+              'e.g., Translator Name',
+            )}
           />
         </label>
       </div>
       <div className="grid gap-3">
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          원작자 메모
+          {localize('project_profile_field_author_notes', 'Author notes')}
           <textarea
             value={draft.originalAuthorNotes}
             onChange={handleFieldChange("originalAuthorNotes")}
             className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-            placeholder="원작자의 의도나 배경, 독자에게 전달하고 싶은 메모를 기록해 주세요"
+            placeholder={localize(
+              'project_profile_placeholder_author_notes',
+              'Capture author intent, background, or notes for readers.',
+            )}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          번역가 메모
+          {localize('project_profile_field_translator_notes', 'Translator notes')}
           <textarea
             value={draft.translatorNotes}
             onChange={handleFieldChange("translatorNotes")}
             className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-            placeholder="번역 시 주의할 점이나 팀과 공유할 메모를 적어주세요"
+            placeholder={localize(
+              'project_profile_placeholder_translator_notes',
+              'Share context or reminders for the translation team.',
+            )}
           />
         </label>
       </div>
       {status === "error" && !(statusInfo && statusInfo.tone === "error") && (
         <p className="text-xs text-rose-500">
-          {error ?? "프로젝트 정보를 저장하지 못했습니다."}
+          {error ??
+            localize(
+              'project_profile_error_generic',
+              'Unable to save the project information.',
+            )}
         </p>
       )}
     </section>

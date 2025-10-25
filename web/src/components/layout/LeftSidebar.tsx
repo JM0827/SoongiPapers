@@ -33,20 +33,20 @@ import { SidebarActivitySection } from "./sidebar/SidebarActivitySection";
 import { useProjectContext } from "../../hooks/useProjectContext";
 
 const languageOptions = [
-  "Korean",
-  "English",
-  "Japanese",
-  "Chinese",
-  "Spanish",
-  "French",
-  "German",
+  { value: "Korean", labelKey: "language_korean", fallback: "Korean" },
+  { value: "English", labelKey: "language_english", fallback: "English" },
+  { value: "Japanese", labelKey: "language_japanese", fallback: "Japanese" },
+  { value: "Chinese", labelKey: "language_chinese", fallback: "Chinese" },
+  { value: "Spanish", labelKey: "language_spanish", fallback: "Spanish" },
+  { value: "French", labelKey: "language_french", fallback: "French" },
+  { value: "German", labelKey: "language_german", fallback: "German" },
 ];
 
-const usageEventLabels: Record<string, string> = {
-  translate: "Translation",
-  quality: "Quality",
-  proofread: "Proofread",
-  ebook: "eBook",
+const usageEventLabelMessages: Record<string, { key: string; fallback: string }> = {
+  translate: { key: 'sidebar_usage_event_translate', fallback: 'Translation' },
+  quality: { key: 'sidebar_usage_event_quality', fallback: 'Quality' },
+  proofread: { key: 'sidebar_usage_event_proofread', fallback: 'Proofread' },
+  ebook: { key: 'sidebar_usage_event_ebook', fallback: 'eBook' },
 };
 
 const formatNumber = (value: number) => value.toLocaleString();
@@ -85,8 +85,12 @@ export const LeftSidebar = () => {
   const queryClient = useQueryClient();
   const { locale } = useUILocale();
   const localize = useCallback(
-    (key: string, fallback: string) => {
-      const resolved = translate(key, locale);
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
+      const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
     [locale],
@@ -109,6 +113,29 @@ export const LeftSidebar = () => {
   >(null);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(
     null,
+  );
+
+  const newProjectLabel = localize('sidebar_new_project', 'New project');
+  const newProjectTooltip = localize(
+    'sidebar_new_project_tooltip',
+    'Create a new translation project.',
+  );
+  const openSidebarTitle = localize('sidebar_toggle_open', 'Open sidebar');
+  const closeSidebarTitle = localize('sidebar_toggle_close', 'Close sidebar');
+  const loadingLabel = localize('common_loading', 'Loading…');
+  const emptySearchMessage = localize(
+    'sidebar_empty_search',
+    'No projects match your current filters.',
+  );
+  const showMoreLabel = localize('sidebar_section_show_more', 'Show more');
+  const showLessLabel = localize('sidebar_section_show_less', 'Show less');
+  const activeSectionTitle = localize(
+    'sidebar_section_active',
+    'Active projects',
+  );
+  const completedSectionTitle = localize(
+    'sidebar_section_completed',
+    'Completed projects',
   );
 
   const translationAgentState = useWorkflowStore((state) => state.translation);
@@ -173,13 +200,23 @@ export const LeftSidebar = () => {
   const submitRename = useCallback(async () => {
     if (!modalState || modalState.type !== "rename") return;
     if (!token) {
-      window.alert("로그인이 필요합니다. 다시 로그인해 주세요.");
+      window.alert(
+        localize(
+          "sidebar_error_auth_required",
+          "Please sign in again to continue.",
+        ),
+      );
       return;
     }
 
     const trimmed = modalState.value.trim();
     if (!trimmed) {
-      window.alert("프로젝트 이름은 비워둘 수 없습니다.");
+      window.alert(
+        localize(
+          "sidebar_error_project_name_required",
+          "Project name cannot be empty.",
+        ),
+      );
       return;
     }
     if (trimmed === (modalState.project.title ?? "")) {
@@ -197,11 +234,18 @@ export const LeftSidebar = () => {
       }
       await invalidateProjects();
       await invalidateProjectContent(modalState.project.project_id);
-      showToast("프로젝트 이름이 변경되었습니다.");
+      showToast(
+        localize("sidebar_toast_project_renamed", "Project name updated."),
+      );
       closeModal();
     } catch (error) {
       console.error("[sidebar] failed to rename project", error);
-      window.alert("프로젝트 이름 변경에 실패했습니다. 다시 시도해 주세요.");
+      window.alert(
+        localize(
+          "sidebar_error_rename_failed",
+          "Failed to rename the project. Please try again.",
+        ),
+      );
       setModalState((prev) =>
         prev && prev.type === "rename" ? { ...prev, submitting: false } : prev,
       );
@@ -220,7 +264,12 @@ export const LeftSidebar = () => {
   const submitDelete = useCallback(async () => {
     if (!modalState || modalState.type !== "delete") return;
     if (!token) {
-      window.alert("로그인이 필요합니다. 다시 로그인해 주세요.");
+      window.alert(
+        localize(
+          "sidebar_error_auth_required",
+          "Please sign in again to continue.",
+        ),
+      );
       return;
     }
 
@@ -232,11 +281,21 @@ export const LeftSidebar = () => {
       purgeProject(modalState.project.project_id);
       await invalidateProjects();
       await invalidateProjectContent(modalState.project.project_id);
-      showToast("프로젝트가 삭제되었습니다. 7일 동안 복구할 수 있습니다.");
+      showToast(
+        localize(
+          "sidebar_toast_project_deleted",
+          "Project archived. You can restore it within 7 days.",
+        ),
+      );
       closeModal();
     } catch (error) {
       console.error("[sidebar] failed to delete project", error);
-      window.alert("프로젝트 삭제에 실패했습니다. 다시 시도해 주세요.");
+      window.alert(
+        localize(
+          "sidebar_error_delete_failed",
+          "Failed to delete the project. Please try again.",
+        ),
+      );
       setModalState((prev) =>
         prev && prev.type === "delete" ? { ...prev, submitting: false } : prev,
       );
@@ -257,46 +316,51 @@ export const LeftSidebar = () => {
         onSubmit={handleCreateProject}
         className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-xl"
       >
-        <h2 className="text-lg font-semibold text-slate-900">New project</h2>
+        <h2 className="text-lg font-semibold text-slate-900">
+          {localize('sidebar_create_title', 'New project')}
+        </h2>
         <p className="mt-1 text-sm text-slate-500">
-          Name your project and choose languages to get started.
+          {localize(
+            'sidebar_create_description',
+            'Name your project and choose languages to get started.',
+          )}
         </p>
 
         <label className="mt-4 block text-xs font-semibold tracking-wide text-slate-500">
-          Title
+          {localize('sidebar_create_field_title', 'Title')}
           <input
             value={newProjectTitle}
             onChange={(event) => setNewProjectTitle(event.target.value)}
-            placeholder="New project"
+            placeholder={localize('sidebar_create_placeholder_title', 'New project')}
             className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none"
           />
         </label>
 
         <div className="mt-4 grid grid-cols-2 gap-4">
           <label className="text-xs font-semibold tracking-wide text-slate-500">
-            Origin language
+            {localize('sidebar_create_field_origin', 'Origin language')}
             <select
               value={originLang}
               onChange={(event) => setOriginLang(event.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none"
             >
               {languageOptions.map((language) => (
-                <option key={language} value={language}>
-                  {language}
+                <option key={language.value} value={language.value}>
+                  {localize(language.labelKey, language.fallback)}
                 </option>
               ))}
             </select>
           </label>
           <label className="text-xs font-semibold tracking-wide text-slate-500">
-            Target language
+            {localize('sidebar_create_field_target', 'Target language')}
             <select
               value={targetLang}
               onChange={(event) => setTargetLang(event.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none"
             >
               {languageOptions.map((language) => (
-                <option key={language} value={language}>
-                  {language}
+                <option key={language.value} value={language.value}>
+                  {localize(language.labelKey, language.fallback)}
                 </option>
               ))}
             </select>
@@ -309,14 +373,16 @@ export const LeftSidebar = () => {
             onClick={handleDialogClose}
             className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
           >
-            Cancel
+            {localize('common_cancel', 'Cancel')}
           </button>
           <button
             type="submit"
             disabled={isCreating}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
           >
-            {isCreating ? "Creating…" : "Create"}
+            {isCreating
+              ? localize('sidebar_create_submitting', 'Creating…')
+              : localize('sidebar_create_submit', 'Create')}
           </button>
         </footer>
       </form>
@@ -326,7 +392,12 @@ export const LeftSidebar = () => {
   const handleCompleteProject = useCallback(
     async (project: ProjectSummary) => {
       if (!token) {
-        window.alert("로그인이 필요합니다. 다시 로그인해 주세요.");
+        window.alert(
+          localize(
+            "sidebar_error_auth_required",
+            "Please sign in again to continue.",
+          ),
+        );
         return;
       }
 
@@ -338,7 +409,12 @@ export const LeftSidebar = () => {
         await invalidateProjectContent(project.project_id);
       } catch (error) {
         console.error("[sidebar] failed to mark project complete", error);
-        window.alert("프로젝트 완료 처리에 실패했습니다. 다시 시도해 주세요.");
+        window.alert(
+          localize(
+            "sidebar_error_complete_failed",
+            "Failed to mark the project as completed. Please try again.",
+          ),
+        );
       }
     },
     [token, invalidateProjects, invalidateProjectContent],
@@ -383,7 +459,12 @@ export const LeftSidebar = () => {
         handleDialogClose();
       } catch (error) {
         console.error("[sidebar] failed to create project", error);
-        window.alert("새 프로젝트 생성에 실패했습니다. 다시 시도해 주세요.");
+        window.alert(
+          localize(
+            "sidebar_error_create_failed",
+            "Failed to create the project. Please try again.",
+          ),
+        );
       }
     },
     [createProject, newProjectTitle, originLang, targetLang, handleDialogClose],
@@ -435,44 +516,46 @@ export const LeftSidebar = () => {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const stageLabelMap: Record<string, { key: string; fallback: string }> = {
+    origin: { key: 'sidebar_activity_origin', fallback: 'Origin' },
+    translation: { key: 'sidebar_activity_translation', fallback: 'Translation' },
+    proofreading: { key: 'sidebar_activity_proofreading', fallback: 'Proofreading' },
+    quality: { key: 'sidebar_activity_quality', fallback: 'Quality review' },
+    publishing: { key: 'sidebar_activity_publishing', fallback: 'Publishing' },
+  };
+
   const recentUpdates = useMemo(() => {
     const lines: Array<{ id: string; text: string }> = [];
-    const pushUpdate = (
-      id: string,
-      label: string,
-      timestamp?: string | null,
-    ) => {
+    const pushUpdate = (id: string, timestamp?: string | null) => {
       const formatted = formatRecentTimestamp(timestamp);
       if (!formatted) return;
-      lines.push({ id, text: `${label} 최근 업데이트: ${formatted}` });
+      const labelMeta = stageLabelMap[id];
+      const label = labelMeta
+        ? localize(labelMeta.key, labelMeta.fallback)
+        : id;
+      lines.push({
+        id,
+        text: localize(
+          'sidebar_activity_update',
+          '{{label}} last updated {{timestamp}}',
+          { label, timestamp: formatted },
+        ),
+      });
     };
 
-    pushUpdate("origin", "원문", snapshot.origin.lastUpdatedAt);
+    pushUpdate('origin', snapshot.origin.lastUpdatedAt);
     pushUpdate(
-      "translation",
-      "번역",
+      'translation',
       snapshot.translation.lastUpdatedAt ??
         snapshot.lifecycle.translation?.lastUpdatedAt ??
         null,
     );
-    pushUpdate(
-      "proofreading",
-      "교정",
-      snapshot.lifecycle.proofreading?.lastUpdatedAt ?? null,
-    );
-    pushUpdate(
-      "quality",
-      "품질 평가",
-      snapshot.lifecycle.quality?.lastUpdatedAt ?? null,
-    );
-    pushUpdate(
-      "publishing",
-      "전자책",
-      snapshot.lifecycle.publishing?.lastUpdatedAt ?? null,
-    );
+    pushUpdate('proofreading', snapshot.lifecycle.proofreading?.lastUpdatedAt ?? null);
+    pushUpdate('quality', snapshot.lifecycle.quality?.lastUpdatedAt ?? null);
+    pushUpdate('publishing', snapshot.lifecycle.publishing?.lastUpdatedAt ?? null);
 
     return lines;
-  }, [snapshot]);
+  }, [localize, snapshot]);
 
   const originReady = snapshot.origin.hasContent;
   const translationRunning =
@@ -495,18 +578,34 @@ export const LeftSidebar = () => {
     proofreadingDone || snapshot.lifecycle.proofreading?.lastUpdatedAt,
   );
 
+  const assistantPendingTooltip = localize(
+    'sidebar_quick_tooltip_agent_pending',
+    'The assistant is getting ready.',
+  );
+
   const quickActions: QuickAction[] = [
     {
       key: "upload-origin",
-      label: "원문 업로드",
+      label: originReady
+        ? localize('sidebar_quick_upload_label_done', 'Origin ready')
+        : localize('sidebar_quick_upload_label', 'Upload origin'),
       icon: <UploadCloud size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : originReady
-          ? "원문이 이미 업로드되었습니다."
+          ? localize(
+              'sidebar_quick_upload_tooltip_done',
+              'The manuscript is already uploaded.',
+            )
           : translationRunning
-            ? "번역이 진행 중일 때는 원문을 변경할 수 없습니다."
-            : "원문 파일을 업로드합니다.",
+            ? localize(
+                'sidebar_quick_upload_tooltip_running',
+                'You cannot change the manuscript while translation is running.',
+              )
+            : localize(
+                'sidebar_quick_upload_tooltip_default',
+                'Upload the manuscript file.',
+              ),
       disabled: !chatExecutorReady || originReady || translationRunning,
       status: translationRunning
         ? "running"
@@ -524,19 +623,36 @@ export const LeftSidebar = () => {
     {
       key: "run-translation",
       label:
-        translationDone || translationFailed ? "번역 다시 실행" : "번역 실행",
+        translationDone || translationFailed
+          ? localize('sidebar_quick_translation_label_redo', 'Redo translation')
+          : localize('sidebar_quick_translation_label', 'Run translation'),
       icon: <RefreshCcw size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : !originReady
-          ? "원문을 업로드하면 실행할 수 있습니다."
+          ? localize(
+              'sidebar_quick_translation_tooltip_no_origin',
+              'Upload the manuscript to start translation.',
+            )
           : translationRunning
-            ? "번역이 진행 중입니다."
+            ? localize(
+                'sidebar_quick_translation_tooltip_running',
+                'Translation is already running.',
+              )
             : translationFailed
-              ? "이전 번역이 실패했습니다. 다시 실행해 주세요."
+              ? localize(
+                  'sidebar_quick_translation_tooltip_failed',
+                  'The previous translation failed. Run it again.',
+                )
               : translationDone
-                ? "번역을 다시 실행합니다."
-                : "전체 원문을 번역합니다.",
+                ? localize(
+                    'sidebar_quick_translation_tooltip_redo',
+                    'Run translation again from the beginning.',
+                  )
+                : localize(
+                    'sidebar_quick_translation_tooltip_default',
+                    'Translate the entire manuscript.',
+                  ),
       disabled:
         !chatExecutorReady || translationRunning || !originReady,
       status: translationRunning
@@ -559,19 +675,36 @@ export const LeftSidebar = () => {
     {
       key: "run-proofread",
       label:
-        proofreadingDone || proofreadingFailed ? "교정 다시 실행" : "교정 실행",
+        proofreadingDone || proofreadingFailed
+          ? localize('sidebar_quick_proof_label_redo', 'Redo proofreading')
+          : localize('sidebar_quick_proof_label', 'Run proofreading'),
       icon: <PenSquare size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : !hasTranslation
-          ? "번역이 완료되면 사용할 수 있습니다."
+          ? localize(
+              'sidebar_quick_proof_tooltip_no_translation',
+              'Proofreading will be available once translation finishes.',
+            )
           : proofreadingRunning
-            ? "교정이 진행 중입니다."
+            ? localize(
+                'sidebar_quick_proof_tooltip_running',
+                'Proofreading is already running.',
+              )
             : proofreadingFailed
-              ? "이전 교정이 실패했습니다. 다시 실행해 주세요."
+              ? localize(
+                  'sidebar_quick_proof_tooltip_failed',
+                  'The previous proofreading run failed. Run it again.',
+                )
               : proofreadingDone
-                ? "교정을 다시 실행합니다."
-                : "교정 워크플로를 실행합니다.",
+                ? localize(
+                    'sidebar_quick_proof_tooltip_redo',
+                    'Run proofreading again to refresh the results.',
+                  )
+                : localize(
+                    'sidebar_quick_proof_tooltip_default',
+                    'Launch the proofreading workflow.',
+                  ),
       disabled:
         !chatExecutorReady || !hasTranslation || proofreadingRunning,
       status: proofreadingRunning
@@ -598,19 +731,36 @@ export const LeftSidebar = () => {
     {
       key: "run-quality",
       label:
-        qualityDone || qualityFailed ? "품질 평가 다시 실행" : "품질 평가 실행",
+        qualityDone || qualityFailed
+          ? localize('sidebar_quick_quality_label_redo', 'Redo quality review')
+          : localize('sidebar_quick_quality_label', 'Run quality review'),
       icon: <ShieldCheck size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : !translationDone
-          ? "번역이 완료되면 사용할 수 있습니다."
+          ? localize(
+              'sidebar_quick_quality_tooltip_no_translation',
+              'Quality review is available after translation completes.',
+            )
           : qualityRunning
-            ? "품질 평가가 진행 중입니다."
+            ? localize(
+                'sidebar_quick_quality_tooltip_running',
+                'Quality review is currently running.',
+              )
             : qualityFailed
-              ? "이전 품질 평가가 실패했습니다. 다시 실행해 주세요."
+              ? localize(
+                  'sidebar_quick_quality_tooltip_failed',
+                  'The previous quality review failed. Run it again.',
+                )
               : qualityDone
-                ? "품질 평가를 다시 실행합니다."
-                : "최종 품질 검사를 실행합니다.",
+                ? localize(
+                    'sidebar_quick_quality_tooltip_redo',
+                    'Run another quality review.',
+                  )
+                : localize(
+                    'sidebar_quick_quality_tooltip_default',
+                    'Perform the final quality check.',
+                  ),
       disabled:
         !chatExecutorReady || !translationDone || qualityRunning,
       status: qualityRunning
@@ -631,13 +781,19 @@ export const LeftSidebar = () => {
     },
     {
       key: "view-proofread",
-      label: "교정 보기",
+      label: localize('sidebar_quick_view_proof_label', 'View proofreading results'),
       icon: <Search size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : !proofreadingDone
-          ? "교정이 완료되면 확인할 수 있습니다."
-          : "교정 결과를 확인합니다.",
+          ? localize(
+              'sidebar_quick_view_proof_tooltip_unavailable',
+              'Proofreading results will appear once the run completes.',
+            )
+          : localize(
+              'sidebar_quick_view_proof_tooltip',
+              'Open the proofreading results.',
+            ),
       status: proofreadingDone ? "done" : "default",
       disabled: !chatExecutorReady || !proofreadingDone || !hasProofResults,
       onClick: async () => {
@@ -647,13 +803,19 @@ export const LeftSidebar = () => {
     },
     {
       key: "open-export",
-      label: "전자책 내보내기",
+      label: localize('sidebar_quick_export_label', 'Open export panel'),
       icon: <BookOpen size={18} />,
       tooltip: !chatExecutorReady
-        ? "챗봇이 준비되는 중입니다."
+        ? assistantPendingTooltip
         : translationDone
-          ? "전자책 내보내기 패널을 엽니다."
-          : "번역이 완료되면 사용할 수 있습니다.",
+          ? localize(
+              'sidebar_quick_export_tooltip_ready',
+              'Open the eBook export panel.',
+            )
+          : localize(
+              'sidebar_quick_export_tooltip_unavailable',
+              'Export is available after translation is complete.',
+            ),
       disabled: !chatExecutorReady || !translationDone,
       status: translationDone ? "done" : "default",
       onClick: async () => {
@@ -670,7 +832,8 @@ export const LeftSidebar = () => {
           type="button"
           onClick={toggleSidebar}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white hover:border-indigo-400 hover:text-indigo-500"
-          title="Open sidebar"
+          title={openSidebarTitle}
+          aria-label={openSidebarTitle}
         >
           <ChevronRight size={16} />
         </button>
@@ -678,7 +841,8 @@ export const LeftSidebar = () => {
           type="button"
           onClick={() => setIsDialogOpen(true)}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white hover:border-indigo-400 hover:text-indigo-500"
-          title="New translation project"
+          title={newProjectTooltip}
+          aria-label={newProjectTooltip}
           disabled={isCreating}
         >
           <NewProjectIcon size={16} />
@@ -696,7 +860,8 @@ export const LeftSidebar = () => {
           type="button"
           onClick={toggleSidebar}
           className="flex h-8 w-8 items-center justify-center rounded-md bg-white hover:text-indigo-500"
-          title="Close sidebar"
+          title={closeSidebarTitle}
+          aria-label={closeSidebarTitle}
         >
           <ChevronLeft size={16} />
         </button>
@@ -706,8 +871,13 @@ export const LeftSidebar = () => {
         <div className="flex h-full flex-col">
           <div className="flex-1 overflow-y-auto space-y-3">
             <Section
-              title="Active Projects"
-              prepend={<NewProjectCard onClick={() => setIsDialogOpen(true)} />}
+              title={activeSectionTitle}
+              prepend={
+                <NewProjectCard
+                  onClick={() => setIsDialogOpen(true)}
+                  label={newProjectLabel}
+                />
+              }
               projects={
                 showAllActive
                   ? activeProjectsPrepared
@@ -728,14 +898,14 @@ export const LeftSidebar = () => {
                     onClick={() => setShowAllActive((prev) => !prev)}
                     className="text-xs text-indigo-600 hover:underline"
                   >
-                    {showAllActive ? "Show less" : "... Show more"}
+                    {showAllActive ? showLessLabel : showMoreLabel}
                   </button>
                 )
               }
             />
             {completedProjectsLimited.length > 0 && (
               <Section
-                title="Completed Projects"
+                title={completedSectionTitle}
                 projects={
                   showAllCompleted
                     ? completedProjectsLimited
@@ -756,7 +926,7 @@ export const LeftSidebar = () => {
                       onClick={() => setShowAllCompleted((prev) => !prev)}
                       className="text-xs text-indigo-600 hover:underline"
                     >
-                      {showAllCompleted ? "Show less" : "... Show more"}
+                      {showAllCompleted ? showLessLabel : showMoreLabel}
                     </button>
                   )
                 }
@@ -764,18 +934,21 @@ export const LeftSidebar = () => {
             )}
             {projects === undefined && (
               <p className="pt-10 text-center text-xs text-slate-500">
-                {translate("loading")}
+                {loadingLabel}
               </p>
             )}
             {projects !== undefined && projects.length === 0 && (
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-700">
                 <p className="font-semibold text-slate-800">
-                  {localize("sidebar_empty_title", "시작할 프로젝트가 없습니다.")}
+                  {localize(
+                    "sidebar_empty_title",
+                    "No projects are ready to start yet.",
+                  )}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
                   {localize(
                     "sidebar_empty_hint",
-                    "원문 파일을 업로드하면 번역과 교정을 바로 시작할 수 있습니다.",
+                    "Upload a manuscript file to kick off translation and proofreading.",
                   )}
                 </p>
               </div>
@@ -785,7 +958,7 @@ export const LeftSidebar = () => {
               activeProjectsLimited.length === 0 &&
               completedProjectsLimited.length === 0 && (
                 <p className="pt-10 text-center text-xs text-slate-500">
-                  검색 결과가 없습니다.
+                  {emptySearchMessage}
                 </p>
               )}
           </div>
@@ -797,7 +970,8 @@ export const LeftSidebar = () => {
                 onToggle={(open) =>
                   setSidebarSection(projectScopeKey, "quickActions", open)
                 }
-            actions={quickActions}
+                actions={quickActions}
+                localize={localize}
               />
               <SidebarActivitySection
                 isOpen={activitySectionOpen}
@@ -814,8 +988,11 @@ export const LeftSidebar = () => {
       {isDialogOpen && renderCreateDialog()}
       {modalState?.type === "rename" && (
         <Modal
-          title="Project properties"
-          description="Manage project details."
+          title={localize('sidebar_project_modal_title', 'Project properties')}
+          description={localize(
+            'sidebar_project_modal_description',
+            'Review and update project details.',
+          )}
           onClose={() => {
             if (modalState.submitting) return;
             closeModal();
@@ -833,7 +1010,7 @@ export const LeftSidebar = () => {
               className="text-xs font-semibold tracking-wide text-slate-500"
               htmlFor="project-name-input"
             >
-              Name
+              {localize('sidebar_project_modal_field_name', 'Name')}
             </label>
             <input
               id="project-name-input"
@@ -851,7 +1028,7 @@ export const LeftSidebar = () => {
             <div className="grid grid-cols-2 gap-4 text-sm text-slate-500">
               <div>
                 <p className="text-xs font-semibold tracking-wide text-slate-500">
-                  Origin language
+                  {localize('sidebar_project_modal_origin_lang', 'Origin language')}
                 </p>
                 <p className="mt-1 text-slate-700">
                   {modalState.project.origin_lang}
@@ -859,7 +1036,7 @@ export const LeftSidebar = () => {
               </div>
               <div>
                 <p className="text-xs font-semibold tracking-wide text-slate-500">
-                  Target language
+                  {localize('sidebar_project_modal_target_lang', 'Target language')}
                 </p>
                 <p className="mt-1 text-slate-700">
                   {modalState.project.target_lang}
@@ -869,46 +1046,78 @@ export const LeftSidebar = () => {
             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               <p>
                 <span className="font-semibold text-slate-700">
-                  Project ID:
+                  {localize('sidebar_project_modal_project_id', 'Project ID:')}
                 </span>{" "}
                 <span className="font-mono text-slate-800">
                   {modalState.project.project_id}
                 </span>
               </p>
               <p className="mt-1">
-                <span className="font-semibold text-slate-700">Created:</span>{" "}
+                <span className="font-semibold text-slate-700">
+                  {localize('sidebar_project_modal_created', 'Created:')}
+                </span>{" "}
                 {formatDateTime(modalState.project.created_at)}
               </p>
             </div>
             <div className="rounded-md border border-slate-200 bg-white px-3 py-3 text-xs">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Token Usage
+                {localize('sidebar_project_modal_usage_title', 'Token usage')}
               </p>
               {isUsageLoading && (
-                <p className="mt-2 text-slate-500">Loading…</p>
+                <p className="mt-2 text-slate-500">
+                  {localize('common_loading', 'Loading…')}
+                </p>
               )}
               {!isUsageLoading && modalUsageData && (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
                   <li>
-                    Total tokens: {formatNumber(
-                      modalUsageData.projectTotals.inputTokens +
-                        modalUsageData.projectTotals.outputTokens,
-                    )}{" "}
-                    (input {formatNumber(modalUsageData.projectTotals.inputTokens)}, output {formatNumber(modalUsageData.projectTotals.outputTokens)})
+                    {localize(
+                      'sidebar_project_modal_usage_total',
+                      'Total tokens: {{total}} (input {{input}}, output {{output}})',
+                      {
+                        total: formatNumber(
+                          modalUsageData.projectTotals.inputTokens +
+                            modalUsageData.projectTotals.outputTokens,
+                        ),
+                        input: formatNumber(
+                          modalUsageData.projectTotals.inputTokens,
+                        ),
+                        output: formatNumber(
+                          modalUsageData.projectTotals.outputTokens,
+                        ),
+                      },
+                    )}
                   </li>
                   {modalUsageData.eventsByType.map((event) => {
                     const total = event.inputTokens + event.outputTokens;
-                    const label = usageEventLabels[event.eventType] ?? event.eventType;
+                    const labelMeta = usageEventLabelMessages[event.eventType];
+                    const label = labelMeta
+                      ? localize(labelMeta.key, labelMeta.fallback)
+                      : event.eventType;
                     return (
                       <li key={event.eventType}>
-                        {label}: {formatNumber(total)} (input {formatNumber(event.inputTokens)}, output {formatNumber(event.outputTokens)})
+                        {localize(
+                          'sidebar_project_modal_usage_event',
+                          '{{label}}: {{total}} (input {{input}}, output {{output}})',
+                          {
+                            label,
+                            total: formatNumber(total),
+                            input: formatNumber(event.inputTokens),
+                            output: formatNumber(event.outputTokens),
+                          },
+                        )}
                       </li>
                     );
                   })}
                 </ul>
               )}
               {!isUsageLoading && !modalUsageData && (
-                <p className="mt-2 text-slate-500">No usage data available.</p>
+                <p className="mt-2 text-slate-500">
+                  {localize(
+                    'sidebar_project_modal_usage_empty',
+                    'No usage data available.',
+                  )}
+                </p>
               )}
             </div>
             <div className="flex justify-end gap-2">
@@ -921,14 +1130,16 @@ export const LeftSidebar = () => {
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:border-slate-400 hover:text-slate-900"
                 disabled={modalState.submitting}
               >
-                Cancel
+                {localize('common_cancel', 'Cancel')}
               </button>
               <button
                 type="submit"
                 className="rounded-md bg-indigo-500 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-60"
                 disabled={modalState.submitting}
               >
-                {modalState.submitting ? "Saving…" : "Save changes"}
+                {modalState.submitting
+                  ? localize('sidebar_project_modal_saving', 'Saving…')
+                  : localize('sidebar_project_modal_save', 'Save changes')}
               </button>
             </div>
           </form>
@@ -936,8 +1147,11 @@ export const LeftSidebar = () => {
       )}
       {modalState?.type === "delete" && (
         <Modal
-          title="프로젝트 삭제"
-          description="삭제된 프로젝트는 7일 동안 복구할 수 있습니다."
+          title={localize('sidebar_project_delete_title', 'Delete project')}
+          description={localize(
+            'sidebar_project_delete_description',
+            'You can restore deleted projects within 7 days.',
+          )}
           onClose={() => {
             if (modalState.submitting) return;
             closeModal();
@@ -945,8 +1159,11 @@ export const LeftSidebar = () => {
         >
           <div className="space-y-4 text-sm text-slate-600">
             <p>
-              <strong>{modalState.project.title || "제목 없음"}</strong>{" "}
-              프로젝트를 삭제하시겠습니까?
+              {localize(
+                'sidebar_project_delete_prompt',
+                'Do you want to delete "{{title}}"?',
+                { title: modalState.project.title || localize('sidebar_project_untitled', 'Untitled') },
+              )}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -958,7 +1175,7 @@ export const LeftSidebar = () => {
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:border-slate-400 hover:text-slate-900"
                 disabled={modalState.submitting}
               >
-                취소
+                {localize('common_cancel', 'Cancel')}
               </button>
               <button
                 type="button"
@@ -966,7 +1183,9 @@ export const LeftSidebar = () => {
                 className="rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400 disabled:opacity-60"
                 disabled={modalState.submitting}
               >
-                {modalState.submitting ? "삭제 중..." : "삭제"}
+                {modalState.submitting
+                  ? localize('sidebar_project_delete_submitting', 'Deleting…')
+                  : localize('sidebar_project_delete_confirm', 'Delete')}
               </button>
             </div>
           </div>
@@ -1033,13 +1252,19 @@ const Section = ({
   );
 };
 
-const NewProjectCard = ({ onClick }: { onClick: () => void }) => (
+const NewProjectCard = ({
+  onClick,
+  label,
+}: {
+  onClick: () => void;
+  label: string;
+}) => (
   <button
     type="button"
     onClick={onClick}
     className="group flex w-full items-center gap-3 rounded-xl bg-white px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-indigo-50 hover:text-indigo-500"
   >
     <NewProjectIcon size={18} className="text-slate-400 transition group-hover:text-indigo-500" />
-    <span className="text-sm font-medium text-slate-900">New project</span>
+    <span className="text-sm font-medium text-slate-900">{label}</span>
   </button>
 );
