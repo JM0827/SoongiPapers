@@ -340,6 +340,7 @@
   "origin_prep_refresh_error": "Failed to re-run analysis.",
   "origin_prep_guard_label": "Prep needed",
   "origin_prep_guard_generic": "Finish the manuscript prep steps before translating.",
+  "origin_prep_guard_loading": "We are still loading the manuscript prep details. Please wait a moment.",
   "origin_prep_guard_analysis_missing": "Run the manuscript analysis before starting translation.",
   "origin_prep_guard_analysis_running": "Manuscript analysis is still running. Please wait until it finishes.",
   "origin_prep_guard_analysis_stale": "The manuscript changed. Re-run the analysis to refresh translation notes.",
