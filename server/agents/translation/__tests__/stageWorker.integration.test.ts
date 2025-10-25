@@ -48,7 +48,7 @@ test('literal stage persists results and enqueues style', async (t) => {
         {
           segmentId: 'seg-1',
           segmentIndex: 0,
-          textSource: '원문 문장',
+          textSource: '원작 문장',
           stageOutputs: {},
         },
       ],
@@ -110,7 +110,7 @@ test('qa stage without guard failures finalizes and completes workflow', async (
         {
           segmentId: 'seg-1',
           segmentIndex: 0,
-          textSource: '원문 문장',
+          textSource: '원작 문장',
           stageOutputs: {
             literal: { segmentId: 'seg-1', stage: 'literal', textTarget: 'literal-output' },
             style: { segmentId: 'seg-1', stage: 'style', textTarget: 'style-output' },
@@ -181,7 +181,7 @@ test('qa stage guard failure enqueues retry with downgraded config', async (t) =
         {
           segmentId: 'seg-1',
           segmentIndex: 0,
-          textSource: '원문 문장',
+          textSource: '원작 문장',
           stageOutputs: {
             literal: { segmentId: 'seg-1', stage: 'literal', textTarget: 'literal-output' },
             style: { segmentId: 'seg-1', stage: 'style', textTarget: 'style-output' },

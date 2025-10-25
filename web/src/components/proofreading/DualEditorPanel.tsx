@@ -10,6 +10,7 @@ import {
   Sparkles,
   Heart,
   Shield,
+  BookOpenCheck,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -21,6 +22,8 @@ import type {
   SelectionRange,
   ProofreadingIssue,
   TranslationStageKey,
+  DocumentProfileSummary,
+  DocumentSummaryFallback,
 } from '../../types/domain';
 import { useProofreadEditorContext } from '../../context/proofreadEditor';
 import {
@@ -343,7 +346,18 @@ const editorSupportsHiddenAreas = (
   setHiddenAreas: (ranges: Monaco.Range[]) => void;
 } => typeof (editor as { setHiddenAreas?: unknown }).setHiddenAreas === 'function';
 
-export const DualEditorPanel = () => {
+interface DualEditorPanelProps {
+  originProfile: DocumentProfileSummary | null;
+  originFallback: DocumentSummaryFallback | null;
+}
+
+const hasText = (value?: string | null) =>
+  typeof value === 'string' && value.trim().length > 0;
+
+export const DualEditorPanel = ({
+  originProfile,
+  originFallback,
+}: DualEditorPanelProps) => {
   const {
     dataset,
     segments,
@@ -378,11 +392,11 @@ export const DualEditorPanel = () => {
     [segments],
   );
   const qualityButtonClass = hasTranslationContent
-    ? 'inline-flex items-center justify-center rounded border border-emerald-100 bg-white/70 p-1.5 text-emerald-600 transition hover:border-emerald-200 hover:bg-emerald-100 hover:text-emerald-700'
-    : 'inline-flex items-center justify-center rounded border border-emerald-50 bg-transparent p-1.5 text-emerald-200 transition cursor-not-allowed';
+    ? 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-100 bg-white/70 text-emerald-600 transition hover:border-emerald-200 hover:bg-emerald-100 hover:text-emerald-700'
+    : 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-50 bg-transparent text-emerald-200 transition cursor-not-allowed';
   const qualityButtonTitle = hasTranslationContent
-    ? '품질 평가 보기'
-    : '번역본이 준비되면 품질 평가를 확인할 수 있습니다.';
+    ? '품질 검토 보기'
+    : '번역본이 준비되면 품질 검토를 확인할 수 있습니다.';
 
   const proofIssuesById = useMemo(() => {
     const map = new Map<string, ProofreadIssueEntry>();
@@ -414,6 +428,325 @@ export const DualEditorPanel = () => {
     },
     [locale],
   );
+  const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
+  const originSummary = useMemo(
+    () => originProfile?.summary ?? originFallback?.summary ?? null,
+    [originFallback, originProfile],
+  );
+  const originMetrics = useMemo(
+    () => originProfile?.metrics ?? originFallback?.metrics ?? null,
+    [originFallback, originProfile],
+  );
+  const originSummaryTimestamp = useMemo(() => {
+    if (originProfile?.updatedAt) return originProfile.updatedAt;
+    if (originProfile?.createdAt) return originProfile.createdAt;
+    return originFallback?.timestamp ?? null;
+  }, [originFallback, originProfile]);
+  const translationNotes = originProfile?.translationNotes ?? null;
+  const characterEntries = useMemo(
+    () =>
+      (translationNotes?.characters ?? []).filter(
+        (character) =>
+          hasText(character?.name) ||
+          hasText(character?.targetName) ||
+          hasText(character?.age) ||
+          hasText(character?.gender) ||
+          (character?.traits?.length ?? 0) > 0,
+      ),
+    [translationNotes],
+  );
+  const measurementEntries = useMemo(
+    () =>
+      (translationNotes?.measurementUnits ?? []).filter(
+        (entry) => hasText(entry?.source) || hasText(entry?.target),
+      ),
+    [translationNotes],
+  );
+  const linguisticEntries = useMemo(
+    () =>
+      (translationNotes?.linguisticFeatures ?? []).filter(
+        (entry) => hasText(entry?.source) || hasText(entry?.target),
+      ),
+    [translationNotes],
+  );
+  const namedEntityEntries = useMemo(
+    () =>
+      (translationNotes?.namedEntities ?? []).filter((entry) =>
+        hasText(entry?.name) || hasText(entry?.targetName),
+      ),
+    [translationNotes],
+  );
+  const locationEntries = useMemo(
+    () =>
+      (translationNotes?.locations ?? []).filter((entry) =>
+        hasText(entry?.name) || hasText(entry?.targetName),
+      ),
+    [translationNotes],
+  );
+  const hasTranslationNotesContent = useMemo(
+    () =>
+      Boolean(
+        (translationNotes && hasText(translationNotes.timePeriod)) ||
+          characterEntries.length ||
+          measurementEntries.length ||
+          linguisticEntries.length ||
+          namedEntityEntries.length ||
+          locationEntries.length,
+      ),
+    [
+      characterEntries,
+      linguisticEntries,
+      locationEntries,
+      measurementEntries,
+      namedEntityEntries,
+      translationNotes,
+    ],
+  );
+  const summaryButtonLabel = localize(
+    'proofread_editor_origin_summary_button',
+    '원작 요약 보기',
+  );
+  const summaryModalTitle = localize(
+    'proofread_editor_origin_summary_modal_title',
+    '원작 요약 & 번역 노트',
+  );
+  const summaryModalDescription = '';
+  const summaryCloseLabel = localize(
+    'proofread_editor_origin_summary_close',
+    '원작 요약 닫기',
+  );
+  const summarySectionTitle = localize(
+    'rightpanel_origin_summary_title',
+    '원작 요약',
+  );
+  const notesSectionTitle = localize(
+    'rightpanel_translation_notes_title',
+    '번역 노트',
+  );
+  const summaryEmptyLabel = localize(
+    'proofread_editor_origin_summary_empty',
+    '원작 요약이 아직 준비되지 않았습니다.',
+  );
+  const notesEmptyLabel = localize(
+    'proofread_editor_origin_notes_empty',
+    '번역 노트가 아직 없습니다.',
+  );
+  const measurementUnitsLabel = localize(
+    'rightpanel_translation_notes_measurement_units',
+    '단위 정보',
+  );
+  const linguisticFeaturesLabel = localize(
+    'rightpanel_translation_notes_linguistic_features',
+    '언어 특징',
+  );
+  const charactersLabel = localize(
+    'rightpanel_translation_notes_characters',
+    '등장인물',
+  );
+  const namedEntitiesLabel = localize(
+    'rightpanel_translation_notes_named_entities',
+    '고유명사',
+  );
+  const locationsLabel = localize(
+    'rightpanel_translation_notes_locations',
+    '장소',
+  );
+  const timePeriodLabel = localize(
+    'rightpanel_translation_notes_time_period',
+    '시대 배경',
+  );
+  const traitsLabel = localize(
+    'rightpanel_translation_notes_traits',
+    '특징',
+  );
+  const nameLabel = localize('rightpanel_translation_notes_name', '이름');
+  const targetNameLabel = localize(
+    'rightpanel_translation_notes_target_name',
+    '번역 이름',
+  );
+  const ageLabel = localize('rightpanel_translation_notes_age', '나이');
+  const genderLabel = localize('rightpanel_translation_notes_gender', '성별');
+  const summaryTimestampLabel = useMemo(() => {
+    if (!originSummaryTimestamp) return null;
+    const date = new Date(originSummaryTimestamp);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleString();
+  }, [originSummaryTimestamp]);
+  const summaryMetricChips = useMemo(() => {
+    const chips: string[] = [];
+    if (
+      originMetrics?.wordCount !== undefined &&
+      originMetrics?.wordCount !== null
+    ) {
+      chips.push(
+        localize(
+          'rightpanel_summary_metric_words',
+          `${originMetrics.wordCount.toLocaleString()} words`,
+          { count: originMetrics.wordCount.toLocaleString() },
+        ),
+      );
+    }
+    if (
+      originMetrics?.charCount !== undefined &&
+      originMetrics?.charCount !== null
+    ) {
+      chips.push(
+        localize(
+          'rightpanel_summary_metric_characters',
+          `${originMetrics.charCount.toLocaleString()} characters`,
+          { count: originMetrics.charCount.toLocaleString() },
+        ),
+      );
+    }
+    if (
+      originMetrics?.readingTimeMinutes !== undefined &&
+      originMetrics?.readingTimeMinutes !== null
+    ) {
+      const minutes = Math.max(1, Math.round(originMetrics.readingTimeMinutes));
+      chips.push(
+        localize(
+          'rightpanel_summary_metric_minutes',
+          `${minutes} mins`,
+          { count: minutes },
+        ),
+      );
+    }
+    if (summaryTimestampLabel) {
+      chips.push(
+        localize(
+          'rightpanel_summary_metric_updated',
+          `업데이트: ${summaryTimestampLabel}`,
+          { timestamp: summaryTimestampLabel },
+        ),
+      );
+    }
+    return chips;
+  }, [localize, originMetrics, summaryTimestampLabel]);
+
+  const renderPairSection = (
+    title: string,
+    entries: Array<{ source: string; target: string | null }>,
+    keyPrefix: string,
+  ): JSX.Element | null => {
+    if (!entries.length) return null;
+    return (
+      <div className="space-y-1" key={`${keyPrefix}-section`}>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          {title}
+        </p>
+        <ul className="space-y-1 text-sm text-slate-700">
+          {entries.map((entry, index) => (
+            <li
+              key={`${keyPrefix}-${index}`}
+              className="flex flex-wrap items-center gap-2"
+            >
+              <span className="font-medium text-slate-900">
+                {hasText(entry.source) ? entry.source : '—'}
+              </span>
+              {hasText(entry.target) ? (
+                <span className="text-slate-500">→ {entry.target}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  const renderEntitySection = (
+    title: string,
+    entries: Array<{ name: string; targetName: string | null; frequency?: number }>,
+    keyPrefix: string,
+    options?: { twoColumn?: boolean },
+  ): JSX.Element | null => {
+    if (!entries.length) return null;
+    const twoColumn = options?.twoColumn ?? false;
+    return (
+      <div className="space-y-1" key={`${keyPrefix}-entities`}>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          {title}
+        </p>
+        <div
+          className={twoColumn ? 'grid gap-2 text-sm text-slate-700 sm:grid-cols-2' : 'space-y-1 text-sm text-slate-700'}
+        >
+          {entries.map((entry, index) => {
+            const freqLabel =
+              typeof entry.frequency === 'number'
+                ? localize(
+                    'rightpanel_translation_notes_frequency_label',
+                    `freq ${entry.frequency}`,
+                    { count: entry.frequency },
+                  )
+                : null;
+            return (
+              <div
+                key={`${keyPrefix}-entry-${index}`}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <span className="font-medium text-slate-900">
+                  {hasText(entry.name) ? entry.name : '—'}
+                </span>
+                {hasText(entry.targetName) ? (
+                  <span className="text-slate-500">→ {entry.targetName}</span>
+                ) : null}
+                {freqLabel ? (
+                  <span className="text-[11px] text-slate-400">{freqLabel}</span>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderCharacterSection = (): JSX.Element | null => {
+    if (!characterEntries.length) return null;
+    return (
+      <div className="space-y-1">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          {charactersLabel}
+        </p>
+        <div className="space-y-2">
+          {characterEntries.map((character, index) => (
+            <div
+              key={`character-${index}`}
+              className="space-y-1 text-sm text-slate-700"
+            >
+              <div className="flex flex-wrap items-center gap-2 text-slate-900">
+                <span className="font-semibold">
+                  {hasText(character.name) ? character.name : nameLabel}
+                </span>
+                {hasText(character.targetName) ? (
+                  <span className="text-slate-500">→ {character.targetName}</span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
+                {hasText(character.age) ? (
+                  <span>
+                    {ageLabel}: {character.age}
+                  </span>
+                ) : null}
+                {hasText(character.gender) ? (
+                  <span>
+                    {genderLabel}: {character.gender}
+                  </span>
+                ) : null}
+              </div>
+              {character.traits?.length ? (
+                <div className="flex flex-wrap gap-1 text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-600">{traitsLabel}:</span>
+                  {character.traits.map((trait, traitIndex) => (
+                    <span key={`trait-${index}-${traitIndex}`}>{trait}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
   const getStageLabel = useCallback(
     (stage: TranslationStageKey) =>
       localize(
@@ -2073,8 +2406,21 @@ export const DualEditorPanel = () => {
         </div>
       )}
       <div className="flex h-full flex-col overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-emerald-200 bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">
-          {localize('proofread_editor_origin_label', 'Manuscript')}
+        <header className="border-b border-slate-200 bg-sky-50 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-900">
+              {localize('proofread_editor_origin_label', 'Manuscript')}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsSummaryModalOpen(true)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+              aria-label={summaryButtonLabel}
+              title={summaryButtonLabel}
+            >
+              <BookOpenCheck className="h-4 w-4" />
+            </button>
+          </div>
         </header>
         <div className="flex-1">
           <Editor
@@ -2105,10 +2451,10 @@ export const DualEditorPanel = () => {
         <div className="h-10 w-px bg-slate-200" />
       </div>
       <div className="flex h-full flex-col overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-emerald-200 bg-sky-50 px-4 py-2">
+        <header className="border-b border-slate-200 bg-sky-50 px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-900">
                 {localize('proofread_editor_translation_label', 'Translation')}
               </span>
               <button
@@ -2217,6 +2563,8 @@ export const DualEditorPanel = () => {
           description={viewerCountsLabel}
           onClose={handleCloseStageViewer}
           maxWidthClass="max-w-3xl"
+          showCloseButton
+          closeLabel={localize('proofread_stage_viewer_close', 'Close')}
         >
           <div className="space-y-4 text-sm text-slate-700">
             {knownAvailableStages.length ? (
@@ -2310,6 +2658,114 @@ export const DualEditorPanel = () => {
                 {localize('proofread_stage_viewer_close', 'Close')}
               </button>
             </div>
+          </div>
+        </Modal>
+      )}
+      {isSummaryModalOpen && (
+        <Modal
+          title={summaryModalTitle}
+          description={summaryModalDescription}
+          onClose={() => setIsSummaryModalOpen(false)}
+          maxWidthClass="max-w-2xl"
+          showCloseButton
+          closeLabel={summaryCloseLabel}
+        >
+          <div className="max-h-[65vh] space-y-4 overflow-y-auto text-sm text-slate-700">
+            <section className="space-y-2">
+              <h3 className="text-base font-semibold text-slate-900">
+                {summarySectionTitle}
+              </h3>
+              {originSummary ? (
+                <div className="space-y-3">
+                  {originSummary.intention ? (
+                    <p className="text-sm text-slate-800">
+                      <span className="font-semibold text-slate-900">
+                        {localize('rightpanel_summary_intention_label', '작가의도:')}
+                      </span>{' '}
+                      <span className="whitespace-pre-wrap">{originSummary.intention}</span>
+                    </p>
+                  ) : null}
+                  {originSummary.story ? (
+                    <p className="text-sm text-slate-800">
+                      <span className="font-semibold text-slate-900">
+                        {localize('rightpanel_summary_story_label', '줄거리:')}
+                      </span>{' '}
+                      <span className="whitespace-pre-wrap">{originSummary.story}</span>
+                    </p>
+                  ) : null}
+                  {originSummary.readerPoints?.length ? (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {localize('rightpanel_summary_reader_points_label', '독자 포인트')}
+                      </p>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-700">
+                        {originSummary.readerPoints.map((point, index) => (
+                          <li key={`reader-point-${index}`}>{point}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {summaryMetricChips.length ? (
+                    <ul className="flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      {summaryMetricChips.map((chip, index) => (
+                        <li
+                          key={`summary-metric-${index}`}
+                          className="rounded-full bg-slate-100 px-2 py-0.5"
+                        >
+                          {chip}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">{summaryEmptyLabel}</p>
+              )}
+            </section>
+            <section className="space-y-2">
+              <h3 className="text-base font-semibold text-slate-900">
+                {notesSectionTitle}
+              </h3>
+              {hasTranslationNotesContent ? (
+                <div className="space-y-3">
+                  {translationNotes && hasText(translationNotes.timePeriod) ? (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {timePeriodLabel}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-slate-800">
+                        {translationNotes.timePeriod}
+                      </p>
+                    </div>
+                  ) : null}
+                  {renderCharacterSection()}
+                  {renderEntitySection(
+                    namedEntitiesLabel,
+                    namedEntityEntries,
+                    'entities',
+                    { twoColumn: true },
+                  )}
+                  {renderEntitySection(
+                    locationsLabel,
+                    locationEntries,
+                    'locations',
+                    { twoColumn: true },
+                  )}
+                  {renderPairSection(
+                    measurementUnitsLabel,
+                    measurementEntries,
+                    'measurement',
+                  )}
+                  {renderPairSection(
+                    linguisticFeaturesLabel,
+                    linguisticEntries,
+                    'linguistic',
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">{notesEmptyLabel}</p>
+              )}
+            </section>
           </div>
         </Modal>
       )}

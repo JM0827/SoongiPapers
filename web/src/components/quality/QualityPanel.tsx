@@ -407,7 +407,7 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
 
       {stage === "no-assessment" && !qualityResult && qualityStatus !== "running" && (
         <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-          품질 평가가 실행되면 정량/정성 분석 결과가 표시됩니다.
+          품질 검토가 실행되면 정량/정성 분석 결과가 표시됩니다.
         </div>
       )}
 

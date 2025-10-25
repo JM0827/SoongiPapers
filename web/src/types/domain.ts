@@ -423,6 +423,23 @@ export interface DocumentProfileSummary {
   updatedAt: string | null;
 }
 
+export interface DocumentSummaryFallback {
+  summary: {
+    story: string;
+    intention: string | null;
+    readerPoints: string[];
+  };
+  metrics: {
+    wordCount: number;
+    charCount: number;
+    paragraphCount: number;
+    readingTimeMinutes: number;
+    readingTimeLabel: string;
+  };
+  timestamp: string | null;
+  language: string | null;
+}
+
 export type OriginPrepUploadStatus = 'missing' | 'uploaded';
 export type OriginPrepAnalysisStatus =
   | 'missing'

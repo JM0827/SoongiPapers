@@ -529,7 +529,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
               return fail(
                 reply,
                 409,
-                "해당 프로젝트에서는 품질 평가를 실행할 수 없습니다.",
+                "해당 프로젝트에서는 품질 검토를 실행할 수 없습니다.",
               );
             }
             workflowRun = wfResult.run;
@@ -538,7 +538,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
               request,
               reply,
               workflowError,
-              "품질 평가 워크플로우를 준비하지 못했습니다",
+              "품질 검토 워크플로우를 준비하지 못했습니다",
             );
           }
         }

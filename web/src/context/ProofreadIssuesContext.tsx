@@ -271,7 +271,7 @@ const severityRank: Record<(typeof severityOrder)[number], number> = {
 
 const describeIssueLocation = (entry: ProofreadIssueEntry) => {
   if (typeof entry.issue.kr_sentence_id === "number") {
-    return `원문 문장 ${entry.issue.kr_sentence_id}`;
+    return `원작 문장 ${entry.issue.kr_sentence_id}`;
   }
   if (typeof entry.issue.en_sentence_id === "number") {
     return `번역 문장 ${entry.issue.en_sentence_id}`;

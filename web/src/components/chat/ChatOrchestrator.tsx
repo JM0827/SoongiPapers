@@ -713,7 +713,7 @@ export const ChatOrchestrator = ({
       const afterPreview = previewText(suggestion.resultText);
       const lines = [
         localize("chat_editing_suggestion_heading", "✏️ 수정 제안이 도착했어요."),
-        localize("chat_editing_suggestion_original", `원문: ${beforePreview}`, {
+        localize("chat_editing_suggestion_original", `원작: ${beforePreview}`, {
           text: beforePreview,
         }),
         localize("chat_editing_suggestion_candidate", `제안: ${afterPreview}`, {
@@ -983,13 +983,13 @@ export const ChatOrchestrator = ({
           id: `${selection.id}-name-original`,
           label: localize(
             "chat_editing_quickname_original_label",
-            "원문 표기 유지",
+            "원작 표기 유지",
           ),
           onSelect: () =>
             run(
               localize(
                 "chat_editing_quickname_original_instruction",
-                "이름을 원문 표기대로 유지하도록 정리해 주세요.",
+                "이름을 원작 표기대로 유지하도록 정리해 주세요.",
               ),
             ),
         });
@@ -1932,10 +1932,10 @@ export const ChatOrchestrator = ({
         kind: "uploadOrigin",
         message: localize(
           "chat_rec_upload_origin",
-          "새 프로젝트를 열었어요. 원문을 올리고 시작해 볼까요?",
+          "새 프로젝트를 열었어요. 원작을 올리고 시작해 볼까요?",
         ),
         action: { type: "startUploadFile" },
-        buttonLabel: localize("chat_rec_upload_origin_cta", "원문 올리기"),
+        buttonLabel: localize("chat_rec_upload_origin_cta", "원작 올리기"),
       });
       return items;
     }
@@ -1950,7 +1950,7 @@ export const ChatOrchestrator = ({
         kind: "startTranslation",
         message: localize(
           "chat_rec_start_translation",
-          "원문이 준비됐어요. 번역을 시작해 볼까요?",
+          "원작이 준비됐어요. 번역을 시작해 볼까요?",
         ),
         action: {
           type: "startTranslation",
@@ -1993,12 +1993,12 @@ export const ChatOrchestrator = ({
         kind: "startQuality",
         message: localize(
           "chat_rec_start_quality",
-          "교정이 끝났어요. 품질 평가로 마무리해 볼까요?",
+          "교정이 끝났어요. 품질 검토로 마무리해 볼까요?",
         ),
         action: { type: "startQuality" },
         buttonLabel: localize(
           "chat_rec_start_quality_cta",
-          "품질 평가",
+          "품질 검토",
         ),
       });
     }
@@ -2225,11 +2225,11 @@ export const ChatOrchestrator = ({
         return snapshot.ui.originExpanded
           ? localize(
               "chat_origin_view_open",
-              "우측 미리보기 탭에서 원문 섹션을 이미 펼쳐두었습니다.",
+              "우측 미리보기 탭에서 원작 섹션을 이미 펼쳐두었습니다.",
             )
           : localize(
               "chat_origin_view_hint",
-              `${tabLabel} 원문 섹션을 확인할 수 있습니다.`,
+              `${tabLabel} 원작 섹션을 확인할 수 있습니다.`,
               { tabLabel },
             );
       }
@@ -2255,7 +2255,7 @@ export const ChatOrchestrator = ({
         pushAssistant(
           localize(
             "chat_no_project_ready",
-            `아직 프로젝트가 준비되지 않았습니다. 지원 형식(${SUPPORTED_ORIGIN_LABEL}) 원문을 올리면 바로 새 프로젝트를 만들고 내용을 저장해 드릴게요.`,
+            `아직 프로젝트가 준비되지 않았습니다. 지원 형식(${SUPPORTED_ORIGIN_LABEL}) 원작을 올리면 바로 새 프로젝트를 만들고 내용을 저장해 드릴게요.`,
             { formats: SUPPORTED_ORIGIN_LABEL },
           ),
           {
@@ -2287,7 +2287,7 @@ export const ChatOrchestrator = ({
         );
 
       const directOriginCommand =
-        containsOpenVerb(["원문", "origin"]) ||
+        containsOpenVerb(["원작", "origin"]) ||
         /open\s+origin|show\s+origin/.test(normalized);
       if (directOriginCommand) {
         setTab("preview");
@@ -2314,7 +2314,7 @@ export const ChatOrchestrator = ({
           pushAssistant(
             localize(
               "chat_origin_missing",
-              `아직 저장된 원문이 없습니다. ${SUPPORTED_ORIGIN_LABEL} 파일을 업로드하거나 원문을 입력해 주세요.`,
+              `아직 저장된 원작이 없습니다. ${SUPPORTED_ORIGIN_LABEL} 파일을 업로드하거나 원작을 입력해 주세요.`,
               { formats: SUPPORTED_ORIGIN_LABEL },
             ),
             {
@@ -2469,11 +2469,11 @@ export const ChatOrchestrator = ({
     try {
       const project = await createProject();
       pushAssistant(
-        `새 프로젝트를 생성했습니다. 제목은 "${project.title || "번역"}"입니다. 원문을 업로드해 주세요.`,
+        `새 프로젝트를 생성했습니다. 제목은 "${project.title || "번역"}"입니다. 원작을 업로드해 주세요.`,
         { label: "Project created", tone: "success" },
         adaptActionsForOrigin([
-          { type: "startUploadFile", reason: "원문 업로드" },
-        ]) ?? [{ type: "startUploadFile" as const, reason: "원문 업로드" }],
+          { type: "startUploadFile", reason: "원작 업로드" },
+        ]) ?? [{ type: "startUploadFile" as const, reason: "원작 업로드" }],
         true,
       );
       setShowUploader(true);
@@ -2502,8 +2502,8 @@ export const ChatOrchestrator = ({
       switch (action.type) {
         case "startTranslation":
           if (!hasOrigin) {
-            pushAssistant("먼저 지원 형식의 원문 파일을 업로드해 주세요.", {
-              label: "원문 필요",
+            pushAssistant("먼저 지원 형식의 원작 파일을 업로드해 주세요.", {
+              label: "원작 필요",
               tone: "default",
             });
             openFileDialog();
@@ -2652,7 +2652,7 @@ export const ChatOrchestrator = ({
           triggerQualityDialog();
           if (qualityState.status === "running") {
             pushAssistant(
-              "품질 평가가 진행 중입니다. 평가가 완료되면 결과를 알려드릴게요.",
+              "품질 검토가 진행 중입니다. 평가가 완료되면 결과를 알려드릴게요.",
               {
                 label: "Quality running",
                 tone: "default",
@@ -2660,7 +2660,7 @@ export const ChatOrchestrator = ({
             );
           } else if (qualityState.status === "failed") {
             pushAssistant(
-              "최근 품질 평가가 실패했습니다. 로그를 확인하고 다시 시도해 주세요.",
+              "최근 품질 검토가 실패했습니다. 로그를 확인하고 다시 시도해 주세요.",
               {
                 label: "Quality failed",
                 tone: "error",
@@ -2668,7 +2668,7 @@ export const ChatOrchestrator = ({
             );
           } else {
             pushAssistant(
-              "아직 품질 평가를 실행하지 않았습니다. 필요하다면 품질 평가를 요청해 보세요.",
+              "아직 품질 검토를 실행하지 않았습니다. 필요하다면 품질 검토를 요청해 보세요.",
               {
                 label: "Quality pending",
                 tone: "default",
@@ -2820,15 +2820,15 @@ export const ChatOrchestrator = ({
         "upload new origin",
         "replace origin",
         "reset origin",
-        "원문 다시",
-        "원문 새로",
-        "원문 업데이트",
+        "원작 다시",
+        "원작 새로",
+        "원작 업데이트",
       ].some((phrase) => normalized.includes(phrase));
 
       if (wantsUploader) {
         setShowUploader(true);
         pushAssistant(
-          "새 원문을 업로드할 수 있도록 드래그&드롭 영역을 다시 열어두었습니다.",
+          "새 원작을 업로드할 수 있도록 드래그&드롭 영역을 다시 열어두었습니다.",
           { label: "Origin uploader ready", tone: "default" },
         );
       }
@@ -3060,7 +3060,7 @@ export const ChatOrchestrator = ({
           const project = await createProject();
           resolvedProjectId = project.project_id;
           pushAssistant(
-            `"${project.title || "새 프로젝트"}" 프로젝트가 준비되었습니다. 원문을 저장할게요.`,
+            `"${project.title || "새 프로젝트"}" 프로젝트가 준비되었습니다. 원작을 저장할게요.`,
             {
               label: "Project ready",
               tone: "success",
@@ -3095,7 +3095,7 @@ export const ChatOrchestrator = ({
         setShowUploader(false);
       } catch (err) {
         pushAssistant(
-          "원문 저장 중 오류가 발생했습니다.",
+          "원작 저장 중 오류가 발생했습니다.",
           {
             label: "Upload failed",
             description: err instanceof Error ? err.message : "Unknown error",
@@ -3330,7 +3330,7 @@ export const ChatOrchestrator = ({
                 <p className="font-medium text-slate-600">
                   {localize(
                     "chat_dropzone_title",
-                    "원문 파일을 드래그해 여기에 놓거나 원문 올리기 버튼을 눌러 원문 파일을 선택해 주세요.",
+                    "원작 파일을 드래그해 여기에 놓거나 원작 올리기 버튼을 눌러 원작 파일을 선택해 주세요.",
                   )}
                 </p>
                 <p className="text-slate-600">
@@ -3352,7 +3352,7 @@ export const ChatOrchestrator = ({
                   disabled={isUploading}
                   className="mt-3 inline-flex items-center rounded border border-indigo-300 px-3 py-1 text-xs font-medium text-indigo-600 transition hover:border-indigo-400 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {localize("chat_dropzone_select", "원문 올리기")}
+                  {localize("chat_dropzone_select", "원작 올리기")}
                 </button>
                 {(isUploading ||
                   translationVisual.overall.running ||

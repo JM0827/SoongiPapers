@@ -467,7 +467,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       if (!latestUserMessage) {
         return reply.send({
           reply:
-            "무엇을 도와드릴까요? 번역, 교정, 품질 평가 등 원하는 작업을 말씀해 주세요.",
+            "무엇을 도와드릴까요? 번역, 교정, 품질 검토 등 원하는 작업을 말씀해 주세요.",
           actions: [],
         });
       }
@@ -1694,12 +1694,12 @@ function reconcileActions(options: ReconcileOptions): ReconcileResult {
     if (!translationReady) {
       remove(
         "startQuality",
-        "번역이 완료되지 않아 품질 평가를 시작하지 않았습니다.",
+        "번역이 완료되지 않아 품질 검토를 시작하지 않았습니다.",
       );
     } else if (qualityCompleted && !rerun) {
       remove(
         "startQuality",
-        "최근 품질 평가가 완료된 상태입니다. 다시 실행하려면 '다시'와 함께 명확히 요청해 주세요.",
+        "최근 품질 검토가 완료된 상태입니다. 다시 실행하려면 '다시'와 함께 명확히 요청해 주세요.",
       );
     } else {
       ensure("startQuality", {
@@ -1721,7 +1721,7 @@ function reconcileActions(options: ReconcileOptions): ReconcileResult {
     if (qualityCompleted) {
       remove(
         "startQuality",
-        "최근 품질 평가가 완료된 상태입니다. 다시 실행하려면 구체적으로 요청해 주세요.",
+        "최근 품질 검토가 완료된 상태입니다. 다시 실행하려면 구체적으로 요청해 주세요.",
       );
     }
   }
@@ -1730,7 +1730,7 @@ function reconcileActions(options: ReconcileOptions): ReconcileResult {
     remove("startProofread", "번역본이 준비되면 교정을 도와드릴게요.");
     remove(
       "startQuality",
-      "번역본이 준비되지 않아 품질 평가를 진행할 수 없습니다.",
+      "번역본이 준비되지 않아 품질 검토를 진행할 수 없습니다.",
     );
   }
 

@@ -1867,7 +1867,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       );
       return reply
         .status(500)
-        .send({ error: "원문 준비 상태를 확인하지 못했습니다." });
+        .send({ error: "원작 준비 상태를 확인하지 못했습니다." });
     }
 
     if (unmet.length) {
@@ -1896,7 +1896,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     );
     return reply
       .status(422)
-      .send({ error: "원문을 분할하지 못했습니다. 내용을 확인해 주세요." });
+      .send({ error: "원작을 분할하지 못했습니다. 내용을 확인해 주세요." });
   }
 
   let projectMetadata: any = null;
