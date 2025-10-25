@@ -241,11 +241,11 @@ const getActionLabel = (
     case "startTranslation":
       return localize("chat_action_start_translation", "번역 시작");
     case "startUploadFile":
-      return localize("chat_action_start_upload", "원문 업로드");
+      return localize("chat_action_start_upload", "원작 업로드");
     case "startProofread":
       return localize("chat_action_start_proofread", "교정 시작");
     case "startQuality":
-      return localize("chat_action_start_quality", "품질 평가");
+      return localize("chat_action_start_quality", "품질 검토");
     case "viewQualityReport":
       return localize("chat_action_view_quality", "품질 리포트 보기");
     case "viewTranslatedText":

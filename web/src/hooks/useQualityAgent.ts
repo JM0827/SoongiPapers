@@ -112,7 +112,7 @@ export const useQualityAgent = ({
     } else if (stage.includes("fail") && quality.status === "idle") {
       setQualityForProject({
         status: "failed",
-        lastError: "이전 품질 평가가 실패했습니다.",
+        lastError: "이전 품질 검토가 실패했습니다.",
       });
     }
   }, [

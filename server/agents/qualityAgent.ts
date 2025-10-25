@@ -11,7 +11,7 @@ import { SHARED_TRANSLATION_GUIDELINES } from "./prompts/sharedGuidelines";
 
 // 정량 평가 항목 키
 export type QuantKeys =
-  | "Fidelity" // 원문 의미 충실성
+  | "Fidelity" // 원작 의미 충실성
   | "Fluency" // 영어 문장 유창성
   | "Literary Style" // 문체/톤 재현
   | "Cultural Resonance" // 문화적 공명
@@ -49,7 +49,7 @@ export interface FinalEvaluation {
 
 // 평가 함수 입력값
 export interface EvaluateParams {
-  source: string; // 원문 (한글)
+  source: string; // 원작 (한글)
   translated: string; // 번역문 (영어)
   authorIntention?: string; // 작가 의도/번역 방향 (선택)
   model?: string; // OpenAI 모델명 (기본 gpt-4.1)
@@ -166,7 +166,7 @@ function splitIntoChunks(text: string, target = 8000, overlap = 400): string[] {
   return chunks;
 }
 
-// 번역문은 원문과 길이가 다르므로, 개수 맞춰 비율로 자르기
+// 번역문은 원작과 길이가 다르므로, 개수 맞춰 비율로 자르기
 function proportionalSliceByCount(text: string, count: number): string[] {
   if (count <= 1) return [text];
   const len = text.length;
@@ -522,7 +522,7 @@ export async function evaluateQuality({
     throw new Error("OPENAI_API_KEY is not set.");
   }
 
-  // 1) 원문과 번역문을 청크 단위로 분할
+  // 1) 원작과 번역문을 청크 단위로 분할
   console.log("✂️ [QualityAgent] Splitting text into chunks...");
   const sChunks = splitIntoChunks(source, maxCharsPerChunk, overlap);
   const tChunks = proportionalSliceByCount(translated, sChunks.length);

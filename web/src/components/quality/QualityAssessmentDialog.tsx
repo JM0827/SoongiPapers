@@ -4,6 +4,8 @@ import type { ProjectContent } from '../../types/domain';
 import { QualityPanel } from './QualityPanel';
 import { useWorkflowStore } from '../../store/workflow.store';
 import { useChatActionStore } from '../../store/chatAction.store';
+import { useUILocale } from '../../hooks/useUILocale';
+import { translate } from '../../lib/locale';
 
 interface QualityAssessmentDialogProps {
   open: boolean;
@@ -22,16 +24,53 @@ export const QualityAssessmentDialog = ({
   const chatActionExecute = useChatActionStore((state) => state.execute);
   const chatExecutorReady = useChatActionStore((state) => Boolean(state.executor));
   const [localError, setLocalError] = useState<string | null>(null);
+  const { locale } = useUILocale();
+  const localize = useCallback(
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
+      const resolved = translate(key, locale, params);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
 
   const isRunning = qualityState.status === 'running';
   const hasAssessment = Boolean(latest);
   const errorMessage = localError ?? qualityState.lastError ?? null;
+  const dialogTitle = localize('quality_dialog_title', 'Quality Assessment');
+  const runInitialLabel = localize(
+    'quality_dialog_run_initial',
+    'Run Quality Assessment',
+  );
+  const runRerunLabel = localize(
+    'quality_dialog_run_rerun',
+    'Re-run Quality Assessment',
+  );
+  const runRunningLabel = localize(
+    'quality_dialog_run_running',
+    'Running assessment…',
+  );
+  const closeLabel = localize(
+    'quality_dialog_close_label',
+    'Close quality assessment',
+  );
+  const pendingMessage = localize(
+    'quality_dialog_run_pending',
+    'Quality assessment is still initializing. Please try again shortly.',
+  );
+  const unavailableTooltip = localize(
+    'quality_dialog_run_unavailable',
+    'The quality assessment engine is preparing. Please try again shortly.',
+  );
+  const genericErrorMessage = localize(
+    'quality_dialog_run_error',
+    'Unable to start quality assessment. Please try again shortly.',
+  );
 
   const handleRunQuality = useCallback(async () => {
     if (isRunning) return;
     setLocalError(null);
     if (!chatExecutorReady) {
-      setLocalError('품질 평가 실행 준비 중입니다. 잠시 후 다시 시도해 주세요.');
+      setLocalError(pendingMessage);
       return;
     }
     try {
@@ -42,15 +81,15 @@ export const QualityAssessmentDialog = ({
       });
     } catch (error) {
       console.error('[quality-dialog] Failed to trigger quality assessment', error);
-      setLocalError('품질 평가를 실행할 수 없습니다. 잠시 후 다시 시도해 주세요.');
+      setLocalError(genericErrorMessage);
     }
-  }, [chatActionExecute, chatExecutorReady, isRunning]);
+  }, [chatActionExecute, chatExecutorReady, genericErrorMessage, isRunning, pendingMessage]);
 
   const buttonLabel = isRunning
-    ? 'Running assessment…'
+    ? runRunningLabel
     : hasAssessment
-      ? 'Re-run Quality Assessment'
-      : 'Run Quality Assessment';
+      ? runRerunLabel
+      : runInitialLabel;
 
   useEffect(() => {
     if (qualityState.status === 'running') {
@@ -59,9 +98,7 @@ export const QualityAssessmentDialog = ({
   }, [qualityState.status]);
 
   const buttonDisabled = isRunning || !chatExecutorReady;
-  const runButtonTitle = buttonDisabled && !isRunning
-    ? '품질 평가 엔진 준비 중입니다. 잠시 후 다시 시도해 주세요.'
-    : undefined;
+  const runButtonTitle = buttonDisabled && !isRunning ? unavailableTooltip : undefined;
 
   if (!open) return null;
 
@@ -79,7 +116,7 @@ export const QualityAssessmentDialog = ({
         <header className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2 text-lg font-semibold text-slate-900">
             <ShieldCheck className="h-5 w-5 text-emerald-600" />
-            <span>Quality Assessment</span>
+            <span>{dialogTitle}</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -104,7 +141,7 @@ export const QualityAssessmentDialog = ({
               type="button"
               onClick={onClose}
               className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
-              aria-label="Close quality assessment"
+              aria-label={closeLabel}
             >
               <X className="h-4 w-4" />
             </button>

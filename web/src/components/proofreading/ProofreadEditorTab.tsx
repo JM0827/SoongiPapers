@@ -4,6 +4,7 @@ import { useProofreadEditorContext } from '../../context/proofreadEditor';
 import { DualEditorPanel } from './DualEditorPanel';
 import { ProofreadIssueTray } from './ProofreadIssueTray';
 import { ProofreadActivityFeed } from './ProofreadActivityFeed';
+import type { DocumentProfileSummary, DocumentSummaryFallback } from '../../types/domain';
 
 const formatSegmentLabel = (index: number) =>
   `Segment ${String(index + 1).padStart(3, '0')}`;
@@ -127,7 +128,15 @@ const SegmentNavigator = ({ isCollapsed, onToggleSidebar }: SegmentNavigatorProp
   );
 };
 
-export const ProofreadEditorTab = () => {
+interface ProofreadEditorTabProps {
+  originProfile: DocumentProfileSummary | null;
+  originFallback: DocumentSummaryFallback | null;
+}
+
+export const ProofreadEditorTab = ({
+  originProfile,
+  originFallback,
+}: ProofreadEditorTabProps) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [showOriginNotice, setShowOriginNotice] = useState(true);
   const {
@@ -201,7 +210,7 @@ export const ProofreadEditorTab = () => {
         {featureToggles.originOnly && showOriginNotice && (
           <div className="flex items-start justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
             <p className="flex-1">
-              번역본이 아직 생성되지 않아 원문만 표시됩니다. 번역이 완료되면 자동으로 편집 기능이 활성화됩니다.
+              번역본이 아직 생성되지 않아 원작만 표시됩니다. 번역이 완료되면 자동으로 편집 기능이 활성화됩니다.
             </p>
             <button
               type="button"
@@ -227,7 +236,10 @@ export const ProofreadEditorTab = () => {
           )}
         </div>
         <div className="flex h-full min-h-[24rem] flex-1 items-stretch overflow-hidden">
-          <DualEditorPanel />
+          <DualEditorPanel
+            originProfile={originProfile}
+            originFallback={originFallback}
+          />
         </div>
       </div>
     </div>

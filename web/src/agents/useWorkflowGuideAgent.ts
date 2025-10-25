@@ -255,7 +255,7 @@ export const useWorkflowGuideAgent = ({
   const maybeShareOriginSummary = useCallback(() => {
     if (!projectId || !originAvailable) return;
     if (!originProfile || guideStateRef.current.originSummaryShared) return;
-    const summary = formatSummary(originProfile, "원문 요약입니다:");
+    const summary = formatSummary(originProfile, "원작 요약입니다:");
     if (!summary) return;
 
     guideStateRef.current.originSummaryShared = true;
@@ -357,7 +357,7 @@ export const useWorkflowGuideAgent = ({
     scheduleTask({
       type: "celebrateComplete",
       message:
-        "품질 평가까지 완료했습니다. 필요하시면 전자책 내보내기나 추가 교정을 요청해 주세요!",
+        "품질 검토까지 완료했습니다. 필요하시면 전자책 내보내기나 추가 교정을 요청해 주세요!",
       badge: {
         label: localize(
           "workflow_badge_complete",

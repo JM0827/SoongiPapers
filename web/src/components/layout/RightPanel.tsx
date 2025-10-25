@@ -35,6 +35,7 @@ import { ProjectProfileCard } from "../project/ProjectProfileCard";
 import { QualityAssessmentDialog } from "../quality/QualityAssessmentDialog";
 import type {
   DocumentProfileSummary,
+  DocumentSummaryFallback,
   JobSummary,
   JobSequentialSummary,
   ProjectContent,
@@ -1209,38 +1210,8 @@ const DocumentSummarySection = ({
   reanalysisError?: string | null;
   originStatus?: SummaryStatus;
   translationStatus?: SummaryStatus;
-  translationFallback?: {
-    summary: {
-      story: string;
-      intention: string | null;
-      readerPoints: string[];
-    };
-    metrics: {
-      wordCount: number;
-      charCount: number;
-      paragraphCount: number;
-      readingTimeMinutes: number;
-      readingTimeLabel: string;
-    };
-    timestamp: string | null;
-    language: string | null;
-  } | null;
-  originFallback?: {
-    summary: {
-      story: string;
-      intention: string | null;
-      readerPoints: string[];
-    };
-    metrics: {
-      wordCount: number;
-      charCount: number;
-      paragraphCount: number;
-      readingTimeMinutes: number;
-      readingTimeLabel: string;
-    };
-    timestamp: string | null;
-    language: string | null;
-  } | null;
+  translationFallback?: DocumentSummaryFallback | null;
+  originFallback?: DocumentSummaryFallback | null;
 }) => (
   <div className="space-y-4">
     <DocumentSummaryCard
@@ -3586,7 +3557,10 @@ export const RightPanel = ({
               }
               translationFileId={null}
             >
-              <ProofreadEditorTab />
+              <ProofreadEditorTab
+                originProfile={originProfile}
+                originFallback={originFallback}
+              />
             </ProofreadEditorProvider>
           )}
           {activeTab === "export" && <ExportPanel content={content} />}

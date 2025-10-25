@@ -6,7 +6,7 @@
 // Quality Assessments Collection
 // ==============================================
 // Collection: quality_assessments
-// Purpose: 번역 품질 평가 결과를 저장하는 컬렉션
+// Purpose: 번역 품질 검토 결과를 저장하는 컬렉션
 // Usage: 품질 검사 완료 시 결과 저장, 프로젝트별 최신 평가 조회
 
 const qualityAssessmentsSchema = {
@@ -16,11 +16,11 @@ const qualityAssessmentsSchema = {
   assessmentId: "String", // nanoid로 생성된 고유 평가 ID
   timestamp: "Date", // 평가 실행 시점
 
-  // 스냅샷 데이터 (평가 시점의 원문/번역문 보존)
-  sourceText: "String", // 원문 텍스트 (평가 시점 스냅샷)
+  // 스냅샷 데이터 (평가 시점의 원작/번역문 보존)
+  sourceText: "String", // 원작 텍스트 (평가 시점 스냅샷)
   translatedText: "String", // 번역문 텍스트 (평가 시점 스냅샷)
 
-  // 품질 평가 결과 (OpenAI API 응답 구조)
+  // 품질 검토 결과 (OpenAI API 응답 구조)
   qualityResult: {
     overallScore: "Number", // 전체 품질 점수 (0-100)
 
@@ -58,7 +58,7 @@ const qualityAssessmentsSchema = {
 
   // 부가 정보
   translationMethod: "String", // 번역 방법 ('auto' | 'manual')
-  modelUsed: "String", // 품질 평가에 사용된 AI 모델
+  modelUsed: "String", // 품질 검토에 사용된 AI 모델
   userId: "String", // 평가 실행 사용자 ID
 
   // 타임스탬프
@@ -114,9 +114,9 @@ const originFilesSchema = {
 const translationCacheSchema = {
   _id: "ObjectId",
 
-  // 캐시 키 (원문 해시)
-  sourceHash: "String", // 원문 텍스트의 해시값
-  sourceText: "String", // 원문 텍스트
+  // 캐시 키 (원작 해시)
+  sourceHash: "String", // 원작 텍스트의 해시값
+  sourceText: "String", // 원작 텍스트
 
   // 번역 설정
   originLang: "String", // 원본 언어
@@ -167,10 +167,10 @@ const userPreferencesSchema = {
     autoSave: "Boolean", // 자동 저장 여부
   },
 
-  // 품질 평가 설정
+  // 품질 검토 설정
   quality: {
-    autoEvaluate: "Boolean", // 번역 완료 시 자동 품질 평가
-    preferredLanguage: "String", // 품질 평가 결과 언어
+    autoEvaluate: "Boolean", // 번역 완료 시 자동 품질 검토
+    preferredLanguage: "String", // 품질 검토 결과 언어
     detailLevel: "String", // 평가 상세도 (basic/detailed)
   },
 
@@ -232,7 +232,7 @@ const chatMessagesIndexes = [{ project_id: 1, created_at: 1 }];
 export const mongoSchemaDocumentation = {
   collections: {
     quality_assessments: {
-      purpose: "번역 품질 평가 결과 저장",
+      purpose: "번역 품질 검토 결과 저장",
       schema: qualityAssessmentsSchema,
       indexes: qualityAssessmentsIndexes,
       status: "implemented", // 현재 구현됨
@@ -302,7 +302,7 @@ export const mongoSchemaDocumentation = {
 // ==============================================
 
 const usageExamples = {
-  // 품질 평가 저장
+  // 품질 검토 저장
   saveQualityAssessment: {
     collection: "quality_assessments",
     operation: "insertOne",
@@ -328,7 +328,7 @@ const usageExamples = {
     },
   },
 
-  // 최신 품질 평가 조회
+  // 최신 품질 검토 조회
   getLatestAssessment: {
     collection: "quality_assessments",
     operation: "findOne",
