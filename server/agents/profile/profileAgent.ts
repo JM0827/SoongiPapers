@@ -24,6 +24,7 @@ export interface ProfileAgentInput {
   text: string;
   variant: ProfileVariant;
   language?: string | null;
+  targetLanguage?: string | null;
   snippetLabel?: string;
   summaryLocale?: string | null;
 }
@@ -119,23 +120,34 @@ const normalizeStringArray = (value: unknown, limit = 20): string[] => {
     .map((entry) => truncateWords(entry, 20));
 };
 
-function parseEntityList(value: unknown): Array<{ name: string; frequency: number }> {
+function parseEntityList(
+  value: unknown,
+): Array<{ name: string; targetName: string | null; frequency: number }> {
   if (!Array.isArray(value)) return [];
   return value
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
       const name = toNullableString((entry as Record<string, unknown>).name) ?? "";
       if (!name) return null;
+      const targetName =
+        toNullableString(
+          (entry as Record<string, unknown>).targetName ??
+            (entry as Record<string, unknown>).target,
+        ) ?? null;
       const rawFrequency = (entry as Record<string, unknown>).frequency;
       const frequency = Number.isFinite(rawFrequency)
         ? Number(rawFrequency)
         : Number((entry as Record<string, unknown>).count ?? 0);
       return {
         name: truncateWords(name, 12),
+        targetName: targetName ? truncateWords(targetName, 12) : null,
         frequency: Number.isFinite(frequency) ? Math.max(0, frequency) : 0,
       };
     })
-    .filter((entry): entry is { name: string; frequency: number } => Boolean(entry))
+    .filter(
+      (entry): entry is { name: string; targetName: string | null; frequency: number } =>
+        Boolean(entry),
+    )
     .slice(0, 20);
 }
 
@@ -147,11 +159,15 @@ function parseCharacters(value: unknown): TranslationNotes["characters"] {
       const source = entry as Record<string, unknown>;
       const name = toNullableString(source.name) ?? "";
       if (!name) return null;
+      const targetName = toNullableString(
+        source.targetName ?? source.target ?? source.translation,
+      );
       const age = toNullableString(source.age);
       const gender = toNullableString(source.gender);
       const traits = normalizeStringArray(source.traits, 5);
       return {
         name: truncateWords(name, 12),
+        targetName: targetName ? truncateWords(targetName, 12) : null,
         age,
         gender,
         traits,
@@ -159,6 +175,40 @@ function parseCharacters(value: unknown): TranslationNotes["characters"] {
     })
     .filter((entry): entry is TranslationNotes["characters"][number] => Boolean(entry))
     .slice(0, 20);
+}
+
+function parseBilingualList(
+  value: unknown,
+  limit = 20,
+): TranslationNotes["measurementUnits"] {
+  if (!value) return [];
+  const entries = Array.isArray(value) ? value : [value];
+  return entries
+    .map((entry) => {
+      if (typeof entry === "string") {
+        const source = entry.trim();
+        if (!source) return null;
+        return { source: truncateWords(source, 12), target: null };
+      }
+      if (entry && typeof entry === "object") {
+        const sourceValue =
+          toNullableString((entry as Record<string, unknown>).source) ??
+          toNullableString((entry as Record<string, unknown>).name);
+        if (!sourceValue) return null;
+        const targetValue =
+          toNullableString((entry as Record<string, unknown>).target) ??
+          toNullableString((entry as Record<string, unknown>).targetName);
+        return {
+          source: truncateWords(sourceValue, 12),
+          target: targetValue ? truncateWords(targetValue, 12) : null,
+        };
+      }
+      return null;
+    })
+    .filter((entry): entry is TranslationNotes["measurementUnits"][number] =>
+      Boolean(entry),
+    )
+    .slice(0, limit);
 }
 
 function parseTranslationNotes(value: unknown): TranslationNotes | null {
@@ -169,8 +219,8 @@ function parseTranslationNotes(value: unknown): TranslationNotes | null {
   const characters = parseCharacters(raw.characters);
   const namedEntities = parseEntityList(raw.namedEntities ?? raw.entities);
   const locations = parseEntityList(raw.locations);
-  const measurementUnits = normalizeStringArray(raw.measurementUnits ?? raw.units);
-  const linguisticFeatures = normalizeStringArray(
+  const measurementUnits = parseBilingualList(raw.measurementUnits ?? raw.units);
+  const linguisticFeatures = parseBilingualList(
     raw.linguisticFeatures ?? raw.slang ?? raw.phrases,
   );
   const timePeriod = toNullableString(raw.timePeriod ?? raw.era ?? raw.timeline);
@@ -227,6 +277,9 @@ export async function analyzeDocumentProfile(
   const languageHint = input.language
     ? `Expected language: ${input.language}.`
     : "";
+  const targetLanguageHint = input.targetLanguage
+    ? `Target language for translations: ${input.targetLanguage}.`
+    : "Target language for translations: English.";
 
   const outputLocale: UILocale = resolveOutputLocale(input.summaryLocale ?? null);
   const localeInstruction =
@@ -241,17 +294,19 @@ Keep the voice professional, fact-driven, and under 250 words overall.`;
   const userPrompt = `Project: ${input.projectId}
 Variant: ${variantLabel}
 ${languageHint}
+${targetLanguageHint}
 Tasks:
 1. Provide a vivid but concise story summary (<= 120 words).
 2. State the author's narrative intention or purpose (<= 50 words).
 3. List 2-4 reader takeaways or emotional touchpoints (each <= 35 words).
-4. Extract Translation Notes as JSON with:
-   - characters: [{ name, age?, gender?, traits[] }]
-   - namedEntities: top 20 [{ name, frequency }]
+4. Extract Translation Notes as JSON with bilingual fields:
+   - characters: [{ name (source), targetName (translation), age?, gender?, traits[] }]
+   - namedEntities: top 20 [{ name, targetName, frequency }]
+   - locations: top 20 [{ name, targetName, frequency }]
    - timePeriod: string | null
-   - locations: top 20 [{ name, frequency }]
-   - measurementUnits: up to 20 strings
-   - linguisticFeatures: up to 20 strings (slang, idioms, dialect markers)
+   - measurementUnits: up to 20 [{ source, target }]
+   - linguisticFeatures: up to 20 [{ source, target }]
+   When a translated form is uncertain, set targetName/target to null.
 
 ${localeInstruction}
 Respond strictly as JSON with keys: summary (string), intention (string), readerPoints (string[]), translationNotes (object).

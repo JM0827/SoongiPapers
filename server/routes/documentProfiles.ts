@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import DocumentProfile, {
   type TranslationNotes,
+  normalizeTranslationNotes,
 } from "../models/DocumentProfile";
 import { query } from "../db";
 import { requireAuthAndPlanCheck } from "../middleware/auth";
@@ -31,7 +32,7 @@ const serializeProfile = (doc: any) =>
             ? String(doc.proofreading_id)
             : null,
         },
-        translationNotes: doc.translation_notes ?? null,
+        translationNotes: normalizeTranslationNotes(doc.translation_notes ?? null),
         source: {
           hash: doc.source_hash ?? null,
           preview: doc.source_preview ?? null,
@@ -151,43 +152,57 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  const bilingualValueSchema = z.object({
+    source: z.string().min(1).max(200),
+    target: z.string().trim().max(200).optional().nullable(),
+  });
+
   const translationNotesSchema = z
     .object({
       characters: z
         .array(
           z.object({
             name: z.string().min(1).max(200),
+            targetName: z.string().trim().max(200).optional().nullable(),
             age: z.string().trim().max(120).optional().nullable(),
-          gender: z.string().trim().max(120).optional().nullable(),
-          traits: z
-            .array(z.string().trim().min(1).max(160))
-            .max(10)
-            .optional(),
-        }),
-      )
-      .max(50)
-      .optional(),
-    namedEntities: z
-      .array(
-        z.object({
-          name: z.string().min(1).max(200),
-          frequency: z.number().int().min(0).max(1_000_000).optional(),
-        }),
-      )
-      .max(50)
-      .optional(),
-    timePeriod: z.string().trim().max(200).optional().nullable(),
-    locations: z
-      .array(
-        z.object({
-          name: z.string().min(1).max(200),
-          frequency: z.number().int().min(0).max(1_000_000).optional(),
-        }),
-      )
-      .max(50)
-      .optional(),
-    measurementUnits: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
-    linguisticFeatures: z.array(z.string().trim().min(1).max(160)).max(50).optional(),
+            gender: z.string().trim().max(120).optional().nullable(),
+            traits: z
+              .array(z.string().trim().min(1).max(160))
+              .max(10)
+              .optional(),
+          }),
+        )
+        .max(50)
+        .optional(),
+      namedEntities: z
+        .array(
+          z.object({
+            name: z.string().min(1).max(200),
+            targetName: z.string().trim().max(200).optional().nullable(),
+            frequency: z.number().int().min(0).max(1_000_000).optional(),
+          }),
+        )
+        .max(50)
+        .optional(),
+      locations: z
+        .array(
+          z.object({
+            name: z.string().min(1).max(200),
+            targetName: z.string().trim().max(200).optional().nullable(),
+            frequency: z.number().int().min(0).max(1_000_000).optional(),
+          }),
+        )
+        .max(50)
+        .optional(),
+      timePeriod: z.string().trim().max(200).optional().nullable(),
+      measurementUnits: z
+        .array(z.union([bilingualValueSchema, z.string().min(1).max(200)]))
+        .max(50)
+        .optional(),
+      linguisticFeatures: z
+        .array(z.union([bilingualValueSchema, z.string().min(1).max(200)]))
+        .max(50)
+        .optional(),
     })
     .strict();
 
@@ -250,12 +265,33 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
         return trimmed && trimmed.length ? trimmed : null;
       };
 
-      const sanitizeList = (values?: string[] | null) =>
-        Array.isArray(values)
-          ? values
+      const sanitizeTraits = (value?: string[] | null) =>
+        Array.isArray(value)
+          ? value
               .map((entry) => entry.trim())
               .filter((entry) => entry.length > 0)
           : [];
+
+      const parsePairs = (
+        values?: Array<{ source: string; target?: string | null } | string>,
+      ): TranslationNotes["measurementUnits"] => {
+        if (!Array.isArray(values)) return [];
+        return values
+          .map((entry) => {
+            if (typeof entry === "string") {
+              const source = entry.trim();
+              if (!source) return null;
+              return { source, target: null };
+            }
+            const sourceValue = sanitizeString(entry.source);
+            if (!sourceValue) return null;
+            const targetValue = sanitizeString(entry.target ?? null);
+            return { source: sourceValue, target: targetValue };
+          })
+          .filter((entry): entry is TranslationNotes["measurementUnits"][number] =>
+            Boolean(entry),
+          );
+      };
 
       const toNotes = (input: typeof parsed.data.translationNotes): TranslationNotes | null => {
         if (!input) return null;
@@ -265,9 +301,10 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
             if (!name) return null;
             return {
               name,
+              targetName: sanitizeString(character.targetName) ?? null,
               age: sanitizeString(character.age) ?? null,
               gender: sanitizeString(character.gender) ?? null,
-              traits: sanitizeList(character.traits),
+              traits: sanitizeTraits(character.traits ?? []),
             };
           })
           .filter((character): character is TranslationNotes["characters"][number] =>
@@ -282,7 +319,11 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
               const frequency = Number.isFinite(entity.frequency)
                 ? Math.max(0, Number(entity.frequency))
                 : 0;
-              return { name, frequency };
+              return {
+                name,
+                targetName: sanitizeString(entity.targetName) ?? null,
+                frequency,
+              };
             })
             .filter((entity): entity is TranslationNotes["namedEntities"][number] =>
               Boolean(entity),
@@ -290,8 +331,8 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
 
         const namedEntities = mapEntities(input.namedEntities);
         const locations = mapEntities(input.locations);
-        const measurementUnits = sanitizeList(input.measurementUnits);
-        const linguisticFeatures = sanitizeList(input.linguisticFeatures);
+        const measurementUnits = parsePairs(input.measurementUnits);
+        const linguisticFeatures = parsePairs(input.linguisticFeatures);
         const timePeriod = sanitizeString(input.timePeriod);
 
         if (

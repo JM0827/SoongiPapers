@@ -782,7 +782,7 @@ const UserMenu = ({
             {USER_MENU_ITEMS.map((item) => (
               <button
                 key={item.key}
-                className="rounded px-3 py-2 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
+                className="rounded px-2.5 py-1.5 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                 type="button"
                 role="menuitem"
                 onClick={() => {
@@ -794,7 +794,7 @@ const UserMenu = ({
               </button>
             ))}
             <button
-              className="rounded px-3 py-2 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
+              className="rounded px-2.5 py-1.5 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
               type="button"
               role="menuitem"
               onClick={() => {
@@ -805,7 +805,7 @@ const UserMenu = ({
               {advancedProofreadEnabled ? 'Hide Advanced Proofread' : 'Advanced Proofread'}
             </button>
             <button
-              className="rounded px-3 py-2 text-left text-rose-600 transition hover:bg-rose-50 focus:bg-rose-50 focus:outline-none"
+              className="rounded px-2.5 py-1.5 text-left text-rose-600 transition hover:bg-rose-50 focus:bg-rose-50 focus:outline-none"
               type="button"
               role="menuitem"
               onClick={() => {
@@ -1292,6 +1292,7 @@ const DocumentSummarySection = ({
 type NotesCharacterDraft = {
   id: string;
   name: string;
+  targetName: string;
   age: string;
   gender: string;
   traits: string;
@@ -1300,7 +1301,19 @@ type NotesCharacterDraft = {
 type NotesEntityDraft = {
   id: string;
   name: string;
+  targetName: string;
   frequency: string;
+};
+
+type NotesPairDraft = {
+  id: string;
+  source: string;
+  target: string;
+};
+
+type BilingualViewItem = {
+  source: string;
+  target: string | null;
 };
 
 type TranslationNotesDraft = {
@@ -1308,13 +1321,14 @@ type TranslationNotesDraft = {
   characters: NotesCharacterDraft[];
   namedEntities: NotesEntityDraft[];
   locations: NotesEntityDraft[];
-  measurementUnits: string;
-  linguisticFeatures: string;
+  measurementUnits: NotesPairDraft[];
+  linguisticFeatures: NotesPairDraft[];
 };
 
 const createCharacterDraft = (): NotesCharacterDraft => ({
   id: `character-${Math.random().toString(36).slice(2, 10)}`,
   name: "",
+  targetName: "",
   age: "",
   gender: "",
   traits: "",
@@ -1323,7 +1337,14 @@ const createCharacterDraft = (): NotesCharacterDraft => ({
 const createEntityDraft = (prefix: string): NotesEntityDraft => ({
   id: `${prefix}-${Math.random().toString(36).slice(2, 10)}`,
   name: "",
+  targetName: "",
   frequency: "",
+});
+
+const createPairDraft = (prefix: string): NotesPairDraft => ({
+  id: `${prefix}-${Math.random().toString(36).slice(2, 10)}`,
+  source: "",
+  target: "",
 });
 
 const notesToDraft = (
@@ -1335,6 +1356,7 @@ const notesToDraft = (
       .toString(36)
       .slice(2, 8)}`,
     name: character.name,
+    targetName: character.targetName ?? "",
     age: character.age ?? "",
     gender: character.gender ?? "",
     traits: (character.traits ?? []).join(", "),
@@ -1342,6 +1364,7 @@ const notesToDraft = (
   namedEntities: (notes?.namedEntities ?? []).map((entity) => ({
     id: `entity-${entity.name}-${Math.random().toString(36).slice(2, 8)}`,
     name: entity.name,
+    targetName: entity.targetName ?? "",
     frequency: String(
       Number.isFinite(entity.frequency) ? entity.frequency : "",
     ),
@@ -1349,23 +1372,38 @@ const notesToDraft = (
   locations: (notes?.locations ?? []).map((location) => ({
     id: `location-${location.name}-${Math.random().toString(36).slice(2, 8)}`,
     name: location.name,
+    targetName: location.targetName ?? "",
     frequency: String(
       Number.isFinite(location.frequency) ? location.frequency : "",
     ),
   })),
-  measurementUnits: (notes?.measurementUnits ?? []).join("\n"),
-  linguisticFeatures: (notes?.linguisticFeatures ?? []).join("\n"),
+  measurementUnits: (notes?.measurementUnits ?? []).map((unit, index) => ({
+    id: `unit-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    source: typeof unit === "string" ? unit : unit.source,
+    target:
+      typeof unit === "string"
+        ? ""
+        : unit.target !== null && unit.target !== undefined
+          ? unit.target ?? ""
+          : "",
+  })),
+  linguisticFeatures: (notes?.linguisticFeatures ?? []).map(
+    (feature, index) => ({
+      id: `feature-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      source: typeof feature === "string" ? feature : feature.source,
+      target:
+        typeof feature === "string"
+          ? ""
+          : feature.target !== null && feature.target !== undefined
+            ? feature.target ?? ""
+            : "",
+    }),
+  ),
 });
 
 const draftToNotes = (
   draft: TranslationNotesDraft,
 ): DocumentProfileSummary["translationNotes"] | null => {
-  const sanitizeLines = (value: string) =>
-    value
-      .split(/\n+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-
   const parseTraits = (value: string) =>
     value
       .split(/[,;]+/)
@@ -1378,6 +1416,7 @@ const draftToNotes = (
       if (!name) return null;
       return {
         name,
+        targetName: character.targetName.trim() || null,
         age: character.age.trim() || null,
         gender: character.gender.trim() || null,
         traits: parseTraits(character.traits),
@@ -1395,6 +1434,7 @@ const draftToNotes = (
         const parsedFrequency = Number.parseInt(entity.frequency.trim(), 10);
         return {
           name,
+          targetName: entity.targetName.trim() || null,
           frequency: Number.isFinite(parsedFrequency)
             ? Math.max(0, parsedFrequency)
             : 0,
@@ -1404,8 +1444,21 @@ const draftToNotes = (
 
   const namedEntities = parseEntities(draft.namedEntities);
   const locations = parseEntities(draft.locations);
-  const measurementUnits = sanitizeLines(draft.measurementUnits);
-  const linguisticFeatures = sanitizeLines(draft.linguisticFeatures);
+  const parsePairs = (pairs: NotesPairDraft[]) =>
+    pairs
+      .map((pair) => {
+        const source = pair.source.trim();
+        if (!source) return null;
+        const target = pair.target.trim();
+        return {
+          source,
+          target: target.length ? target : null,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  const measurementUnits = parsePairs(draft.measurementUnits);
+  const linguisticFeatures = parsePairs(draft.linguisticFeatures);
   const timePeriod = draft.timePeriod.trim() || null;
 
   if (
@@ -1454,6 +1507,124 @@ const TranslationNotesSection = ({
   canRefresh?: boolean;
   refreshError?: string | null;
 }) => {
+  const SectionCard = ({
+    title,
+    description,
+    actions,
+    children,
+  }: {
+    title: string;
+    description?: string;
+    actions?: ReactNode;
+    children: ReactNode;
+  }) => (
+    <section className="rounded-lg border border-slate-200 bg-white/70 p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">{title}</p>
+          {description ? (
+            <p className="text-xs text-slate-500">{description}</p>
+          ) : null}
+        </div>
+        {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+      </div>
+      <div className="mt-3 space-y-2">{children}</div>
+    </section>
+  );
+
+  const addPair = (
+    collection: 'measurementUnits' | 'linguisticFeatures',
+    prefix: string,
+  ) => {
+    setDraft((prev) => ({
+      ...prev,
+      [collection]: [...prev[collection], createPairDraft(prefix)],
+    }));
+  };
+
+  const handlePairChange = (
+    collection: 'measurementUnits' | 'linguisticFeatures',
+    id: string,
+    field: 'source' | 'target',
+    value: string,
+  ) => {
+    setDraft((prev) => ({
+      ...prev,
+      [collection]: prev[collection].map((entry) =>
+        entry.id === id ? { ...entry, [field]: value } : entry,
+      ),
+    }));
+  };
+
+  const handlePairRemove = (
+    collection: 'measurementUnits' | 'linguisticFeatures',
+    id: string,
+  ) => {
+    setDraft((prev) => ({
+      ...prev,
+      [collection]: prev[collection].filter((entry) => entry.id !== id),
+    }));
+  };
+
+  const renderPairList = (
+    items: NotesPairDraft[],
+    collection: 'measurementUnits' | 'linguisticFeatures',
+    sourcePlaceholder: string,
+    targetPlaceholder: string,
+  ) => (
+    <div className="space-y-2">
+      {items.length ? (
+        <div className="space-y-2">
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className="grid gap-2 rounded border border-slate-200 bg-slate-50/70 p-2 md:grid-cols-[1fr,1fr,auto]"
+            >
+              <input
+                value={item.source}
+                onChange={(event) =>
+                  handlePairChange(
+                    collection,
+                    item.id,
+                    'source',
+                    event.target.value,
+                  )
+                }
+                className="flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                placeholder={sourcePlaceholder}
+                aria-label={bilingualSourceLabel}
+              />
+              <input
+                value={item.target}
+                onChange={(event) =>
+                  handlePairChange(
+                    collection,
+                    item.id,
+                    'target',
+                    event.target.value,
+                  )
+                }
+                className="flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                placeholder={targetPlaceholder}
+                aria-label={bilingualTargetLabel}
+              />
+              <button
+                type="button"
+                className="text-xs text-rose-500 transition hover:text-rose-600"
+                onClick={() => handlePairRemove(collection, item.id)}
+                disabled={isSaving}
+              >
+                {removeLabel}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">{noEntriesLabel}</p>
+      )}
+    </div>
+  );
+
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draft, setDraft] = useState<TranslationNotesDraft>(() =>
     notesToDraft(notes),
@@ -1509,17 +1680,9 @@ const TranslationNotesSection = ({
     "rightpanel_translation_notes_measurement_units",
     "Measurement units",
   );
-  const measurementUnitsPlaceholder = localize(
-    "rightpanel_translation_notes_measurement_units_placeholder",
-    "One unit per line",
-  );
   const linguisticFeaturesLabel = localize(
     "rightpanel_translation_notes_linguistic_features",
     "Linguistic features / slang",
-  );
-  const linguisticFeaturesPlaceholder = localize(
-    "rightpanel_translation_notes_linguistic_features_placeholder",
-    "One entry per line",
   );
   const charactersLabel = localize(
     "rightpanel_translation_notes_characters",
@@ -1537,9 +1700,17 @@ const TranslationNotesSection = ({
     "rightpanel_translation_notes_name",
     "Name",
   );
+  const targetNameLabel = localize(
+    "rightpanel_translation_notes_target_name",
+    "Translated name",
+  );
   const characterNamePlaceholder = localize(
     "rightpanel_translation_notes_character_name_placeholder",
     "Character name",
+  );
+  const characterTargetPlaceholder = localize(
+    "rightpanel_translation_notes_target_placeholder",
+    "e.g., translated name",
   );
   const ageLabel = localize(
     "rightpanel_translation_notes_age",
@@ -1585,6 +1756,10 @@ const TranslationNotesSection = ({
     "rightpanel_translation_notes_entry_name_placeholder",
     "Name",
   );
+  const entryTargetPlaceholder = localize(
+    "rightpanel_translation_notes_entry_target_placeholder",
+    "Translated name",
+  );
   const entryFrequencyPlaceholder = localize(
     "rightpanel_translation_notes_entry_frequency_placeholder",
     "Freq",
@@ -1600,6 +1775,30 @@ const TranslationNotesSection = ({
   const linguisticFeaturesViewLabel = localize(
     "rightpanel_translation_notes_linguistic_features_view",
     "Linguistic features",
+  );
+  const bilingualSourceLabel = localize(
+    "rightpanel_translation_notes_source_label",
+    "Source",
+  );
+  const bilingualTargetLabel = localize(
+    "rightpanel_translation_notes_target_label",
+    "Translation",
+  );
+  const measurementUnitSourcePlaceholder = localize(
+    "rightpanel_translation_notes_measurement_units_source_placeholder",
+    "e.g., baek seok",
+  );
+  const measurementUnitTargetPlaceholder = localize(
+    "rightpanel_translation_notes_measurement_units_target_placeholder",
+    "e.g., pecks",
+  );
+  const linguisticSourcePlaceholder = localize(
+    "rightpanel_translation_notes_linguistic_source_placeholder",
+    "Source expression",
+  );
+  const linguisticTargetPlaceholder = localize(
+    "rightpanel_translation_notes_linguistic_target_placeholder",
+    "Translated expression",
   );
   const emptyStateMessage = localize(
     "rightpanel_translation_notes_empty",
@@ -1677,27 +1876,71 @@ const TranslationNotesSection = ({
     }
   };
 
+  const normalizeBilingualView = (
+    items?:
+      | Array<{ source: string; target: string | null }>
+      | Array<string | { source: string; target: string | null }>
+      | null,
+  ): BilingualViewItem[] => {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((entry) => {
+        if (typeof entry === "string") {
+          const source = entry.trim();
+          if (!source) return null;
+          return { source, target: null } satisfies BilingualViewItem;
+        }
+        const source = entry?.source?.trim();
+        if (!source) return null;
+        const target = entry?.target ?? null;
+        return {
+          source,
+          target: target && target.trim().length ? target.trim() : null,
+        } satisfies BilingualViewItem;
+      })
+      .filter((entry): entry is BilingualViewItem => Boolean(entry));
+  };
+
+  const hasPairs = (
+    items?:
+      | Array<{ source: string; target: string | null }>
+      | Array<string | { source: string; target: string | null }>
+      | null,
+  ) => normalizeBilingualView(items).length > 0;
+
   const hasNotes = Boolean(
     notes?.timePeriod ||
       (notes?.characters?.length ?? 0) > 0 ||
       (notes?.namedEntities?.length ?? 0) > 0 ||
       (notes?.locations?.length ?? 0) > 0 ||
-      (notes?.measurementUnits?.length ?? 0) > 0 ||
-      (notes?.linguisticFeatures?.length ?? 0) > 0,
+      hasPairs(notes?.measurementUnits) ||
+      hasPairs(notes?.linguisticFeatures),
   );
 
-  const renderTagList = (items: string[]) => (
-    <ul className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-      {items.map((item, index) => (
-        <li
-          key={`${item}-${index}`}
-          className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700"
-        >
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
+  const renderBilingualList = (
+    rawItems?:
+      | Array<{ source: string; target: string | null }>
+      | Array<string | { source: string; target: string | null }>
+      | null,
+  ) => {
+    const normalized = normalizeBilingualView(rawItems);
+    if (!normalized.length) return null;
+    return (
+      <ul className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+        {normalized.map((item, index) => (
+          <li
+            key={`${item.source}-${index}`}
+            className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700"
+          >
+            <span>{item.source}</span>
+            {item.target ? (
+              <span className="text-indigo-600"> → {item.target}</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    );
+  };
 
   if (!editable && !hasNotes && mode === "view") {
     return null;
@@ -1778,7 +2021,14 @@ const TranslationNotesSection = ({
           </button>
         </div>
       </div>
-      <div className="grid gap-4 md:grid-cols-2">
+      <SectionCard
+        title={localize('rightpanel_translation_notes_context', 'Narrative context')}
+        description={localize(
+          'rightpanel_translation_notes_context_hint',
+          'Summaries, measurement units, and linguistic cues that downstream translators must follow.',
+        )}
+      >
+      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
             {timePeriodLabel}
@@ -1791,48 +2041,61 @@ const TranslationNotesSection = ({
                 timePeriod: event.target.value,
               }))
             }
-            className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+            className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
             placeholder={timePeriodPlaceholder}
           />
         </div>
         <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {measurementUnitsLabel}
-          </label>
-          <textarea
-            value={draft.measurementUnits}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                measurementUnits: event.target.value,
-              }))
-            }
-            className="h-24 w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder={measurementUnitsPlaceholder}
-          />
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {measurementUnitsLabel}
+            </p>
+            <button
+              type="button"
+              className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+              onClick={() => addPair('measurementUnits', 'unit')}
+              disabled={isSaving}
+            >
+              {addEntryLabel}
+            </button>
+          </div>
+          {renderPairList(
+            draft.measurementUnits,
+            'measurementUnits',
+            measurementUnitSourcePlaceholder,
+            measurementUnitTargetPlaceholder,
+          )}
         </div>
         <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {linguisticFeaturesLabel}
-          </label>
-          <textarea
-            value={draft.linguisticFeatures}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                linguisticFeatures: event.target.value,
-              }))
-            }
-            className="h-24 w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder={linguisticFeaturesPlaceholder}
-          />
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {linguisticFeaturesLabel}
+            </p>
+            <button
+              type="button"
+              className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+              onClick={() => addPair('linguisticFeatures', 'feature')}
+              disabled={isSaving}
+            >
+              {addEntryLabel}
+            </button>
+          </div>
+          {renderPairList(
+            draft.linguisticFeatures,
+            'linguisticFeatures',
+            linguisticSourcePlaceholder,
+            linguisticTargetPlaceholder,
+          )}
         </div>
       </div>
-      <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {charactersLabel}
-          </p>
+      </SectionCard>
+      <SectionCard
+        title={charactersLabel}
+        description={localize(
+          'rightpanel_translation_notes_characters_hint',
+          'Capture key characters with both source and translated references.',
+        )}
+        actions={
           <button
             type="button"
             className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
@@ -1846,11 +2109,12 @@ const TranslationNotesSection = ({
           >
             {addCharacterLabel}
           </button>
-        </div>
+        }
+      >
         {draft.characters.length ? (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {draft.characters.map((character, index) => (
-              <div key={character.id} className="rounded border border-slate-200 p-3">
+              <div key={character.id} className="rounded border border-slate-200 p-2.5">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-medium text-slate-600">
                     {localize(
@@ -1875,7 +2139,7 @@ const TranslationNotesSection = ({
                     {removeLabel}
                   </button>
                 </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-2.5 grid gap-2.5 md:grid-cols-2">
                   <div className="space-y-1">
                     <label className="block text-[11px] uppercase tracking-wide text-slate-500">
                       {nameLabel}
@@ -1895,8 +2159,31 @@ const TranslationNotesSection = ({
                           ),
                         }))
                       }
-                      className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                       placeholder={characterNamePlaceholder}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
+                      {targetNameLabel}
+                    </label>
+                    <input
+                      value={character.targetName}
+                      onChange={(event) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          characters: prev.characters.map((entry) =>
+                            entry.id === character.id
+                              ? {
+                                  ...entry,
+                                  targetName: event.target.value,
+                                }
+                              : entry,
+                          ),
+                        }))
+                      }
+                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      placeholder={characterTargetPlaceholder}
                     />
                   </div>
                   <div className="space-y-1">
@@ -1918,7 +2205,7 @@ const TranslationNotesSection = ({
                           ),
                         }))
                       }
-                      className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                       placeholder={agePlaceholder}
                     />
                   </div>
@@ -1941,7 +2228,7 @@ const TranslationNotesSection = ({
                           ),
                         }))
                       }
-                      className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                       placeholder={genderPlaceholder}
                     />
                   </div>
@@ -1964,7 +2251,7 @@ const TranslationNotesSection = ({
                           ),
                         }))
                       }
-                      className="w-full rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                       placeholder={traitsPlaceholder}
                     />
                   </div>
@@ -1975,8 +2262,15 @@ const TranslationNotesSection = ({
         ) : (
           <p className="text-xs text-slate-500">{noCharactersLabel}</p>
         )}
-      </section>
-      <section className="grid gap-4 md:grid-cols-2">
+      </SectionCard>
+      <SectionCard
+        title={localize('rightpanel_translation_notes_entities_title', 'Named entities & locations')}
+        description={localize(
+          'rightpanel_translation_notes_entities_hint',
+          'List proper nouns and geography with the spellings that should appear in translation.',
+        )}
+      >
+      <div className="grid gap-4 md:grid-cols-2">
         {[
           {
             label: namedEntitiesLabel,
@@ -2012,7 +2306,7 @@ const TranslationNotesSection = ({
                 {items.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center gap-2 rounded border border-slate-200 p-2"
+                    className="grid gap-2 rounded border border-slate-200 p-2 md:grid-cols-[1fr,1fr,110px,auto]"
                   >
                     <input
                       value={item.name}
@@ -2028,8 +2322,25 @@ const TranslationNotesSection = ({
                           ),
                         )
                       }
-                      className="flex-1 rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                    placeholder={entryNamePlaceholder}
+                      className="flex-1 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      placeholder={entryNamePlaceholder}
+                    />
+                    <input
+                      value={item.targetName}
+                      onChange={(event) =>
+                        setter(
+                          items.map((entry) =>
+                            entry.id === item.id
+                              ? {
+                                  ...entry,
+                                  targetName: event.target.value,
+                                }
+                              : entry,
+                          ),
+                        )
+                      }
+                      className="flex-1 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      placeholder={entryTargetPlaceholder}
                     />
                     <input
                       value={item.frequency}
@@ -2045,17 +2356,19 @@ const TranslationNotesSection = ({
                           ),
                         )
                       }
-                      className="w-24 rounded border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                      className="w-24 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                     placeholder={entryFrequencyPlaceholder}
                     />
-                    <button
-                      type="button"
-                      className="text-xs text-rose-500 transition hover:text-rose-600"
-                      onClick={() => setter(items.filter((entry) => entry.id !== item.id))}
-                      disabled={isSaving}
-                    >
-                    {removeLabel}
-                    </button>
+                    <div className="flex items-start justify-end">
+                      <button
+                        type="button"
+                        className="text-xs text-rose-500 transition hover:text-rose-600"
+                        onClick={() => setter(items.filter((entry) => entry.id !== item.id))}
+                        disabled={isSaving}
+                      >
+                        {removeLabel}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2064,18 +2377,19 @@ const TranslationNotesSection = ({
             )}
           </div>
         ))}
-      </section>
+      </div>
+      </SectionCard>
     </div>
   );
 
   const viewContent = hasNotes ? (
-    <div className="space-y-4 text-sm text-slate-700">
+    <div className="space-y-3 text-sm text-slate-700">
       {notes?.timePeriod ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        <div className="flex items-baseline justify-between gap-3 text-sm text-slate-700">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             {timePeriodLabel}
           </p>
-          <p className="mt-1 text-slate-700">{notes.timePeriod}</p>
+          <p className="font-medium text-slate-800">{notes.timePeriod}</p>
         </div>
       ) : null}
       {notes?.characters?.length ? (
@@ -2095,6 +2409,11 @@ const TranslationNotesSection = ({
                   <span className="font-medium text-slate-800">
                     {character.name}
                   </span>
+                  {character.targetName ? (
+                    <span className="text-indigo-600">
+                      {" "}→ {character.targetName}
+                    </span>
+                  ) : null}
                   {details.length ? (
                     <span className="text-slate-600">
                       {" "}— {details.join(" · ")}
@@ -2117,8 +2436,19 @@ const TranslationNotesSection = ({
                 <span className="font-medium text-slate-800">
                   {entity.name}
                 </span>
+                {entity.targetName ? (
+                  <span className="text-indigo-600">
+                    {" "}→ {entity.targetName}
+                  </span>
+                ) : null}
                 {Number.isFinite(entity.frequency) && entity.frequency > 0 ? (
-                  <span className="text-slate-500"> · {entity.frequency}</span>
+                  <span className="ml-2 text-[11px] uppercase tracking-wide text-slate-500">
+                    {localize(
+                      "rightpanel_translation_notes_frequency_label",
+                      `freq ${entity.frequency}`,
+                      { count: entity.frequency },
+                    )}
+                  </span>
                 ) : null}
               </li>
             ))}
@@ -2136,10 +2466,18 @@ const TranslationNotesSection = ({
                 <span className="font-medium text-slate-800">
                   {location.name}
                 </span>
-                {Number.isFinite(location.frequency) &&
-                location.frequency > 0 ? (
-                  <span className="text-slate-500">
-                    {" "}· {location.frequency}
+                {location.targetName ? (
+                  <span className="text-indigo-600">
+                    {" "}→ {location.targetName}
+                  </span>
+                ) : null}
+                {Number.isFinite(location.frequency) && location.frequency > 0 ? (
+                  <span className="ml-2 text-[11px] uppercase tracking-wide text-slate-500">
+                    {localize(
+                      "rightpanel_translation_notes_frequency_label",
+                      `freq ${location.frequency}`,
+                      { count: location.frequency },
+                    )}
                   </span>
                 ) : null}
               </li>
@@ -2152,7 +2490,7 @@ const TranslationNotesSection = ({
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
             {measurementUnitsViewLabel}
           </p>
-          {renderTagList(notes.measurementUnits)}
+          {renderBilingualList(notes.measurementUnits)}
         </div>
       ) : null}
       {notes?.linguisticFeatures?.length ? (
@@ -2160,7 +2498,7 @@ const TranslationNotesSection = ({
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
             {linguisticFeaturesViewLabel}
           </p>
-          {renderTagList(notes.linguisticFeatures)}
+          {renderBilingualList(notes.linguisticFeatures)}
         </div>
       ) : null}
     </div>
@@ -3347,7 +3685,7 @@ export const RightPanel = ({
                   <textarea
                     value={careerSummary}
                     onChange={(event) => setCareerSummary(event.target.value)}
-                    className="h-32 w-full rounded border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    className="h-32 w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
                     placeholder="Example: 2024 Sejong Literary Award finalist; specializing in speculative fiction translation."
                   />
                   {careerSavedAt && (
@@ -3429,7 +3767,7 @@ export const RightPanel = ({
                             event.target.value as "ko" | "en",
                           )
                         }
-                        className="rounded border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                        className="rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
                       >
                         <option value="ko">한국어</option>
                         <option value="en">English</option>
@@ -3445,7 +3783,7 @@ export const RightPanel = ({
                             event.target.value as "system" | "light" | "dark",
                           )
                         }
-                        className="rounded border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                        className="rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
                       >
                         <option value="system">Follow system</option>
                         <option value="light">Light</option>
