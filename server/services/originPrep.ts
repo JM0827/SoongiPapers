@@ -133,7 +133,11 @@ export function buildOriginPrepSnapshot({
 
   let isStale = false;
   if (originDoc && originProfile) {
-    if (!profileOriginFileId || !originFileId || profileOriginFileId !== originFileId) {
+    if (
+      originFileId &&
+      profileOriginFileId &&
+      profileOriginFileId !== originFileId
+    ) {
       isStale = true;
     } else if (
       originUpdatedMs !== null &&
