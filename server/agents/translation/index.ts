@@ -3,6 +3,7 @@ export * from "./types";
 export * from "./stageWorker";
 export * from "./translationDraftAgent";
 export * from "./translationSynthesisAgent";
+export * from "./reviseAgent";
 export * from "./stages/literalStage";
 export * from "./stages/styleStage";
 export * from "./stages/emotionStage";

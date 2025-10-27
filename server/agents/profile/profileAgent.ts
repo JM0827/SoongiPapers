@@ -9,7 +9,7 @@ import {
 } from "../../services/localeService";
 
 const DEFAULT_MODEL =
-  process.env.PROFILE_AGENT_MODEL || process.env.CHAT_MODEL || "gpt-4o-mini";
+  process.env.PROFILE_AGENT_MODEL || "gpt-4o-mini";
 const WORDS_PER_MINUTE = 220;
 const MAX_CONTEXT_CHARS = 8000;
 

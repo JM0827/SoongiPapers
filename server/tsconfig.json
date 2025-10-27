@@ -12,6 +12,7 @@
     "typeRoots": ["./node_modules/@types", "./types"],
     "baseUrl": "."
   },
+  "files": ["types/openai-responses.d.ts"],
   "include": [
     "index.ts",
     "models/**/*.ts",

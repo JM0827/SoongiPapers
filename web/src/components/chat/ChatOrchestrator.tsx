@@ -88,14 +88,16 @@ const isSupportedOriginFile = (file: File | { name?: string }): boolean => {
   return SUPPORTED_ORIGIN_EXTENSIONS.some((ext) => name.endsWith(ext));
 };
 
-const TRANSLATION_STAGE_ORDER = [
+const LEGACY_TRANSLATION_STAGE_ORDER = [
   "literal",
   "style",
   "emotion",
   "qa",
 ] as const;
 
-type TranslationPipelineStage = (typeof TRANSLATION_STAGE_ORDER)[number];
+const V2_TRANSLATION_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
+
+type TranslationPipelineStage = string;
 type TranslationDisplayStage = TranslationPipelineStage | "finalizing";
 
 const TRANSLATION_STAGE_FALLBACKS: Record<TranslationDisplayStage, string> = {
@@ -103,6 +105,9 @@ const TRANSLATION_STAGE_FALLBACKS: Record<TranslationDisplayStage, string> = {
   style: "스타일",
   emotion: "감정",
   qa: "QA",
+  draft: "초안",
+  revise: "정밀수정",
+  "micro-check": "마이크로 검사",
   finalizing: "후처리",
 };
 
@@ -1452,66 +1457,77 @@ export const ChatOrchestrator = ({
     const guardFailures = translationState.guardFailures ?? {};
     const flaggedSegments = translationState.flaggedSegments ?? [];
 
-    const sequential = totalSegments
-      ? {
-          stages: (() => {
-            const normalizedCurrentStage =
-              translationState.currentStage?.toLowerCase() ?? null;
-            const baseStages = TRANSLATION_STAGE_ORDER.map((stage) => {
-              const isCompleted = completedStages.includes(stage);
-              const isCurrent = currentStage === stage;
-              let state: "pending" | "running" | "done" | "failed" = "pending";
-              if (overall.failed) {
-                state = "failed";
-              } else if (isCompleted) {
-                state = "done";
-              } else if (isCurrent) {
-                state = "running";
-              }
-              return {
-                key: stage,
-                label: localize(
-                  `chat_stage_${stage}`,
-                  TRANSLATION_STAGE_FALLBACKS[stage] ?? stage,
-                ),
-                state,
-                count: stageCounts[stage] ?? 0,
-              };
-            });
+    const stageOrder = translationState.pipelineStages?.length
+      ? translationState.pipelineStages
+      : translationState.stageCounts?.draft ||
+          translationState.stageCounts?.["micro-check"]
+        ? Array.from(V2_TRANSLATION_STAGE_ORDER)
+        : Array.from(LEGACY_TRANSLATION_STAGE_ORDER);
 
-            const qaCount = stageCounts.qa ?? 0;
-            const qaComplete =
-              totalSegments > 0
-                ? qaCount >= totalSegments
-                : completedStages.includes("qa");
-            let finalizingState: "pending" | "running" | "done" | "failed" =
-              "pending";
+    const sequentialStages = stageOrder.length
+      ? (() => {
+          const normalizedCurrentStage =
+            translationState.currentStage?.toLowerCase() ?? null;
+          const baseStages = stageOrder.map((stage) => {
+            const isCompleted = completedStages.includes(stage);
+            const isCurrent = currentStage === stage;
+            let state: "pending" | "running" | "done" | "failed" = "pending";
             if (overall.failed) {
-              finalizingState = "failed";
-            } else if (overall.done) {
-              finalizingState = "done";
-            } else if (
-              normalizedCurrentStage === "finalizing" ||
-              qaComplete
-            ) {
-              finalizingState = "running";
+              state = "failed";
+            } else if (isCompleted) {
+              state = "done";
+            } else if (isCurrent) {
+              state = "running";
             }
-
-            const finalizingStage = {
-              key: "finalizing" as const,
+            return {
+              key: stage,
               label: localize(
-                "chat_stage_finalizing",
-                TRANSLATION_STAGE_FALLBACKS.finalizing,
+                `chat_stage_${stage}`,
+                TRANSLATION_STAGE_FALLBACKS[stage] ?? stage,
               ),
-              state: finalizingState,
-              count:
-                finalizingState === "done" || finalizingState === "running"
-                  ? totalSegments
-                  : 0,
+              state,
+              count: stageCounts[stage] ?? 0,
             };
+          });
 
-            return [...baseStages, finalizingStage];
-          })(),
+          const guardStageKey = stageOrder.includes("qa")
+            ? "qa"
+            : stageOrder[stageOrder.length - 1] ?? "qa";
+          const qaCount = stageCounts[guardStageKey] ?? 0;
+          const qaComplete =
+            totalSegments > 0
+              ? qaCount >= totalSegments
+              : completedStages.includes(guardStageKey);
+          let finalizingState: "pending" | "running" | "done" | "failed" =
+            "pending";
+          if (overall.failed) {
+            finalizingState = "failed";
+          } else if (overall.done) {
+            finalizingState = "done";
+          } else if (normalizedCurrentStage === "finalizing" || qaComplete) {
+            finalizingState = "running";
+          }
+
+          const finalizingStage = {
+            key: "finalizing" as const,
+            label: localize(
+              "chat_stage_finalizing",
+              TRANSLATION_STAGE_FALLBACKS.finalizing,
+            ),
+            state: finalizingState,
+            count:
+              finalizingState === "done" || finalizingState === "running"
+                ? Math.max(totalSegments, qaCount)
+                : 0,
+          };
+
+          return [...baseStages, finalizingStage];
+        })()
+      : [];
+
+    const sequential = sequentialStages.length
+      ? {
+          stages: sequentialStages,
           totalSegments,
           needsReviewCount,
           guardFailures,
@@ -1748,6 +1764,9 @@ export const ChatOrchestrator = ({
   }, [snapshot.lifecycle.publishing?.stage, translationStatusKey]);
 
   const translationDetail = useMemo(() => {
+    if (!translationVisual.overall.running) {
+      return undefined;
+    }
     const sequential = translationVisual.sequential;
     if (!sequential || !sequential.stages.length) {
       return undefined;
@@ -1775,17 +1794,12 @@ export const ChatOrchestrator = ({
     statusMeta.completed.label,
     statusMeta.failed.label,
     statusMeta.inProgress.label,
+    translationVisual.overall.running,
     translationVisual.sequential,
   ]);
 
   const originStageInfo = useMemo(() => {
     const baseLabel = stageLabels.origin;
-    const formatTimestamp = (value?: string | null) => {
-      if (!value) return null;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return null;
-      return date.toLocaleString();
-    };
 
     if (!hasOrigin) {
       return {
@@ -1860,7 +1874,11 @@ export const ChatOrchestrator = ({
       const items: Array<{
         key: "origin" | "translation" | "proofreading" | "quality" | "publishing";
         label: string;
-        status?: { label: string; tone: "info" | "success" | "danger" };
+        status?: {
+          label: string;
+          tone: "info" | "success" | "danger";
+          state?: StageStatusKey;
+        };
         detail?: string;
       }> = [];
 
@@ -1873,7 +1891,9 @@ export const ChatOrchestrator = ({
         items.push({
           key,
           label: labelOverride ?? stageLabels[key],
-          status: statusKey ? statusMeta[statusKey] : undefined,
+          status: statusKey
+            ? { ...statusMeta[statusKey], state: statusKey }
+            : undefined,
           detail,
         });
       };
@@ -2026,6 +2046,7 @@ export const ChatOrchestrator = ({
   }, [
     hasOrigin,
     localize,
+    translationPrepReady,
     nextTranslationLabel,
     proofreadingState.status,
     qualityState.status,

@@ -14,6 +14,17 @@ export interface ChatModelOption {
 
 const BASE_MODELS: ChatModelOption[] = [
   {
+    id: "gpt-5.0",
+    label: "GPT-5",
+    provider: "openai",
+    description:
+      "Next-gen reasoning model optimized for literary evaluation and revision.",
+    latencyClass: "quality",
+    contextWindow: 200_000,
+    recommended: true,
+    capabilityTags: ["general", "reasoning", "creative"],
+  },
+  {
     id: "gpt-4o-mini",
     label: "GPT-4o mini",
     provider: "openai",
@@ -32,7 +43,7 @@ const BASE_MODELS: ChatModelOption[] = [
       "Highest quality OpenAI general model for nuanced literary work.",
     latencyClass: "quality",
     contextWindow: 128_000,
-    recommended: true,
+    recommended: false,
     capabilityTags: ["general", "creative"],
   },
 ];

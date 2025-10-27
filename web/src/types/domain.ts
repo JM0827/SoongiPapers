@@ -73,6 +73,7 @@ export interface JobSequentialSummary {
       details?: Record<string, unknown> | null;
     }>;
   }>;
+  pipelineStages?: string[];
 }
 
 export interface TranslationDraftSummary {
@@ -96,7 +97,14 @@ export interface TranslationFinalSummary {
   sourceHash?: string | null;
 }
 
-export type TranslationStageKey = "literal" | "style" | "emotion" | "qa";
+export type TranslationStageKey =
+  | "literal"
+  | "style"
+  | "emotion"
+  | "qa"
+  | "draft"
+  | "revise"
+  | "micro-check";
 
 export type WorkflowType = "translation" | "proofread" | "quality";
 
@@ -844,6 +852,8 @@ interface BaseChatAction {
   label?: string | null;
   allowParallel?: boolean;
   autoStart?: boolean;
+  jobId?: string | null;
+  workflowRunId?: string | null;
 }
 
 export type ChatAction =

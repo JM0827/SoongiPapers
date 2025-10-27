@@ -12,26 +12,30 @@ import {
   isOriginPrepReady,
 } from "../lib/originPrep";
 
-const SEQUENTIAL_STAGE_ORDER = [
+const LEGACY_STAGE_ORDER = [
   "literal",
   "style",
   "emotion",
   "qa",
 ] as const;
 
+const V2_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
+
 const STAGE_LABELS: Record<string, string> = {
   literal: "직역 단계",
   style: "스타일 보정",
   emotion: "감정 조율",
   qa: "QA 검수",
+  draft: "Draft 생성",
+  revise: "정밀 수정",
+  "micro-check": "마이크로 검사",
   finalizing: "후처리",
 };
 
-const DISPLAY_STAGE_ORDER = [...SEQUENTIAL_STAGE_ORDER, "finalizing"] as const;
-
-const SEQUENTIAL_STAGE_LABEL_SEQUENCE = DISPLAY_STAGE_ORDER
-  .map((stage) => STAGE_LABELS[stage] ?? stage)
-  .join(" -> ");
+const getStageLabelSequence = (pipelineStages: string[]) =>
+  [...pipelineStages, "finalizing"]
+    .map((stage) => STAGE_LABELS[stage] ?? stage)
+    .join(" -> ");
 
 const extractWorkflowConflict = (
   payload: unknown,
@@ -421,13 +425,17 @@ export const useTranslationAgent = ({
           typeof response.totalPasses === "number" && response.totalPasses > 0
             ? response.totalPasses
             : 0;
+        const pipelineStagesForJob =
+          response.pipeline === 'v2'
+            ? Array.from(V2_STAGE_ORDER)
+            : Array.from(LEGACY_STAGE_ORDER);
         const isLegacyMultipass =
           totalPassesRaw > 0 &&
-          totalPassesRaw !== SEQUENTIAL_STAGE_ORDER.length;
+          totalPassesRaw !== pipelineStagesForJob.length;
         const stageProgressTotal = isLegacyMultipass
           ? totalPassesRaw
-          : SEQUENTIAL_STAGE_ORDER.length;
-        const stageSequenceMessage = `번역 작업을 시작했습니다. ${SEQUENTIAL_STAGE_LABEL_SEQUENCE} 순서로 진행됩니다.`;
+          : pipelineStagesForJob.length;
+        const stageSequenceMessage = `번역 작업을 시작했습니다. ${getStageLabelSequence(pipelineStagesForJob)} 순서로 진행됩니다.`;
         const sequentialBaseMessage = isLegacyMultipass
           ? `번역 작업을 시작했습니다. ${totalPassesRaw}회 패스를 실행합니다.`
           : stageSequenceMessage;
@@ -444,6 +452,7 @@ export const useTranslationAgent = ({
           currentStage: null,
           needsReviewCount: 0,
           totalSegments: 0,
+          pipelineStages: pipelineStagesForJob,
         });
         console.info("[translation] job started", response.jobId);
       } catch (err) {
@@ -502,13 +511,21 @@ export const useTranslationAgent = ({
                   const flaggedSegments = sequential?.flaggedSegments ?? [];
                   const totalSegments = sequential?.totalSegments ?? 0;
                   const needsReviewCount = sequential?.needsReviewCount ?? 0;
-                  const progressTotal = SEQUENTIAL_STAGE_ORDER.length;
+                  const syncedPipelineStages = sequential?.pipelineStages?.length
+                    ? sequential.pipelineStages
+                    : sequential?.stageCounts?.draft || sequential?.stageCounts?.["micro-check"]
+                      ? Array.from(V2_STAGE_ORDER)
+                      : Array.from(LEGACY_STAGE_ORDER);
+                  const progressTotal = syncedPipelineStages.length;
                   const progressCompleted = Math.min(
                     completedStages.length,
                     progressTotal,
                   );
                   const currentStage =
-                    sequential?.currentStage ?? completedStages.at(-1) ?? null;
+                    sequential?.currentStage ??
+                    syncedPipelineStages[progressCompleted] ??
+                    completedStages.at(-1) ??
+                    null;
 
                   setTranslation(projectId, {
                     status:
@@ -525,6 +542,7 @@ export const useTranslationAgent = ({
                     totalSegments,
                     guardFailures,
                     flaggedSegments,
+                    pipelineStages: syncedPipelineStages,
                     updatedAt: new Date().toISOString(),
                   });
                   synced = true;
@@ -658,8 +676,13 @@ export const useTranslationAgent = ({
         const sequential = job.sequential ?? null;
 
         if (sequential) {
-          const totalStages = SEQUENTIAL_STAGE_ORDER.length;
-          const stageCounts = sequential.stageCounts ?? {};
+        const inferredPipelineStages = sequential.pipelineStages?.length
+          ? sequential.pipelineStages
+          : sequential.stageCounts?.draft || sequential.stageCounts?.["micro-check"]
+            ? Array.from(V2_STAGE_ORDER)
+            : Array.from(LEGACY_STAGE_ORDER);
+        const totalStages = inferredPipelineStages.length;
+        const stageCounts = sequential.stageCounts ?? {};
           const completedStages = sequential.completedStages ?? [];
           const guardFailures = sequential.guardFailures ?? {};
           const flaggedSegments = sequential.flaggedSegments ?? [];
@@ -671,9 +694,9 @@ export const useTranslationAgent = ({
           const totalSegments = sequential.totalSegments ?? 0;
           const needsReviewCount = sequential.needsReviewCount ?? 0;
 
-          const stageIndex = Math.min(progressCompleted, totalStages - 1);
-          const inferredStage =
-            sequential.currentStage ?? SEQUENTIAL_STAGE_ORDER[stageIndex] ?? null;
+        const stageIndex = Math.min(progressCompleted, totalStages - 1);
+        const inferredStage =
+          sequential.currentStage ?? inferredPipelineStages[stageIndex] ?? null;
           const currentStage = inferredStage ?? null;
           const stageLabel = currentStage
             ? STAGE_LABELS[currentStage] ?? currentStage
@@ -713,6 +736,7 @@ export const useTranslationAgent = ({
                 totalSegments,
                 guardFailures,
                 flaggedSegments,
+                pipelineStages: inferredPipelineStages,
                 progressCompleted,
                 progressTotal,
                 updatedAt: nowIso,

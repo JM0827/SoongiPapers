@@ -1,6 +1,10 @@
 ﻿// routes/evaluation.ts
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
-import { evaluateQuality } from "../agents/qualityAgent";
+import {
+  evaluateQuality,
+  type FinalEvaluation,
+  type QualityEvaluationEvent,
+} from "../agents/qualityAgent";
 import { requireAuthAndPlanCheck } from "../middleware/auth";
 import { nanoid } from "nanoid";
 import QualityAssessment from "../models/QualityAssessment";
@@ -469,8 +473,300 @@ async function loadQualityHistory(projectId: string, userId: string) {
   }));
 }
 
+async function loadEbookSummary(projectId: string) {
+  try {
+    const ebookRes = await query(
+      `SELECT ebook_id, status, updated_at
+         FROM ebooks
+        WHERE project_id = $1
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+        LIMIT 1`,
+      [projectId],
+    );
+
+    if (!ebookRes.rows.length) {
+      return null;
+    }
+
+    const ebookRow = ebookRes.rows[0];
+    const ebookId = ebookRow.ebook_id as string;
+
+    const versionRes = await query(
+      `SELECT ebook_version_id, version_number, export_format, created_at, updated_at
+         FROM ebook_versions
+        WHERE ebook_id = $1
+        ORDER BY version_number DESC
+        LIMIT 1`,
+      [ebookId],
+    );
+    const versionRow = versionRes.rows[0] ?? null;
+
+    let assetRow: any = null;
+    if (versionRow) {
+      const assetRes = await query(
+        `SELECT ebook_asset_id, file_name, public_url, mime_type, file_path, size_bytes, checksum, updated_at
+           FROM ebook_assets
+          WHERE ebook_version_id = $1
+            AND asset_type = 'manuscript'
+            AND is_current = TRUE
+          LIMIT 1`,
+        [versionRow.ebook_version_id],
+      );
+      assetRow = assetRes.rows[0] ?? null;
+    }
+
+    const updatedAt =
+      ebookRow.updated_at?.toISOString?.() ??
+      versionRow?.updated_at?.toISOString?.() ??
+      versionRow?.created_at?.toISOString?.() ??
+      null;
+
+    return {
+      ebookId,
+      status: ebookRow.status ?? "unknown",
+      updatedAt,
+      format: versionRow?.export_format ?? null,
+      filename: assetRow?.file_name ?? null,
+      storageRef: assetRow?.public_url ?? null,
+      assetId: assetRow?.ebook_asset_id ?? null,
+      versionId: versionRow?.ebook_version_id ?? null,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 // ---------- plugin ----------
 const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
+  // POST /api/evaluate/stream
+  fastify.post(
+    "/api/evaluate/stream",
+    {
+      preHandler: requireAuthAndPlanCheck,
+      schema: {
+        body: {
+          type: "object",
+          required: ["source", "translated"],
+          properties: {
+            source: { type: "string" },
+            translated: { type: "string" },
+            authorIntention: { type: "string" },
+            model: { type: "string" },
+            maxCharsPerChunk: { type: "number" },
+            overlap: { type: "number" },
+            projectId: { type: "string" },
+            jobId: { type: "string" },
+            workflowLabel: { type: "string" },
+            workflowAllowParallel: { type: "boolean" },
+            concurrency: { type: "number" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const userId = getUserId(request);
+      const body = request.body as {
+        source: string;
+        translated: string;
+        authorIntention?: string;
+        model?: string;
+        maxCharsPerChunk?: number;
+        overlap?: number;
+        projectId?: string;
+        jobId?: string;
+        workflowLabel?: string;
+        workflowAllowParallel?: boolean;
+        concurrency?: number;
+      };
+
+      let workflowRun: WorkflowRunRecord | null = null;
+
+      if (body.projectId) {
+        try {
+          const wfResult = await requestWorkflowAction({
+            projectId: body.projectId,
+            type: "quality",
+            requestedBy: userId,
+            label: body.workflowLabel ?? null,
+            metadata: {
+              jobId: body.jobId ?? null,
+              source: "quality.evaluate.stream",
+            },
+            allowParallel: Boolean(body.workflowAllowParallel),
+          });
+
+          if (!wfResult.accepted || !wfResult.run) {
+            return fail(
+              reply,
+              409,
+              "해당 프로젝트에서는 품질 검토를 실행할 수 없습니다.",
+            );
+          }
+
+          workflowRun = wfResult.run;
+        } catch (workflowError) {
+          return handleError(
+            request,
+            reply,
+            workflowError,
+            "품질 검토 워크플로우를 준비하지 못했습니다",
+          );
+        }
+      }
+
+      reply.hijack();
+      reply.raw.statusCode = 200;
+      reply.raw.setHeader(
+        "Content-Type",
+        "application/x-ndjson; charset=utf-8",
+      );
+      reply.raw.setHeader("Cache-Control", "no-cache");
+      reply.raw.setHeader("Connection", "keep-alive");
+      reply.raw.setHeader("Transfer-Encoding", "chunked");
+
+      let streamClosed = false;
+      request.raw.once("close", () => {
+        streamClosed = true;
+      });
+
+      const flush = () => {
+        const raw = reply.raw as any;
+        if (typeof raw.flush === "function") {
+          try {
+            raw.flush();
+          } catch (err) {
+            request.log.trace(
+              { err },
+              "[QUALITY] Failed to flush NDJSON response",
+            );
+          }
+        }
+      };
+
+      const send = (payload: Record<string, unknown>) => {
+        if (streamClosed) return;
+        try {
+          reply.raw.write(`${JSON.stringify(payload)}\n`);
+          flush();
+        } catch (err) {
+          streamClosed = true;
+          request.log.warn(
+            { err },
+            "[QUALITY] Failed to write NDJSON chunk",
+          );
+        }
+      };
+
+      const serializeEvent = (event: QualityEvaluationEvent) => {
+        if (event.type === "chunk-error") {
+          return {
+            ...event,
+            error:
+              event.error instanceof Error
+                ? {
+                    name: event.error.name,
+                    message: event.error.message,
+                  }
+                : event.error ?? null,
+          };
+        }
+        return event;
+      };
+
+      let finalResult: FinalEvaluation | null = null;
+
+      const sendEvent = (event: QualityEvaluationEvent) => {
+        if (event.type === "complete") {
+          finalResult = event.result;
+        }
+        send(serializeEvent(event));
+      };
+
+      try {
+        const result = await evaluateQuality(
+          {
+            source: body.source,
+            translated: body.translated,
+            authorIntention: body.authorIntention,
+            model: body.model,
+            maxCharsPerChunk: body.maxCharsPerChunk,
+            overlap: body.overlap,
+          },
+          {
+            concurrency:
+              typeof body.concurrency === "number" && body.concurrency > 0
+                ? body.concurrency
+                : undefined,
+            listeners: {
+              onEvent: async (event) => {
+                sendEvent(event);
+              },
+            },
+          },
+        );
+
+        if (!finalResult) {
+          finalResult = result;
+          sendEvent({ type: "complete", result });
+        }
+
+        const tokens = finalResult.meta?.tokens;
+        if ((body.projectId || body.jobId) && tokens) {
+          await recordTokenUsage(request.log, {
+            project_id: body.projectId,
+            job_id: body.jobId,
+            event_type: "quality",
+            model: finalResult.meta.model,
+            input_tokens: tokens.input,
+            output_tokens: tokens.output,
+          });
+        }
+
+        if (workflowRun) {
+          await completeWorkflowRun(workflowRun.runId, {
+            jobId: body.jobId ?? null,
+            score: finalResult.overallScore,
+          });
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err ?? "Unknown error");
+        request.log.error({ err }, "[QUALITY] Streamed evaluation failed");
+        try {
+          send({ type: "error", message });
+        } catch (writeErr) {
+          request.log.warn(
+            { err: writeErr },
+            "[QUALITY] Failed to send error event",
+          );
+        }
+
+        if (workflowRun) {
+          try {
+            await failWorkflowRun(workflowRun.runId, {
+              jobId: body.jobId ?? null,
+              error: message,
+            });
+          } catch (workflowError) {
+            request.log.warn(
+              { err: workflowError, runId: workflowRun.runId },
+              "[QUALITY] Failed to mark workflow run failure",
+            );
+          }
+        }
+      } finally {
+        try {
+          reply.raw.end();
+        } catch (endErr) {
+          request.log.trace(
+            { err: endErr },
+            "[QUALITY] Failed to close NDJSON stream",
+          );
+        }
+      }
+    },
+  );
+
   // POST /api/evaluate
   fastify.post(
     "/api/evaluate",
@@ -879,6 +1175,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
             }
           : { exists: false, stage: "none" };
 
+        const ebookSummary = await loadEbookSummary(projectId);
+
         // compute availability
         const available = {
           origin: !!(originDoc?.text_content || content.origin?.content),
@@ -1057,6 +1355,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           proofreadingStage,
           available,
           originPrep,
+          ebook: ebookSummary,
         });
       } catch (err) {
         return handleError(

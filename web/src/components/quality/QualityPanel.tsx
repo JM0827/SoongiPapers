@@ -13,6 +13,9 @@ interface QualityAssessmentMetaShape {
   model?: string;
   chunks?: number;
   chunkSize?: number;
+  overlap?: number;
+  chunkStats?: Array<Record<string, unknown>>;
+  config?: Record<string, unknown>;
 }
 
 interface QualityAssessmentResultShape {
@@ -36,6 +39,9 @@ const parseMeta = (value: unknown): QualityAssessmentMetaShape | undefined => {
   if (typeof value.model === "string") meta.model = value.model;
   if (typeof value.chunks === "number") meta.chunks = value.chunks;
   if (typeof value.chunkSize === "number") meta.chunkSize = value.chunkSize;
+  if (typeof value.overlap === "number") meta.overlap = value.overlap;
+  if (Array.isArray(value.chunkStats)) meta.chunkStats = value.chunkStats as Array<Record<string, unknown>>;
+  if (isRecord(value.config)) meta.config = value.config as Record<string, unknown>;
   return Object.keys(meta).length ? meta : undefined;
 };
 
@@ -295,6 +301,7 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
   const projectId = useProjectStore((state) => state.activeProjectId);
   const { data: qualityHistory } = useQualityHistory(projectId);
   const qualityStatus = useWorkflowStore((state) => state.quality.status);
+  const qualityLastMessage = useWorkflowStore((state) => state.quality.lastMessage);
   const assessments = useMemo(
     () => extractAssessments(qualityHistory),
     [qualityHistory],
@@ -314,7 +321,10 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
     : null;
   const stageDescription = (() => {
     if (qualityStatus === "running") {
-      return "Quality assessment is running. Results will refresh automatically.";
+      return (
+        qualityLastMessage ??
+        "Quality assessment is running. Results will refresh automatically."
+      );
     }
     if (qualityStatus === "failed") {
       return "Quality assessment failed. Retry from the Run Quality Assessment button.";
@@ -338,7 +348,7 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
 
   const metaLine = useMemo(() => {
     if (!qualityResult?.meta) return null;
-    const { model, chunks, chunkSize } = qualityResult.meta;
+    const { model, chunks, chunkSize, overlap } = qualityResult.meta;
     const parts: string[] = [];
     if (model) parts.push(`최신 평가 모델: ${model}`);
     if (typeof chunks === "number" || typeof chunkSize === "number") {
@@ -347,6 +357,9 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
       const chunkSizeLabel =
         typeof chunkSize === "number" ? `${chunkSize}` : "?";
       parts.push(`청크 수: ${chunkCountLabel} / 청크 크기: ${chunkSizeLabel}`);
+    }
+    if (typeof overlap === "number") {
+      parts.push(`청크 겹침: ${overlap}`);
     }
     if (!parts.length) return null;
     return parts.join(" · ");

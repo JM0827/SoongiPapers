@@ -40,6 +40,22 @@ npm install
 
 The install step links the local packages (`packages/translation-types`, `packages/ai-image-gen`) so they can be imported as `@bookko/translation-types` and `@bookko/ai-image-gen` throughout the monorepo.
 
+## Local Service Setup
+Before running the Fastify API, make sure PostgreSQL, MongoDB, and Redis are installed and running locally (or point the environment variables at hosted instances).
+
+### PostgreSQL
+- Install version 14+ locally (for example `brew install postgresql@14 && brew services start postgresql@14` on macOS or `docker run --name soongi-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:14`).
+- Create the database referenced by `server/.env` and apply the schema helpers via `psql -f server/db-init.sql` or `node server/db-init.ts`. Optional seed data lives in `server/db-seed.sql`.
+
+### MongoDB
+- Install MongoDB 6+ and run `mongod --dbpath <path>` or use Docker (`docker run --name soongi-mongo -p 27017:27017 mongo:6`).
+- Bootstrap collections with `node server/db-mongo-schema.js`; the `server/db-mongo-flushoutData.js` script clears local data when you need a clean slate.
+
+### Redis
+- Install Redis 6+ (`brew install redis`, `apt install redis-server`, or `docker run --name soongi-redis -p 6379:6379 redis:6`) and start it before you launch the API.
+- Set `REDIS_URL=redis://localhost:6379/0` (or point it to your managed instance). All BullMQ queues (`translation_drafts`, `translation_stage`, `translation_synthesis`, `translation_v2`) share this connection and the server exits early if Redis is unreachable.
+
+
 ## Local Development
 - Start the Vite client: `npm run dev --prefix web`
 - Start the Fastify API: `npm run dev --prefix server`
@@ -47,6 +63,22 @@ The install step links the local packages (`packages/translation-types`, `packag
 - Enable HTTPS locally (generates self-signed certs once): `npm run generate-ssl`
 
 The web dev server defaults to http://localhost:5173 and the API to http://localhost:8080. Adjust ports in the respective `.env` files if needed.
+
+## Translation Pipelines
+The platform currently supports the legacy literal -> style -> emotion -> QA workflow and the new Pipeline V2 centered on Draft -> Revise -> Micro-Checks. Use V2 when piloting GPT-5 as documented in `docs/translationOptimization.md`.
+
+### Legacy multi-pass
+- Remains the default when the V2 feature flag is disabled. Jobs traverse the stage queues (`translation_drafts`, `translation_stage`, `translation_synthesis`) shown in the timeline UI.
+
+### Pipeline V2 (Draft -> Revise -> Micro-Checks)
+- Generates multiple low-temperature Draft candidates, deliberates to pick a winner, runs the Revise agent, and gates the result through Micro-Checks before persisting final segments.
+- Jobs enqueue on the `translation_v2` queue and log with the `[TRANSLATION_V2]` prefix, so keep Redis running before enabling the flag.
+
+### Feature flags & tuning
+- `TRANSLATION_PIPELINE_V2_ENABLED=true` switches every project to the new flow. Use `TRANSLATION_PIPELINE_V2_PROJECTS=projId1,projId2` to roll it out selectively.
+- Override GPT models with `TRANSLATION_DRAFT_MODEL_V2`, `TRANSLATION_DRAFT_JUDGE_MODEL_V2`, and `TRANSLATION_REVISE_MODEL_V2`. Each falls back to the legacy envs (`TRANSLATION_DRAFT_MODEL`, `TRANSLATION_DRAFT_JUDGE_MODEL`, `TRANSLATION_REVISE_MODEL`) and finally `CHAT_MODEL`.
+- Control the Draft n-best fan-out with `TRANSLATION_DRAFT_CANDIDATES` (accepted range 1-3). Runtime overrides for temperature and top-p are still respected if you pass them in job configs.
+
 
 ## Builds & Testing
 - Create production bundles: `npm run build --prefix web` and `npm run build --prefix server`
@@ -77,7 +109,7 @@ Never commit populated `.env` files. Use environment-specific secrets management
 ## Data & Queue Services
 - PostgreSQL stores project metadata, workflow runs, and translation artifacts.
 - MongoDB stores chat history, proofreading results, and quality assessments.
-- Redis powers BullMQ queues (`translation_drafts`, `translation_synthesis`, sequential stage runners) and needs to be reachable before the API boots.
+- Redis powers BullMQ queues (`translation_drafts`, `translation_stage`, `translation_synthesis`, and the new `translation_v2` pipeline) and must be reachable before the API boots; set `REDIS_URL` before starting the server.
 
 Utility scripts in `server/db-*.sql` and `server/db-mongo-*.js` help bootstrap schemas for local development; run them manually when seeding fresh databases.
 
@@ -85,6 +117,7 @@ Utility scripts in `server/db-*.sql` and `server/db-mongo-*.js` help bootstrap s
 - `AGENTS.md` – catalog of translation, proofreading, evaluation, and ebook agents.
 - `docs/chat-ux-enhancement-design.md` – plan for the Soongi assistant conversation model.
 - `docs/conversational-editing-plan.md` – outlines Monaco selection workflows and rewrite flows.
+- `docs/translationOptimization.md` – GPT-5 translation pipeline V2 execution plan, feature flags, and rollout phases.
 - `docs/UX 재정비 설계서1.md` – Korean UX overhaul proposal (original reference).
 
 Review these documents when making UX or agent changes to stay aligned with the product roadmap.

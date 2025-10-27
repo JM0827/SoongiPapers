@@ -16,6 +16,25 @@ export type ProofreadingStatus =
   | "failed";
 export type QualityStatus = "idle" | "running" | "done" | "failed";
 
+export interface QualityChunkSummary {
+  index: number;
+  status: "pending" | "running" | "completed" | "error" | "partial" | "fallback";
+  score: number | null;
+  durationMs: number | null;
+  requestId?: string | null;
+  maxOutputTokensUsed?: number | null;
+  usage?: {
+    promptTokens?: number | null;
+    completionTokens?: number | null;
+    totalTokens?: number | null;
+  } | null;
+  message?: string | null;
+  fallbackApplied?: boolean;
+  missingFields?: string[];
+  attempts?: number | null;
+  preview?: string | null;
+}
+
 export interface TranslationAgentState {
   status: TranslationStatus;
   jobId: string | null;
@@ -28,6 +47,7 @@ export interface TranslationAgentState {
   totalSegments: number;
   guardFailures: Record<string, number>;
   flaggedSegments: JobSequentialSummary["flaggedSegments"];
+  pipelineStages: string[];
   lastError: string | null;
   lastMessage: string | null;
   updatedAt: string | null;
@@ -79,6 +99,11 @@ export interface QualityAgentState {
   lastError: string | null;
   updatedAt: string | null;
   projectId: string | null;
+  chunksTotal: number;
+  chunksCompleted: number;
+  currentChunkIndex: number | null;
+  chunkSummaries: QualityChunkSummary[];
+  lastMessage: string | null;
 }
 
 interface WorkflowState {
@@ -120,6 +145,7 @@ const defaultTranslationState: TranslationAgentState = {
   totalSegments: 0,
   guardFailures: {},
   flaggedSegments: [],
+  pipelineStages: [],
   lastError: null,
   lastMessage: null,
   updatedAt: null,
@@ -147,6 +173,11 @@ const defaultQualityState: QualityAgentState = {
   lastError: null,
   updatedAt: null,
   projectId: null,
+  chunksTotal: 0,
+  chunksCompleted: 0,
+  currentChunkIndex: null,
+  chunkSummaries: [],
+  lastMessage: null,
 };
 
 export const useWorkflowStore = create<WorkflowState>((set) => ({

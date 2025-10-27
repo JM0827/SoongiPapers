@@ -4,6 +4,8 @@ import { query } from "../db";
 
 export type UsageEventType =
   | "translate"
+  | "translate_v2_draft"
+  | "translate_v2_revise"
   | "quality"
   | "proofread"
   | "ebook"

@@ -35,6 +35,7 @@ import type {
   EditingSuggestionResponse,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
+import { streamNdjson } from "./sse";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -43,6 +44,99 @@ const defaultHeaders = (token?: string) =>
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }) as const;
+
+export type QualityStreamStartEvent = {
+  type: "start";
+  totalChunks: number;
+  model: string;
+  params: {
+    chunkSize: number;
+    overlap: number;
+    maxOutputTokens: number;
+    maxOutputTokensCap: number;
+    concurrency: number;
+  };
+};
+
+export type QualityStreamChunkStartEvent = {
+  type: "chunk-start";
+  index: number;
+  total: number;
+  sourceLength: number;
+  translatedLength: number;
+  maxOutputTokens: number;
+};
+
+export type QualityStreamChunkRetryEvent = {
+  type: "chunk-retry";
+  index: number;
+  from: number;
+  to: number;
+};
+
+export type QualityStreamChunkCompleteEvent = {
+  type: "chunk-complete";
+  index: number;
+  total: number;
+  durationMs: number;
+  requestId?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  maxOutputTokensUsed: number;
+  result: QualityAssessmentResultPayload;
+  fallbackApplied?: boolean;
+  missingFields?: string[];
+  attempts?: number;
+  preview?: string | null;
+};
+
+export type QualityStreamChunkPartialEvent = {
+  type: "chunk-partial";
+  index: number;
+  total: number;
+  attempt: number;
+  missingFields: string[];
+  requestId?: string;
+  preview?: string | null;
+  fallbackApplied: boolean;
+};
+
+export type QualityStreamChunkErrorEvent = {
+  type: "chunk-error";
+  index: number;
+  message: string;
+  error?: unknown;
+};
+
+export type QualityStreamProgressEvent = {
+  type: "progress";
+  completed: number;
+  total: number;
+};
+
+export type QualityStreamCompleteEvent = {
+  type: "complete";
+  result: QualityAssessmentResultPayload;
+};
+
+export type QualityStreamErrorEvent = {
+  type: "error";
+  message: string;
+};
+
+export type QualityStreamEvent =
+  | QualityStreamStartEvent
+  | QualityStreamChunkStartEvent
+  | QualityStreamChunkRetryEvent
+  | QualityStreamChunkCompleteEvent
+  | QualityStreamChunkPartialEvent
+  | QualityStreamChunkErrorEvent
+  | QualityStreamProgressEvent
+  | QualityStreamCompleteEvent
+  | QualityStreamErrorEvent;
 
 type UploadOriginResponse = {
   success: boolean;
@@ -376,6 +470,12 @@ const normalizeJob = (job: unknown): JobSummary => {
           .filter((stage): stage is string => Boolean(stage))
       : [];
 
+    const pipelineStages = Array.isArray(job.sequential.pipelineStages)
+      ? job.sequential.pipelineStages
+          .map((stage) => (typeof stage === "string" ? stage : null))
+          .filter((stage): stage is string => Boolean(stage))
+      : undefined;
+
     sequential = {
       stageCounts,
       totalSegments: Number(job.sequential.totalSegments ?? 0),
@@ -387,6 +487,7 @@ const normalizeJob = (job: unknown): JobSummary => {
           : null,
       guardFailures,
       flaggedSegments,
+      pipelineStages,
     };
   }
 
@@ -1159,6 +1260,7 @@ export const api = {
       segmentCount: number;
       segmentationMode?: string;
       sourceHash?: string;
+      pipeline?: string;
     }>(res);
   },
 
@@ -1686,6 +1788,81 @@ export const api = {
     return handle<
       QualityAssessmentResultPayload | { data?: QualityAssessmentResultPayload }
     >(res);
+  },
+
+  async evaluateQualityStream(
+    token: string,
+    payload: {
+      source: string;
+      translated: string;
+      authorIntention?: string;
+      model?: string;
+      maxCharsPerChunk?: number;
+      overlap?: number;
+      projectId?: string;
+      jobId?: string;
+      workflowLabel?: string | null;
+      workflowAllowParallel?: boolean;
+    },
+    handlers: {
+      onEvent?: (event: QualityStreamEvent) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<QualityAssessmentResultPayload> {
+    const controller = new AbortController();
+    if (handlers.signal) {
+      const abortViaSignal = () => controller.abort();
+      if (handlers.signal.aborted) {
+        controller.abort();
+      } else {
+        handlers.signal.addEventListener("abort", abortViaSignal, {
+          once: true,
+        });
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/api/evaluate/stream`, {
+      method: "POST",
+      headers: defaultHeaders(token),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Failed to stream quality assessment");
+    }
+
+    let finalResult: QualityAssessmentResultPayload | null = null;
+    let streamError: Error | null = null;
+
+    try {
+      await streamNdjson<QualityStreamEvent>(res, (event) => {
+        handlers.onEvent?.(event);
+        if (event.type === "complete") {
+          finalResult = event.result;
+        }
+        if (event.type === "error") {
+          streamError = new Error(event.message ?? "Quality stream error");
+          controller.abort();
+        }
+      });
+    } catch (err) {
+      if (!streamError) {
+        streamError =
+          err instanceof Error ? err : new Error(String(err ?? "Unknown error"));
+      }
+    }
+
+    if (streamError) {
+      throw streamError;
+    }
+
+    if (!finalResult) {
+      throw new Error("Quality stream ended without a result");
+    }
+
+    return finalResult;
   },
 
   async saveQualityAssessment(

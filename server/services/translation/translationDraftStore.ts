@@ -20,6 +20,37 @@ async function ensureTranslationDraftSchema(): Promise<void> {
 
   try {
     await query(
+      "ALTER TABLE translation_drafts ADD COLUMN IF NOT EXISTS span_pairs JSONB",
+      [],
+    );
+  } catch (error) {
+    // ignore
+  }
+
+  try {
+    await query(
+      "ALTER TABLE translation_drafts ADD COLUMN IF NOT EXISTS candidates JSONB",
+      [],
+    );
+  } catch (error) {
+    // ignore
+  }
+
+  try {
+    await query(
+      "ALTER TABLE translation_drafts DROP CONSTRAINT IF EXISTS translation_drafts_stage_check",
+      [],
+    );
+    await query(
+      "ALTER TABLE translation_drafts ADD CONSTRAINT translation_drafts_stage_check CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check'))",
+      [],
+    );
+  } catch (error) {
+    // ignore
+  }
+
+  try {
+    await query(
       "CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_drafts_job_stage ON translation_drafts (job_id, stage, segment_index)",
       [],
     );
@@ -40,6 +71,8 @@ interface StageRecord {
   scoresJson: string | null;
   guardsJson: string | null;
   notesJson: string | null;
+  spanPairsJson: string | null;
+  candidatesJson: string | null;
   needsReview: boolean;
 }
 
@@ -60,10 +93,13 @@ function serializeRecord(
   const notes = result.notes ?? null;
   const backTranslation =
     extractBackTranslation(result) ?? extractBackTranslation(notes) ?? null;
+  const spanPairs = result.spanPairs ?? null;
+  const candidates = result.candidates ?? null;
 
-  const needsReview = job.stage === "qa"
-    ? !(guards?.allOk ?? true)
-    : false;
+  const needsReview =
+    job.stage === "qa" || job.stage === "micro-check"
+      ? !(guards?.allOk ?? true)
+      : false;
 
   return {
     segmentId: segment.segmentId,
@@ -75,6 +111,10 @@ function serializeRecord(
     scoresJson: scores ? JSON.stringify(scores) : null,
     guardsJson: guards ? JSON.stringify(guards) : null,
     notesJson: notes ? JSON.stringify(notes) : null,
+    spanPairsJson: spanPairs ? JSON.stringify(spanPairs) : null,
+    candidatesJson: Array.isArray(candidates) && candidates.length
+      ? JSON.stringify(candidates)
+      : null,
     needsReview,
   };
 }
@@ -100,7 +140,7 @@ export async function persistStageResults(
 
   for (const record of records) {
     values.push(
-      `($${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, NOW())`,
+      `($${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, $${index++}, NOW())`,
     );
     params.push(
       job.projectId,
@@ -117,6 +157,8 @@ export async function persistStageResults(
       record.scoresJson,
       record.guardsJson,
       record.notesJson,
+      record.spanPairsJson,
+      record.candidatesJson,
       record.needsReview,
       retryCount,
     );
@@ -138,6 +180,8 @@ export async function persistStageResults(
       scores,
       guards,
       notes,
+      span_pairs,
+      candidates,
       needs_review,
       retry_count,
       updated_at
@@ -151,6 +195,8 @@ export async function persistStageResults(
       scores = EXCLUDED.scores,
       guards = EXCLUDED.guards,
       notes = EXCLUDED.notes,
+      span_pairs = EXCLUDED.span_pairs,
+      candidates = EXCLUDED.candidates,
       needs_review = EXCLUDED.needs_review,
       retry_count = EXCLUDED.retry_count,
       updated_at = NOW();

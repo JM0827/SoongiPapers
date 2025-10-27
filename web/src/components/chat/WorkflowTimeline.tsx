@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 
 type StageKey =
   | "origin"
@@ -8,12 +8,15 @@ type StageKey =
   | "quality"
   | "publishing";
 
+type StageState = "ready" | "queued" | "inProgress" | "completed" | "failed";
+
 interface WorkflowStageItem {
   key: StageKey;
   label: string;
   status?: {
     label: string;
     tone: "info" | "success" | "danger";
+    state?: StageState;
   };
   detail?: ReactNode;
 }
@@ -57,6 +60,12 @@ const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProp
                   <span
                     className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${toneClass(stage.status.tone)}`}
                   >
+                    {stage.status.state === "inProgress" ? (
+                      <Loader2
+                        className="mr-1 h-3 w-3 animate-spin"
+                        aria-hidden="true"
+                      />
+                    ) : null}
                     {stage.status.label}
                   </span>
                 )

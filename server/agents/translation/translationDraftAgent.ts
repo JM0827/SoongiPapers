@@ -1,6 +1,7 @@
 import { OpenAI } from "openai";
 import type { TranslationNotes } from "../../models/DocumentProfile";
 import type { OriginSegment } from "./segmentationAgent";
+import { buildDraftSystemPrompt } from "./promptBuilder";
 
 export interface TranslationDraftAgentOptions {
   projectId: string;
@@ -14,6 +15,30 @@ export interface TranslationDraftAgentOptions {
   model?: string;
   temperature?: number;
   topP?: number;
+  candidateCount?: number;
+  deliberationModel?: string;
+  projectTitle?: string | null;
+  authorName?: string | null;
+  synopsis?: string | null;
+  register?: string | null;
+}
+
+export interface DraftSpanPair {
+  source_span_id: string;
+  source_start: number;
+  source_end: number;
+  target_start: number;
+  target_end: number;
+  note?: string;
+  confidence?: number;
+}
+
+export interface DraftCandidateVariant {
+  candidate_id: string;
+  text: string;
+  rationale?: string;
+  score?: number;
+  selected?: boolean;
 }
 
 export interface TranslationDraftAgentSegmentResult {
@@ -21,6 +46,8 @@ export interface TranslationDraftAgentSegmentResult {
   origin_segment: string;
   translation_segment: string;
   notes: string[];
+  spanPairs?: DraftSpanPair[];
+  candidates?: DraftCandidateVariant[];
 }
 
 export interface TranslationDraftAgentResult {
@@ -35,8 +62,27 @@ export interface TranslationDraftAgentResult {
   mergedText: string;
 }
 
+interface DraftCandidate {
+  id: string;
+  segments: TranslationDraftAgentSegmentResult[];
+  mergedText: string;
+  model: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+}
+
 const DEFAULT_TRANSLATION_MODEL =
   process.env.TRANSLATION_DRAFT_MODEL || process.env.CHAT_MODEL || "gpt-4o";
+const DEFAULT_JUDGE_MODEL =
+  process.env.TRANSLATION_DRAFT_JUDGE_MODEL || process.env.CHAT_MODEL || "gpt-4o";
+const parsedCandidateEnv = Number(
+  process.env.TRANSLATION_DRAFT_CANDIDATES ?? "1",
+);
+const DEFAULT_CANDIDATE_COUNT = Number.isFinite(parsedCandidateEnv)
+  ? Math.max(1, Math.min(3, parsedCandidateEnv))
+  : 1;
 const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_TOP_P = 0.9;
 
@@ -143,6 +189,31 @@ const draftResponseSchema = {
   },
 };
 
+const deliberationResponseSchema = {
+  name: "draft_candidate_judgement",
+  schema: {
+    type: "object",
+    required: ["bestCandidateId", "analysis"],
+    properties: {
+      bestCandidateId: { type: "string" },
+      rationale: { type: "string" },
+      analysis: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          required: ["candidateId", "summary"],
+          properties: {
+            candidateId: { type: "string" },
+            summary: { type: "string" },
+            score: { type: "number" },
+          },
+        },
+      },
+    },
+  },
+};
+
 function buildUserPromptPayload(options: TranslationDraftAgentOptions) {
   const payload: Record<string, unknown> = {
     projectId: options.projectId,
@@ -199,18 +270,133 @@ export async function generateTranslationDraft(
       : DEFAULT_TEMPERATURE;
   const topP = typeof options.topP === "number" ? options.topP : DEFAULT_TOP_P;
 
-  const systemPrompt = `You are a master literary translator. Produce a polished, idiomatic translation for each segment.
-Return only valid JSON following the provided schema. Do not include explanations.
-Guidelines:
-- Reconstruct broken sentences when hard line breaks or hyphenation appear.
-- Preserve narrative voice, tone, and figurative language.
-- Resolve PDF/HWP artifacts (hyphenated words, bullet fragments, table cells).
-- Keep inline formatting markers (#, *, …) if they carry meaning; otherwise omit.
-- Ensure the translation reads like natural prose aimed at publication.
-- Use double quotes for dialogue in English unless the context dictates otherwise.
-- Keep paragraph relationships aligned with the provided segment order.`;
+  const systemPrompt = buildDraftSystemPrompt({
+    projectTitle: options.projectTitle ?? null,
+    authorName: options.authorName ?? null,
+    synopsis: options.synopsis ?? null,
+    register: options.register ?? null,
+    sourceLanguage: options.originLanguage ?? null,
+    targetLanguage: options.targetLanguage ?? null,
+    translationNotes: options.translationNotes ?? null,
+  });
 
   const userPayload = buildUserPromptPayload(options);
+  const candidateCount = Math.max(
+    1,
+    Math.min(3, options.candidateCount ?? DEFAULT_CANDIDATE_COUNT),
+  );
+
+  const candidates: DraftCandidate[] = [];
+  let aggregateUsage = { inputTokens: 0, outputTokens: 0 };
+
+  for (let index = 0; index < candidateCount; index += 1) {
+    const candidate = await requestDraftCandidate({
+      userPayload,
+      systemPrompt,
+      model,
+      temperature,
+      topP,
+      options,
+    });
+    const candidateId = candidateCount === 1 ? "candidate-1" : `candidate-${index + 1}`;
+    candidates.push({
+      id: candidateId,
+      ...candidate,
+    });
+    aggregateUsage.inputTokens += candidate.usage.inputTokens;
+    aggregateUsage.outputTokens += candidate.usage.outputTokens;
+  }
+
+  let selectedCandidate = candidates[0];
+  const candidateAnalyses: Record<string, { summary: string; score?: number }> = {};
+
+  if (candidates.length > 1) {
+    const deliberation = await deliberateDraftCandidates({
+      candidates,
+      originSegments: options.originSegments,
+      sourceLanguage: options.originLanguage ?? null,
+      targetLanguage: options.targetLanguage ?? null,
+      translationNotes: options.translationNotes ?? null,
+      model: options.deliberationModel ?? DEFAULT_JUDGE_MODEL,
+    });
+    if (deliberation) {
+      aggregateUsage.inputTokens += deliberation.usage.inputTokens;
+      aggregateUsage.outputTokens += deliberation.usage.outputTokens;
+      const winner = candidates.find(
+        (candidate) => candidate.id === deliberation.bestCandidateId,
+      );
+      if (winner) {
+        selectedCandidate = winner;
+      }
+      for (const entry of deliberation.analysis) {
+        candidateAnalyses[entry.candidateId] = {
+          summary: entry.summary,
+          score: entry.score,
+        };
+      }
+    }
+  }
+
+  const candidateSegmentMap = new Map<string, Map<string, TranslationDraftAgentSegmentResult>>();
+  candidates.forEach((candidate) => {
+    candidateSegmentMap.set(
+      candidate.id,
+      new Map(candidate.segments.map((segment) => [segment.segment_id, segment])),
+    );
+  });
+
+  const enrichedSegments = selectedCandidate.segments.map((segment) => {
+    const variants: DraftCandidateVariant[] = candidates.map((candidate) => {
+      const candidateSegment = candidateSegmentMap
+        .get(candidate.id)
+        ?.get(segment.segment_id);
+      return {
+        candidate_id: candidate.id,
+        text: candidateSegment?.translation_segment ?? segment.translation_segment,
+        rationale: candidateAnalyses[candidate.id]?.summary,
+        score: candidateAnalyses[candidate.id]?.score,
+        selected: candidate.id === selectedCandidate.id,
+      };
+    });
+    return {
+      ...segment,
+      spanPairs:
+        segment.spanPairs ??
+        buildSpanPairs(
+          segment.segment_id,
+          segment.origin_segment,
+          segment.translation_segment,
+        ),
+      candidates: variants,
+    } satisfies TranslationDraftAgentSegmentResult;
+  });
+
+  return {
+    model: selectedCandidate.model,
+    temperature,
+    topP,
+    usage: aggregateUsage,
+    segments: enrichedSegments,
+    mergedText: selectedCandidate.mergedText,
+  };
+}
+
+interface RequestCandidateParams {
+  userPayload: Record<string, unknown>;
+  systemPrompt: string;
+  model: string;
+  temperature: number;
+  topP: number;
+  options: TranslationDraftAgentOptions;
+}
+
+async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
+  segments: TranslationDraftAgentSegmentResult[];
+  mergedText: string;
+  model: string;
+  usage: { inputTokens: number; outputTokens: number };
+}> {
+  const { userPayload, systemPrompt, model, temperature, topP, options } = params;
 
   const maxAttempts = 2;
   let lastError: Error | null = null;
@@ -279,48 +465,31 @@ Guidelines:
             origin_segment: segment.text,
             translation_segment: safeTranslation,
             notes: generated.notes ?? [],
+            spanPairs: buildSpanPairs(segment.id, segment.text, safeTranslation),
           };
         });
 
-      const mergedText = options.originSegments
-        .map((originSegment, index) => {
-          const translated = orderedSegments[index]?.translation_segment?.trim() ?? "";
-          return {
-            translated,
-            paragraphIndex: originSegment.paragraphIndex,
-          };
-        })
-        .reduce((acc, current, index, array) => {
-          if (!current.translated) {
-            return acc;
-          }
-          const previous = index > 0 ? array[index - 1] : null;
-          const needsParagraphBreak =
-            previous !== null && previous.paragraphIndex !== current.paragraphIndex;
-          const separator = index === 0 ? "" : needsParagraphBreak ? "\n\n" : "\n";
-          return `${acc}${separator}${current.translated}`;
-        }, "")
-        .trim();
+      const mergedText = mergeSegmentsToText(options.originSegments, orderedSegments);
 
       return {
         model: response.model || model,
-        temperature,
-        topP,
+        segments: orderedSegments,
+        mergedText,
         usage: {
           inputTokens: response.usage?.prompt_tokens ?? 0,
           outputTokens: response.usage?.completion_tokens ?? 0,
         },
-        segments: orderedSegments,
-        mergedText,
       };
     } catch (error) {
       const parsedError =
         error instanceof Error
           ? error
           : new Error(typeof error === "string" ? error : "Unknown error");
+      lastError = parsedError;
+
       if (attempt === maxAttempts - 1) {
         console.error(
-          "[TRANSLATION] Draft generation failed",
+          "[TRANSLATION] Draft candidate generation failed",
           {
             projectId: options.projectId,
             jobId: options.jobId,
@@ -328,14 +497,131 @@ Guidelines:
             error: parsedError.message,
           },
         );
-      }
-      lastError = parsedError;
-
-      if (attempt === maxAttempts - 1) {
         throw parsedError;
       }
     }
   }
 
   throw lastError ?? new Error("Failed to generate translation draft");
+}
+
+function mergeSegmentsToText(
+  originSegments: OriginSegment[],
+  translatedSegments: TranslationDraftAgentSegmentResult[],
+): string {
+  return originSegments
+    .map((originSegment, index) => {
+      const translated = translatedSegments[index]?.translation_segment?.trim() ?? "";
+      return {
+        translated,
+        paragraphIndex: originSegment.paragraphIndex,
+      };
+    })
+    .reduce((acc, current, index, array) => {
+      if (!current.translated) {
+        return acc;
+      }
+      const previous = index > 0 ? array[index - 1] : null;
+      const needsParagraphBreak =
+        previous !== null && previous.paragraphIndex !== current.paragraphIndex;
+      const separator = index === 0 ? "" : needsParagraphBreak ? "\n\n" : "\n";
+      return `${acc}${separator}${current.translated}`;
+    }, "")
+    .trim();
+}
+
+function buildSpanPairs(
+  segmentId: string,
+  originSegment: string,
+  translationSegment: string,
+): DraftSpanPair[] {
+  return [
+    {
+      source_span_id: segmentId,
+      source_start: 0,
+      source_end: originSegment.length,
+      target_start: 0,
+      target_end: translationSegment.length,
+    },
+  ];
+}
+
+interface DeliberationResult {
+  bestCandidateId: string;
+  rationale?: string;
+  analysis: Array<{ candidateId: string; summary: string; score?: number }>;
+  usage: { inputTokens: number; outputTokens: number };
+}
+
+async function deliberateDraftCandidates(params: {
+  candidates: DraftCandidate[];
+  originSegments: OriginSegment[];
+  sourceLanguage?: string | null;
+  targetLanguage?: string | null;
+  translationNotes?: TranslationNotes | null;
+  model: string;
+}): Promise<DeliberationResult | null> {
+  const { candidates, originSegments, sourceLanguage, targetLanguage, translationNotes, model } = params;
+  if (!candidates.length) {
+    return null;
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model,
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: deliberationResponseSchema,
+      },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an expert literary translation evaluator. Choose the candidate that best preserves meaning, glossary, and contract tone. Respond with JSON only.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            sourceLanguage,
+            targetLanguage,
+            segments: originSegments.map((segment) => ({
+              segmentId: segment.id,
+              text: segment.text,
+            })),
+            glossary: translationNotes?.namedEntities ?? [],
+            candidates: candidates.map((candidate) => ({
+              candidateId: candidate.id,
+              translation: candidate.mergedText,
+            })),
+          }),
+        },
+      ],
+    });
+
+    const content = response.choices[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(content) as {
+      bestCandidateId?: string;
+      rationale?: string;
+      analysis?: Array<{ candidateId: string; summary: string; score?: number }>;
+    };
+
+    return {
+      bestCandidateId: parsed.bestCandidateId ?? candidates[0].id,
+      rationale: parsed.rationale,
+      analysis: parsed.analysis ?? [],
+      usage: {
+        inputTokens: response.usage?.prompt_tokens ?? 0,
+        outputTokens: response.usage?.completion_tokens ?? 0,
+      },
+    };
+  } catch (error) {
+    console.warn("[TRANSLATION] Candidate deliberation failed", {
+      error,
+    });
+    return null;
+  }
 }

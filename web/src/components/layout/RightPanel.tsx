@@ -44,14 +44,16 @@ import { api } from "../../services/api";
 import { useWorkflowStore } from "../../store/workflow.store";
 import { projectKeys } from "../../hooks/useProjectData";
 
-const TRANSLATION_PIPELINE_STAGE_ORDER = [
+const LEGACY_PIPELINE_STAGE_ORDER = [
   "literal",
   "style",
   "emotion",
   "qa",
 ] as const;
 
-type PipelineStageKey = (typeof TRANSLATION_PIPELINE_STAGE_ORDER)[number];
+const V2_PIPELINE_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
+
+type PipelineStageKey = string;
 type StageKey = PipelineStageKey | "finalizing";
 
 type StageStatusKey =
@@ -86,6 +88,18 @@ const TRANSLATION_STAGE_LABEL_META: Record<
   qa: {
     key: "translation_stage_qa",
     fallback: "QA review",
+  },
+  draft: {
+    key: "translation_stage_draft",
+    fallback: "Draft",
+  },
+  revise: {
+    key: "translation_stage_revise",
+    fallback: "Revise",
+  },
+  "micro-check": {
+    key: "translation_stage_micro_check",
+    fallback: "Micro-check",
   },
   finalizing: {
     key: "translation_stage_finalizing",
@@ -132,28 +146,39 @@ const applyParams = (
   });
 };
 
+const getPipelineStageOrder = (
+  sequential?: JobSequentialSummary | null,
+): string[] => {
+  if (sequential?.pipelineStages?.length) {
+    return sequential.pipelineStages;
+  }
+  const stageCounts = sequential?.stageCounts ?? {};
+  if (
+    stageCounts.draft !== undefined ||
+    stageCounts.revise !== undefined ||
+    stageCounts["micro-check"] !== undefined
+  ) {
+    return Array.from(V2_PIPELINE_STAGE_ORDER);
+  }
+  return Array.from(LEGACY_PIPELINE_STAGE_ORDER);
+};
+
 const inferCurrentPipelineStage = (
   sequential: JobSequentialSummary,
 ): PipelineStageKey | null => {
   if (!sequential.totalSegments) return null;
+  const stageOrder = getPipelineStageOrder(sequential);
   if (sequential.currentStage) {
     const normalized = sequential.currentStage.toLowerCase();
-    if (
-      (TRANSLATION_PIPELINE_STAGE_ORDER as readonly string[]).includes(
-        normalized,
-      )
-    ) {
+    if (stageOrder.includes(normalized)) {
       return normalized as PipelineStageKey;
     }
   }
   return (
-    TRANSLATION_PIPELINE_STAGE_ORDER.find((stage) => {
+    stageOrder.find((stage) => {
       const count = sequential.stageCounts?.[stage] ?? 0;
       return count < sequential.totalSegments;
-    }) ??
-    TRANSLATION_PIPELINE_STAGE_ORDER[
-      TRANSLATION_PIPELINE_STAGE_ORDER.length - 1
-    ]
+    }) ?? stageOrder[stageOrder.length - 1]
   );
 };
 
@@ -176,9 +201,13 @@ const resolveStageStatusKey = (
   );
   const stageCount = sequential.stageCounts?.[stageKey] ?? 0;
   const pipelineStageCount = sequential.stageCounts ?? {};
-  const qaCount = pipelineStageCount.qa ?? 0;
+  const stageOrder = getPipelineStageOrder(sequential);
+  const guardStageKey = stageOrder.includes("qa")
+    ? "qa"
+    : stageOrder[stageOrder.length - 1] ?? "qa";
+  const qaCount = pipelineStageCount[guardStageKey] ?? 0;
   const qaComplete =
-    total > 0 ? qaCount >= total : completedStages.has("qa");
+    total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
 
   if (stageKey === "finalizing") {
     if (normalizedJobStatus === "failed" || normalizedJobStatus === "cancelled") {
@@ -213,10 +242,8 @@ const resolveStageStatusKey = (
     return "inProgress";
   }
 
-  const stageIndex = TRANSLATION_PIPELINE_STAGE_ORDER.indexOf(stageKey);
-  const currentIndex = currentStage
-    ? TRANSLATION_PIPELINE_STAGE_ORDER.indexOf(currentStage)
-    : -1;
+  const stageIndex = stageOrder.indexOf(stageKey);
+  const currentIndex = currentStage ? stageOrder.indexOf(currentStage) : -1;
 
   if (currentIndex >= 0) {
     if (stageIndex < currentIndex) {
@@ -236,7 +263,7 @@ const resolveStageStatusKey = (
       if (stageIndex === 0) {
         return "inProgress";
       }
-      const previousStage = TRANSLATION_PIPELINE_STAGE_ORDER[stageIndex - 1];
+      const previousStage = stageOrder[stageIndex - 1];
       const previousComplete =
         (sequential.stageCounts?.[previousStage] ?? 0) >= total ||
         completedStages.has(previousStage);
@@ -267,9 +294,13 @@ const formatSequentialStageStatus = (
   const completedStages = new Set(
     (sequential.completedStages ?? []).map((stage) => stage.toLowerCase()),
   );
-  const qaCount = sequential.stageCounts?.qa ?? 0;
+  const stageOrder = getPipelineStageOrder(sequential);
+  const guardStageKey = stageOrder.includes("qa")
+    ? "qa"
+    : stageOrder[stageOrder.length - 1] ?? "qa";
+  const qaCount = sequential.stageCounts?.[guardStageKey] ?? 0;
   const qaComplete =
-    total > 0 ? qaCount >= total : completedStages.has("qa");
+    total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
   const translationDone =
     normalizedJobStatus === "done" ||
     normalizedJobStatus === "succeeded" ||
@@ -290,9 +321,7 @@ const formatSequentialStageStatus = (
     if (pipelineStage) {
       return pipelineStage;
     }
-    return TRANSLATION_PIPELINE_STAGE_ORDER[
-      TRANSLATION_PIPELINE_STAGE_ORDER.length - 1
-    ];
+    return stageOrder[stageOrder.length - 1];
   })();
   const stageMeta = TRANSLATION_STAGE_LABEL_META[stageKey] ?? {
     key: stageKey,
