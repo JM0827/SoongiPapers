@@ -23,8 +23,9 @@ export interface TranslationDraftJobData {
   translationNotes?: TranslationNotes | null;
   draftConfig?: {
     model?: string;
-    temperature?: number;
-    topP?: number;
+    verbosity?: string;
+    reasoningEffort?: string;
+    maxOutputTokens?: number;
   };
 }
 
@@ -42,8 +43,9 @@ export interface TranslationSynthesisJobData {
   candidateDraftIds: string[];
   synthesisConfig?: {
     model?: string;
-    temperature?: number;
-    topP?: number;
+    verbosity?: string;
+    reasoningEffort?: string;
+    maxOutputTokens?: number;
   };
 }
 

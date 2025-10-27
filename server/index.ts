@@ -42,7 +42,12 @@ import {
   synthesizeTranslation,
   handleTranslationStageJob,
   type OriginSegment,
+  type ResponseVerbosity,
+  type ResponseReasoningEffort,
   type TranslationSynthesisSegmentResult,
+  type TranslationDraftAgentResultMeta,
+  type TranslationReviseAgentResultMeta,
+  type TranslationSynthesisAgentResultMeta,
   type ProjectMemory,
   type TranslationStage,
   type SequentialStageJob,
@@ -3298,8 +3303,9 @@ async function handleTranslationDraftJob(job: TranslationDraftJob) {
       originSegments: data.originSegments,
       translationNotes: data.translationNotes ?? null,
       model: data.draftConfig?.model,
-      temperature: data.draftConfig?.temperature,
-      topP: data.draftConfig?.topP,
+      verbosity: data.draftConfig?.verbosity as ResponseVerbosity | undefined,
+      reasoningEffort: data.draftConfig?.reasoningEffort as ResponseReasoningEffort | undefined,
+      maxOutputTokens: data.draftConfig?.maxOutputTokens,
     });
 
     if (await isJobCancelled(data.jobId)) {
@@ -3317,9 +3323,8 @@ async function handleTranslationDraftJob(job: TranslationDraftJob) {
       segments: draftResult.segments,
       mergedText: draftResult.mergedText,
       model: draftResult.model,
-      temperature: draftResult.temperature,
-      topP: draftResult.topP,
       usage: draftResult.usage,
+      meta: draftResult.meta,
     });
 
     await recordTokenUsage(app.log, {
@@ -3473,11 +3478,6 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       originSegments: data.originSegments,
       draftSegments: draftResult.segments,
       translationNotes: data.translationNotes ?? null,
-      model:
-        process.env.TRANSLATION_REVISE_MODEL_V2 ??
-        process.env.TRANSLATION_REVISE_MODEL ??
-        process.env.CHAT_MODEL ??
-        'gpt-4o',
     });
 
     if (await isJobCancelled(data.jobId)) {
@@ -3510,6 +3510,9 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
           targetStart: pair.target_start,
           targetEnd: pair.target_end,
         })),
+        notes: {
+          meta: revisionResult.meta,
+        },
       }),
     );
 
@@ -3786,12 +3789,19 @@ async function handleTranslationSynthesisJob(job: TranslationSynthesisJob) {
       targetLanguage: data.targetLanguage ?? null,
       originSegments: data.originSegments,
       translationNotes: data.translationNotes ?? null,
+      model: data.synthesisConfig?.model,
+      verbosity: data.synthesisConfig?.verbosity as ResponseVerbosity | undefined,
+      reasoningEffort: data.synthesisConfig?.reasoningEffort as ResponseReasoningEffort | undefined,
+      maxOutputTokens: data.synthesisConfig?.maxOutputTokens,
       candidates: drafts.map((draft) => ({
         draftId: draft._id.toString(),
         runOrder: draft.run_order,
         model: draft.model ?? null,
         temperature: draft.temperature ?? null,
         topP: draft.top_p ?? null,
+        verbosity: (draft.verbosity ?? null) as ResponseVerbosity | null,
+        reasoningEffort: (draft.reasoning_effort ?? null) as ResponseReasoningEffort | null,
+        maxOutputTokens: draft.max_output_tokens ?? null,
         segments: draft.segments,
       })),
     });
@@ -3820,6 +3830,7 @@ async function handleTranslationSynthesisJob(job: TranslationSynthesisJob) {
       mergedText: synthesisResult.mergedText,
       candidateDrafts: drafts,
       sourceHash: data.sourceHash,
+      synthesisMeta: synthesisResult.meta,
     });
 
     await markJobSucceeded(data.jobId);
@@ -3869,6 +3880,7 @@ interface FinalizationPayload {
   mergedText: string;
   candidateDrafts: LeanDraftDocument[];
   sourceHash: string;
+  synthesisMeta: TranslationSynthesisAgentResultMeta;
 }
 
 async function persistFinalTranslation(
@@ -3882,6 +3894,7 @@ async function persistFinalTranslation(
     mergedText,
     candidateDrafts,
     sourceHash,
+    synthesisMeta,
   } = options;
 
   const originMap = new Map(
@@ -3944,6 +3957,7 @@ async function persistFinalTranslation(
       synthesis_notes: {
         selectedRunOrder: segment.selected_run_order,
         rationale: segment.rationale,
+        meta: synthesisMeta,
       },
     })),
   );
@@ -4163,6 +4177,12 @@ async function buildJobsPayload(jobRows: any[]) {
       model: draft.model ?? null,
       temperature: draft.temperature ?? null,
       top_p: draft.top_p ?? null,
+      verbosity: draft.verbosity ?? null,
+      reasoning_effort: draft.reasoning_effort ?? null,
+      max_output_tokens: draft.max_output_tokens ?? null,
+      retry_count: draft.retry_count ?? 0,
+      truncated: draft.truncated ?? false,
+      fallback_model_used: draft.fallback_model_used ?? false,
       usage: draft.usage ?? null,
     });
   }

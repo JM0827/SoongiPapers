@@ -27,6 +27,12 @@ const TranslationDraftSchema = new Schema(
     model: { type: String, default: null },
     temperature: { type: Number, default: null },
     top_p: { type: Number, default: null },
+    verbosity: { type: String, default: null },
+    reasoning_effort: { type: String, default: null },
+    max_output_tokens: { type: Number, default: null },
+    retry_count: { type: Number, default: 0 },
+    truncated: { type: Boolean, default: false },
+    fallback_model_used: { type: Boolean, default: false },
     usage: {
       input_tokens: { type: Number, default: 0 },
       output_tokens: { type: Number, default: 0 },
@@ -67,10 +73,16 @@ export interface TranslationDraftDocument {
   model: string | null;
   temperature: number | null;
   top_p: number | null;
+  verbosity: string | null;
+  reasoning_effort: string | null;
+  max_output_tokens: number | null;
   usage: {
     input_tokens: number;
     output_tokens: number;
   };
+  retry_count: number;
+  truncated: boolean;
+  fallback_model_used: boolean;
   segments: TranslationDraftSegmentDocument[];
   merged_text: string;
   metadata: Record<string, unknown>;

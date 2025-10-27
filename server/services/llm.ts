@@ -1,0 +1,115 @@
+export interface SafeExtractedOpenAIResponse {
+  parsedJson?: unknown;
+  text?: string;
+  requestId?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+const collectOutputText = (resp: any): string | undefined => {
+  const direct = resp?.output_text;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  if (Array.isArray(direct)) {
+    const joined = direct.filter((s) => typeof s === "string").join("\n");
+    if (joined.trim()) return joined.trim();
+  }
+
+  const items = Array.isArray(resp?.output) ? resp.output : [];
+  let buf = "";
+  for (const item of items) {
+    if (item?.type !== "message") continue;
+    const contents = Array.isArray(item?.content) ? item.content : [];
+    for (const c of contents) {
+      if (typeof c?.text === "string") buf += c.text;
+    }
+  }
+  const trimmed = buf.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const isMaxBudgetStop = (res: any) =>
+  res?.status === "incomplete" &&
+  res?.incomplete_details?.reason === "max_output_tokens";
+
+export function safeExtractOpenAIResponse(
+  resp: any,
+): SafeExtractedOpenAIResponse {
+  const usage = resp?.usage
+    ? {
+        prompt_tokens:
+          resp.usage.prompt_tokens ?? resp.usage.input_tokens ?? undefined,
+        completion_tokens:
+          resp.usage.completion_tokens ?? resp.usage.output_tokens ?? undefined,
+        total_tokens: resp.usage.total_tokens,
+      }
+    : undefined;
+
+  let parsed = Array.isArray(resp?.output_parsed)
+    ? resp.output_parsed[0]
+    : undefined;
+
+  const text = collectOutputText(resp);
+
+  if (!parsed && Array.isArray(resp?.output)) {
+    const contents = resp.output.flatMap((item: any) => item?.content ?? []);
+    const parsedEntry = contents.find(
+      (entry: any) =>
+        entry?.parsed_json !== undefined &&
+        (entry?.type === "output_parsed" || entry?.type === "json_schema"),
+    );
+    if (parsedEntry?.parsed_json !== undefined) {
+      parsed = parsedEntry.parsed_json;
+    }
+  }
+
+  if (!parsed && text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch (_err) {
+      // swallow JSON parse errors; text fallback still returned
+    }
+  }
+
+  if (!parsed && !text) {
+    if (isMaxBudgetStop(resp)) {
+      const id = resp?.id ?? null;
+      const msg = `OpenAI response incomplete (reason=max_output_tokens, id=${id}).`;
+      const err: Error & { code?: string; metadata?: Record<string, unknown> } =
+        new Error(msg);
+      err.code = "openai_response_incomplete";
+      err.metadata = { reason: "max_output_tokens", responseId: id };
+      throw err;
+    }
+    try {
+      const preview = JSON.stringify(resp)?.slice(0, 2000);
+      console.error("[LLM] Empty response payload", preview);
+    } catch (_logErr) {
+      console.error("[LLM] Empty response payload (unable to stringify)");
+    }
+    throw new Error("Empty response from OpenAI (no text, no message)");
+  }
+
+  return { parsedJson: parsed, text, requestId: resp?.id, usage };
+}
+
+export function isFatalParamErr(error: unknown): boolean {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : String(error ?? "");
+  if (!message) return false;
+  return (
+    message.includes("Unsupported parameter") ||
+    (message.includes("response_format") && message.includes("text.format"))
+  );
+}
+
+export function estimateTokens(text?: string | null): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 3.5);
+}

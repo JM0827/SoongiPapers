@@ -4,6 +4,7 @@ import TranslationDraft, {
   type TranslationDraftSegmentDocument,
 } from "../models/TranslationDraft";
 import type { OriginSegment } from "../agents/translation/segmentationAgent";
+import type { TranslationDraftAgentResultMeta } from "../agents/translation/translationDraftAgent";
 
 export interface DraftSeed {
   projectId: string;
@@ -17,8 +18,9 @@ export interface DraftSeed {
   originFileSize?: number | null;
   draftConfig?: {
     model?: string;
-    temperature?: number;
-    topP?: number;
+    verbosity?: string;
+    reasoningEffort?: string;
+    maxOutputTokens?: number;
   };
 }
 
@@ -78,9 +80,8 @@ export async function completeDraft(
     segments: TranslationDraftSegmentDocument[];
     mergedText: string;
     model: string;
-    temperature: number;
-    topP: number;
     usage: { inputTokens: number; outputTokens: number };
+    meta: TranslationDraftAgentResultMeta;
   },
 ) {
   return TranslationDraft.findByIdAndUpdate(
@@ -91,12 +92,19 @@ export async function completeDraft(
         segments: payload.segments,
         merged_text: payload.mergedText,
         model: payload.model,
-        temperature: payload.temperature,
-        top_p: payload.topP,
+        temperature: null,
+        top_p: null,
+        verbosity: payload.meta.verbosity,
+        reasoning_effort: payload.meta.reasoningEffort,
+        max_output_tokens: payload.meta.maxOutputTokens,
+        retry_count: payload.meta.retryCount,
+        truncated: payload.meta.truncated,
+        fallback_model_used: payload.meta.fallbackModelUsed,
         usage: {
           input_tokens: payload.usage.inputTokens,
           output_tokens: payload.usage.outputTokens,
         },
+        "metadata.analysis_meta": payload.meta,
         finished_at: new Date(),
       },
     },
