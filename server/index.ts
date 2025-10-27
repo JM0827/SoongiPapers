@@ -3089,15 +3089,16 @@ function startProfileWorker() {
         job_id: job.id,
         origin_file_id: originDoc?._id ?? null,
         translation_file_id: translationDoc?._id ?? null,
-      quality_assessment_id: qualityDoc?._id ?? null,
-      proofreading_id: proofreadingDoc?._id ?? null,
-      metrics: analysis.metrics,
-      summary: analysis.summary,
-      translation_notes: analysis.translationNotes ?? null,
-      source_hash: analysis.sourceHash,
-      source_characters: analysis.metrics.charCount,
-      source_preview: analysis.sourcePreview,
-    });
+        quality_assessment_id: qualityDoc?._id ?? null,
+        proofreading_id: proofreadingDoc?._id ?? null,
+        metrics: analysis.metrics,
+        summary: analysis.summary,
+        translation_notes: analysis.translationNotes ?? null,
+        analysis_meta: analysis.meta ?? null,
+        source_hash: analysis.sourceHash,
+        source_characters: analysis.metrics.charCount,
+        source_preview: analysis.sourcePreview,
+      });
 
       if (payload.variant === "translation") {
         const storySummary = analysis.summary.story?.trim();
