@@ -37,7 +37,7 @@
   - `TRANSLATION_DRAFT_MODEL_V2`, `TRANSLATION_DRAFT_JUDGE_MODEL_V2`, `TRANSLATION_REVISE_MODEL_V2`, `TRANSLATION_SYNTHESIS_MODEL` → `gpt-5`.
   - 새 ENV 키: `TRANSLATION_DRAFT_VERBOSITY_V2`, `TRANSLATION_DRAFT_REASONING_EFFORT_V2`, `TRANSLATION_DRAFT_MAX_OUTPUT_TOKENS`, Revise/Synthesis 동일 패턴.
   - 경량 검증용: `TRANSLATION_DRAFT_VALIDATION_MODEL=gpt-5-mini`.
-  - Feature flag는 유지하되 rollout 단계에서 `TRANSLATION_PIPELINE_V2_ENABLED`를 통해 운영 제어.
+  - 세그멘테이션 길이 조정용: `SEGMENTATION_MAX_SEGMENT_LENGTH_V2` (기본 1,600자).
 
 ### 4.2 SDK 호출 레이어 (Responses API 통합)
 - `OpenAI.chat.completions.create` 사용 부위를 모두 `openai.responses.create`로 교체.
@@ -46,12 +46,11 @@
 - `temperature/top_p` 제거 → Responses API 구조(`output_text`, `output_parsed`) 활용. `safeExtractOpenAIResponse` 확장 시 `verbosity`·`reasoning_effort`·`retry` 정보를 usage 메타에 포함한다.
 - 스트리밍 도입 예정 구간(Draft)에서는 `.stream()` 인터페이스 도입 준비. 1차 릴리스는 비스트리밍으로 시작하되, parser와 청크처리를 사전 설계.
 
-### 4.3 Draft Stage 강화
-- **요청 파라미터**: `verbosity='medium'`, `reasoning.effort='medium'`, `max_output_tokens = chunk_avg * 1.2` (기본 2,200 / cap 6,400). 응답 `incomplete_details.reason === "max_output_tokens"` 감지 시 토큰 버짓을 최대 2배까지 확장(캡까지)하고, 동일 모델에 대한 추가 시도를 큐에 붙인 뒤 `verbosity='low'`, `effort='minimal'`로 자동 완화한다.
+- **요청 파라미터**: `verbosity='medium'`, `reasoning.effort='medium'`, `max_output_tokens = chunk_avg * 1.2` (기본 2,200 / cap 6,400). 응답 `incomplete_details.reason === "max_output_tokens"` 감지 시 토큰 버짓을 점진적으로 확장하고, 동일 모델에 대한 추가 시도를 `verbosity='low'`, `effort='minimal'`로 자동 완화한다.
 - **필수 스키마 확장**: `segments[].spanPairs`를 응답 스키마에 포함해 1:1 매핑을 강제. 누락 시 재시도.
-- **Coverage Guard**: Draft 완료 후 `gpt-5-mini`를 사용해 `originSegments`와 `spanPairs` 비교 → 누락 문장 있을 경우 Draft 재시도(`effort='high'`, `max_output_tokens` 상향, chunk 분할 재시도).
-- **Chunking 전략**: `segmentationAgent` 결과를 2~3k 토큰 범위로 재조정, 10~15% 오버랩 허용. Configurable한 `SEGMENTATION_MAX_TOKENS_V2` 도입.
-- **관측로그**: `coverageRatio = translatedSpans / originSpans` 기록, 90% 미만 시 경고 및 자동 재시도 트리거.
+- **Coverage Guard** *(TODO)*: Draft 완료 후 `gpt-5-mini` 기반 coverage 검증을 실행하고, 누락 문장이 확인되면 해당 세그먼트만 재시도하는 파이프라인을 보강한다. (추적: `docs/TODO-translation-gpt5.md`)
+- **Chunking 전략**: `segmentationAgent` 결과를 1.6~3k 토큰 범위로 유지하고, 필요 시 10~15% 오버랩. 환경 변수 `SEGMENTATION_MAX_SEGMENT_LENGTH_V2`로 프로젝트별 최대 길이 조정.
+- **관측로그** *(TODO)*: `coverageRatio = translatedSpans / originSpans` 등 Draft 품질 지표를 수집하고, 90% 미만 시 경고 및 자동 재시도 트리거를 구현한다.
 
 ### 4.4 Draft 후보 심사 (Deliberation)
 - 모델: `gpt-5-mini`, `verbosity='low'`, `reasoning.effort='minimal'`, `max_output_tokens` 512.
@@ -64,11 +63,9 @@
 - 스키마에 `span_pairs` 포함. Draft 누락이 존재할 경우 Revise 호출 차단 후 Draft 재시도.
 - Responses API 전환, JSON 파싱 실패 시 재시도/로깅 경로 유지.
 
-### 4.6 Synthesis Stage
-- 모델: 기본 `gpt-5`, 필요 시 `TRANSLATION_SYNTHESIS_MODEL`로 override.
-- 파라미터: `verbosity='high'` (긴 문맥 설명 허용), `reasoning.effort='medium'`, `max_output_tokens`는 Draft 합산 대비 1.3배.
-- Summary/Paragraph 삽입 방지 검증 로직 유지, Responses API 결과 구조에 맞춰 파싱.
-- 향후 free-form tool call을 통해 Micro-Checks/후처리와 직접 연동 가능하도록 `tools` 옵션 설계(이번 릴리스에서는 비활성화).
+### 4.6 Synthesis Stage *(Deprecated in V2)*
+- 기존 V1 파이프라인에서 사용한 통합 단계로, 현재 V2 구현에서는 Revise 결과를 최종본으로 사용한다.
+- 향후 Synthesis 재도입이 필요하면 GPT-5 Responses API 스펙에 맞춰 별도 에이전트를 재설계한다. (추적: `docs/TODO-translation-gpt5.md`)
 
 ### 4.7 Sequential Stage LLM (`callStageLLM`)
 - 이미 Responses API 사용 중이지만 temperature/top_p 기반 → `stageConfig`에 `verbosity`/`reasoningEffort`/`maxOutputTokens`를 주입하도록 변경.
@@ -134,6 +131,11 @@
 - Responses API로 전환하면서 SDK 버전 업그레이드 필요 시, 다른 서비스(`profileAgent`, `proofreading`, `chat` 라우터 등)의 호환성 체크.
 - Draft chunking 변경이 Downstream(Proof UI, Micro-Checks) 데이터 흐름에 미치는 영향 검토.
 - Free-form tool call 활용 여부는 후속 과제로 남기되, Agent 호출 인터페이스에 hooks를 남겨 확장이 용이하도록 설계.
+- **TODO 요약**
+  - Draft coverage guard 및 세그먼트 단위 재시도 워크플로우 보강 (`docs/TODO-translation-gpt5.md`).
+  - Revise 단계 truncation 백오프 개선 및 세그먼트 재시도 적용.
+  - Observability 대시보드/알림 구성 및 coverageRatio, retryCount 등 메트릭 표준화.
+  - Synthesis 단계 재도입 여부 결정 및 문서/코드 갱신.
 
 ---
 **담당**

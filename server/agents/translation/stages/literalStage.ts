@@ -5,19 +5,33 @@ import {
 } from "../prompts/literal";
 import { callStageLLM } from "../../../services/translation/llm";
 
+function resolveMaxTokens(job: SequentialStageJob, proposed: number): number {
+  const budget = job.config.tokenBudget?.completionMax;
+  if (typeof budget === "number" && budget > 0) {
+    return Math.min(proposed, budget);
+  }
+  return proposed;
+}
+
 export async function runLiteralStage(
   job: SequentialStageJob,
 ): Promise<SequentialStageResult[]> {
   const results = await Promise.all(
     job.segmentBatch.map(async (segment) => {
       const userPrompt = buildLiteralUserPrompt({ segment, config: job.config });
-      const literalTemperature = Math.max(0, (job.config.temps.literal ?? 0.3) - 0.1);
+      const stageParams =
+        job.config.stageParameters?.literal ?? {
+          verbosity: "low",
+          reasoningEffort: "minimal",
+          maxOutputTokens: job.config.tokenBudget?.completionMax ?? 900,
+        };
       const callResult = await callStageLLM({
         stage: "literal",
         systemPrompt: LITERAL_SYSTEM_PROMPT,
         userPrompt,
-        temperature: literalTemperature,
-        maxOutputTokens: job.config.tokenBudget?.completionMax ?? 400,
+        verbosity: stageParams.verbosity,
+        reasoningEffort: stageParams.reasoningEffort,
+        maxOutputTokens: resolveMaxTokens(job, stageParams.maxOutputTokens),
       });
 
       const textTarget = callResult.text || segment.textSource;

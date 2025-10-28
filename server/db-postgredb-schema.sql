@@ -215,11 +215,21 @@ CREATE TABLE IF NOT EXISTS token_usage_events (
   output_tokens INTEGER DEFAULT 0,
   total_cost NUMERIC(14,6) DEFAULT 0,
   duration_ms INTEGER,
+  metadata JSONB,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_project ON token_usage_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_job ON token_usage_events(job_id);
+
+CREATE TABLE IF NOT EXISTS translation_cancellation_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES translationprojects(project_id) ON DELETE SET NULL,
+  user_id TEXT,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS project_usage_totals (
   project_id UUID PRIMARY KEY REFERENCES translationprojects(project_id) ON DELETE CASCADE,

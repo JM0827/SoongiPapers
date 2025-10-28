@@ -9,6 +9,14 @@ import {
 } from "../prompts/emotion";
 import { callStageLLM } from "../../../services/translation/llm";
 
+function resolveMaxTokens(job: SequentialStageJob, proposed: number): number {
+  const budget = job.config.tokenBudget?.completionMax;
+  if (typeof budget === "number" && budget > 0) {
+    return Math.min(proposed, budget);
+  }
+  return proposed;
+}
+
 export async function runEmotionStage(
   job: SequentialStageJob,
   prior: SequentialStageResult[],
@@ -26,12 +34,20 @@ export async function runEmotionStage(
         memory,
       });
 
+      const stageParams =
+        job.config.stageParameters?.emotion ?? {
+          verbosity: "medium",
+          reasoningEffort: "medium",
+          maxOutputTokens: job.config.tokenBudget?.completionMax ?? 900,
+        };
+
       const callResult = await callStageLLM({
         stage: "emotion",
         systemPrompt: EMOTION_SYSTEM_PROMPT,
         userPrompt,
-        temperature: job.config.temps.emotion ?? 0.6,
-        maxOutputTokens: job.config.tokenBudget?.completionMax ?? 400,
+        verbosity: stageParams.verbosity,
+        reasoningEffort: stageParams.reasoningEffort,
+        maxOutputTokens: resolveMaxTokens(job, stageParams.maxOutputTokens),
       });
 
       const textTarget = callResult.text || styleResult?.textTarget || segment.textSource;

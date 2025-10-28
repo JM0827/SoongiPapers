@@ -1,5 +1,9 @@
 import OpenAI from "openai";
-import type { TranslationStage } from "../../agents/translation";
+import type {
+  ResponseReasoningEffort,
+  ResponseVerbosity,
+  TranslationStage,
+} from "../../agents/translation";
 import { safeExtractOpenAIResponse } from "../llm";
 
 const client = new OpenAI({
@@ -12,29 +16,30 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 const DEFAULT_STAGE_MODELS: Record<TranslationStage, string> = {
-  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-4o-mini",
-  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-4o",
-  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-4o",
-  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-4o-mini",
+  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-5",
+  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-5",
+  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-5",
+  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-5-mini",
   draft:
     process.env.SEQUENTIAL_DRAFT_MODEL ??
     process.env.SEQUENTIAL_LITERAL_MODEL ??
-    "gpt-4o-mini",
+    "gpt-5",
   revise:
     process.env.SEQUENTIAL_REVISE_MODEL ??
     process.env.SEQUENTIAL_STYLE_MODEL ??
-    "gpt-4o",
+    "gpt-5",
   "micro-check":
     process.env.SEQUENTIAL_MICRO_CHECK_MODEL ??
     process.env.SEQUENTIAL_QA_MODEL ??
-    "gpt-4o-mini",
+    "gpt-5-mini",
 };
 
 export interface StageCallOptions {
   stage: TranslationStage;
   systemPrompt: string;
   userPrompt: string;
-  temperature: number;
+  verbosity: ResponseVerbosity;
+  reasoningEffort: ResponseReasoningEffort;
   maxOutputTokens: number;
   responseFormat?: {
     type: "json_object";
@@ -63,10 +68,22 @@ export async function callStageLLM(options: StageCallOptions): Promise<StageCall
     ? { type: "json_object" as const }
     : undefined;
 
+  const textConfig: {
+    verbosity: ResponseVerbosity;
+    format?: { type: "json_object" };
+  } = {
+    verbosity: options.verbosity,
+  };
+
+  if (responseFormat) {
+    textConfig.format = responseFormat;
+  }
+
   const response = await client.responses.create({
     model,
     max_output_tokens: options.maxOutputTokens,
-    text: responseFormat ? { format: responseFormat } : undefined,
+    text: textConfig,
+    reasoning: { effort: options.reasoningEffort },
     input: [
       {
         role: "system",

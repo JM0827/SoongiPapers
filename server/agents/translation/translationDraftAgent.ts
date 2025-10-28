@@ -176,7 +176,7 @@ const deliberationResponseSchema = {
   name: 'draft_candidate_judgement',
   schema: {
     type: 'object',
-    required: ['bestCandidateId', 'analysis'],
+    required: ['bestCandidateId', 'analysis', 'rationale'],
     additionalProperties: false,
     properties: {
       bestCandidateId: { type: 'string' },
@@ -192,7 +192,7 @@ const deliberationResponseSchema = {
             summary: { type: 'string' },
             score: { type: ['number', 'null'], default: null },
           },
-          required: ['candidateId', 'summary'],
+          required: ['candidateId', 'summary', 'score'],
         },
       },
     },

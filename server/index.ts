@@ -29,6 +29,7 @@ import { ensureTranslationPrereqs } from "./services/originPrep";
 import Proofreading from "./models/Proofreading";
 import EbookFile from "./models/EbookFile";
 import { recordTokenUsage } from "./services/usage";
+import { estimateTokens } from "./services/llm";
 import { getCoverService, parseCoverJobPayload } from "./services/cover";
 import { analyzeDocumentProfile } from "./agents/profile/profileAgent";
 import {
@@ -39,21 +40,15 @@ import {
   segmentOriginText,
   generateTranslationDraft,
   generateTranslationRevision,
-  synthesizeTranslation,
-  handleTranslationStageJob,
   type OriginSegment,
   type ResponseVerbosity,
   type ResponseReasoningEffort,
-  type TranslationSynthesisSegmentResult,
-  type TranslationDraftAgentResultMeta,
-  type TranslationReviseAgentResultMeta,
-  type TranslationSynthesisAgentResultMeta,
   type ProjectMemory,
-  type TranslationStage,
   type SequentialStageJob,
   type SequentialStageJobSegment,
   type SequentialStageResult,
 } from "./agents/translation";
+import type { TranslationDraftAgentSegmentResult } from "./agents/translation/translationDraftAgent";
 import evaluationRoutes from "./routes/evaluation";
 import proofreadingRoutes from "./routes/proofreading";
 import proofreadEditorRoutes from "./routes/proofreadEditor";
@@ -74,39 +69,15 @@ import {
   requestAction as requestWorkflowAction,
   WorkflowRunRecord,
 } from "./services/workflowManager";
-import {
-  ensureQueuedDraft,
-  markDraftRunning,
-  completeDraft,
-  failDraft,
-  listSuccessfulDrafts,
-  loadDraftsByIds,
-  cancelDrafts,
-} from "./services/translationDrafts";
+import { cancelDrafts } from "./services/translationDrafts";
 import { persistStageResults } from "./services/translation/translationDraftStore";
 import { runMicroChecks } from "./services/translation/microCheckGuard";
-import {
-  registerTranslationDraftProcessor,
-  registerTranslationSynthesisProcessor,
-  enqueueTranslationSynthesisJob,
-  type TranslationDraftJobData,
-  type TranslationSynthesisJobData,
-  type TranslationDraftJob,
-  type TranslationSynthesisJob,
-  removeDraftQueueJob,
-  removeSynthesisQueueJob,
-} from "./services/translationQueue";
 import {
   registerTranslationV2Processor,
   enqueueTranslationV2Job,
   type TranslationV2Job,
+  removeTranslationV2Job,
 } from "./services/translationV2Queue";
-import { isTranslationPipelineV2Enabled } from "./config/featureFlags";
-import {
-  registerTranslationStageProcessor,
-  enqueueTranslationStageJob,
-  removeStageJobsFor,
-} from "./services/translationStageQueue";
 import { ensureProjectMemory } from "./services/translation/memory";
 import cleanText from "./utils/cleanText";
 
@@ -169,8 +140,361 @@ const DEFAULT_V2_CANDIDATE_COUNT = (() => {
 
 let app: FastifyInstance;
 
-const LEGACY_PIPELINE_STAGES = ["literal", "style", "emotion", "qa"] as const;
 const V2_PIPELINE_STAGES = ["draft", "revise", "micro-check"] as const;
+
+const DEFAULT_DRAFT_MAX_OUTPUT_TOKENS = 2600;
+const DRAFT_MAX_OUTPUT_TOKENS_CAP = 9000;
+const DRAFT_TOKEN_BUDGET_FACTOR = 2.0;
+const DEFAULT_REVISE_MAX_OUTPUT_TOKENS = 1800;
+const REVISE_MAX_OUTPUT_TOKENS_CAP = 4800;
+const REVISE_TOKEN_BUDGET_FACTOR = 1.4;
+const MIN_SEGMENT_SPLIT_LENGTH = 120;
+const MAX_SEGMENTS_PER_REQUEST = 3;
+
+function sumEstimatedTokens(texts: string[]): number {
+  return texts.reduce((total, text) => total + estimateTokens(text), 0);
+}
+
+function computeMaxOutputTokensForTexts(
+  texts: string[],
+  factor: number,
+  fallback: number,
+  cap: number,
+): number {
+  if (!texts.length) {
+    return fallback;
+  }
+  const estimated = Math.ceil(sumEstimatedTokens(texts) * factor);
+  const candidate = Number.isFinite(estimated) && estimated > 0 ? estimated : fallback;
+  return Math.min(Math.max(fallback, candidate), cap);
+}
+
+type DraftAgentResult = Awaited<ReturnType<typeof generateTranslationDraft>>;
+
+type DraftAggregation = {
+  segments: DraftAgentResult['segments'];
+  usage: DraftAgentResult['usage'];
+  meta: DraftAgentResult['meta'];
+  model: string;
+};
+
+async function runDraftStageWithAdaptiveRetries(
+  baseOptions: Omit<
+    Parameters<typeof generateTranslationDraft>[0],
+    'originSegments' | 'maxOutputTokens'
+  >,
+  originSegments: OriginSegment[],
+): Promise<DraftAgentResult> {
+  const aggregation = await draftRecursive(originSegments);
+  const mergedText = buildMergedDraftText(originSegments, aggregation.segments);
+
+  return {
+    segments: aggregation.segments,
+    mergedText,
+    model: aggregation.model,
+    usage: aggregation.usage,
+    meta: {
+      ...aggregation.meta,
+      truncated: false,
+    },
+  };
+
+  async function draftRecursive(segments: OriginSegment[]): Promise<DraftAggregation> {
+    if (segments.length > MAX_SEGMENTS_PER_REQUEST) {
+      const mid = Math.floor(segments.length / 2);
+      const leftSegments = segments.slice(0, mid);
+      const rightSegments = segments.slice(mid);
+
+      app.log.debug(
+        {
+          jobId: baseOptions.jobId,
+          projectId: baseOptions.projectId,
+          segmentCount: segments.length,
+          reason: 'segment_count',
+          maxSegmentsPerRequest: MAX_SEGMENTS_PER_REQUEST,
+        },
+        '[TRANSLATION_V2] Splitting draft segments before request',
+      );
+
+      const left = await draftRecursive(leftSegments);
+      const right = await draftRecursive(rightSegments);
+
+      return {
+        segments: [...left.segments, ...right.segments],
+        usage: {
+          inputTokens: left.usage.inputTokens + right.usage.inputTokens,
+          outputTokens: left.usage.outputTokens + right.usage.outputTokens,
+        },
+        meta: {
+          verbosity: left.meta.verbosity,
+          reasoningEffort: left.meta.reasoningEffort,
+          maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
+          retryCount: left.meta.retryCount + right.meta.retryCount,
+          truncated: false,
+          fallbackModelUsed:
+            left.meta.fallbackModelUsed || right.meta.fallbackModelUsed,
+        },
+        model: left.model,
+      };
+    }
+
+    const subsetMaxTokens = computeMaxOutputTokensForTexts(
+      segments.map((segment) => segment.text ?? ''),
+      DRAFT_TOKEN_BUDGET_FACTOR,
+      DEFAULT_DRAFT_MAX_OUTPUT_TOKENS,
+      DRAFT_MAX_OUTPUT_TOKENS_CAP,
+    );
+    const subsetCandidateCount = segments.length <= 2 ? 1 : baseOptions.candidateCount ?? 1;
+
+    const result = await generateTranslationDraft({
+      ...baseOptions,
+      originSegments: segments,
+      candidateCount: subsetCandidateCount,
+      maxOutputTokens: subsetMaxTokens,
+    });
+
+    if (!result.meta.truncated) {
+      return {
+        segments: result.segments,
+        usage: result.usage,
+        meta: result.meta,
+        model: result.model,
+      };
+    }
+
+    if (segments.length <= 1) {
+      const original = segments[0];
+      const subdivisions = splitOriginSegmentForRetry(original);
+      if (subdivisions.length <= 1) {
+        app.log.warn(
+          {
+            jobId: baseOptions.jobId,
+            projectId: baseOptions.projectId,
+            segmentId: original.id,
+            originalLength: original.text.length,
+            maxOutputTokens: subsetMaxTokens,
+          },
+          '[TRANSLATION_V2] Draft truncated even after single-segment retry',
+        );
+        throw new Error('draft_truncated');
+      }
+
+      app.log.debug(
+        {
+          jobId: baseOptions.jobId,
+          projectId: baseOptions.projectId,
+          segmentId: original.id,
+          originalLength: original.text.length,
+          subdivisions: subdivisions.map((piece) => ({
+            id: piece.id,
+            length: piece.text.length,
+          })),
+        },
+        '[TRANSLATION_V2] Splitting long segment for retry',
+      );
+
+      const subdivisionAggregation = await draftRecursive(subdivisions);
+      const mergedSegment = mergeDraftSegmentResults(
+        original,
+        subdivisionAggregation.segments,
+      );
+
+      return {
+        segments: [mergedSegment],
+        usage: subdivisionAggregation.usage,
+        meta: subdivisionAggregation.meta,
+        model: subdivisionAggregation.model,
+      };
+    }
+
+    const mid = Math.floor(segments.length / 2);
+    const leftSegments = segments.slice(0, mid);
+    const rightSegments = segments.slice(mid);
+
+    app.log.warn(
+      {
+        jobId: baseOptions.jobId,
+        projectId: baseOptions.projectId,
+        segmentCount: segments.length,
+        subsetMaxTokens,
+        candidateCount: subsetCandidateCount,
+        segmentLengths: segments.map((segment) => segment.text.length),
+      },
+      '[TRANSLATION_V2] Draft subset truncated; splitting segments',
+    );
+
+    const left = await draftRecursive(leftSegments);
+    const right = await draftRecursive(rightSegments);
+
+    return {
+      segments: [...left.segments, ...right.segments],
+      usage: {
+        inputTokens: left.usage.inputTokens + right.usage.inputTokens,
+        outputTokens: left.usage.outputTokens + right.usage.outputTokens,
+      },
+      meta: {
+        verbosity: left.meta.verbosity,
+        reasoningEffort: left.meta.reasoningEffort,
+        maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
+        retryCount: left.meta.retryCount + right.meta.retryCount,
+        truncated: false,
+        fallbackModelUsed:
+          left.meta.fallbackModelUsed || right.meta.fallbackModelUsed,
+      },
+      model: left.model,
+    };
+  }
+}
+
+function buildMergedDraftText(
+  originSegments: OriginSegment[],
+  translatedSegments: DraftAgentResult['segments'],
+): string {
+  const translationMap = new Map<string, string>(
+    translatedSegments.map((segment, index) => {
+      const key =
+        (segment as { segment_id?: string }).segment_id ??
+        (segment as { segmentId?: string }).segmentId ??
+        originSegments[index]?.id ?? '';
+      const value =
+        (segment as { translation_segment?: string }).translation_segment ??
+        (segment as { translation?: string }).translation ??
+        '';
+      return [key, value];
+    }),
+  );
+
+  const sentenceList = originSegments.map((origin, index, array) => {
+    const translation =
+      translationMap.get(origin.id) ??
+      translatedSegments[index]?.translation_segment ??
+      '';
+    return {
+      text: typeof translation === 'string' ? translation.trim() : '',
+      paragraphIndex: origin.paragraphIndex ?? 0,
+    };
+  });
+
+  return sentenceList
+    .reduce((acc, current, index) => {
+      if (!current.text) {
+        return acc;
+      }
+      const previous = index > 0 ? sentenceList[index - 1] : null;
+      const needsBreak =
+        previous && previous.paragraphIndex !== current.paragraphIndex;
+      const separator = index === 0 ? '' : needsBreak ? '\n\n' : '\n';
+      return `${acc}${separator}${current.text}`;
+    }, '')
+    .trim();
+}
+
+function splitOriginSegmentForRetry(segment: OriginSegment): OriginSegment[] {
+  const text = segment.text ?? '';
+  const trimmed = text.trim();
+  if (trimmed.length <= MIN_SEGMENT_SPLIT_LENGTH) {
+    return [segment];
+  }
+
+  const pieces: OriginSegment[] = [];
+  let remaining = trimmed;
+  let counter = 0;
+
+  while (remaining.length > MIN_SEGMENT_SPLIT_LENGTH * 1.5) {
+    const midpoint = Math.floor(remaining.length / 2);
+    const newlineBreak = remaining.lastIndexOf('\n', midpoint);
+    const punctuationBreak = Math.max(
+      remaining.lastIndexOf('. ', midpoint),
+      remaining.lastIndexOf('。', midpoint),
+      remaining.lastIndexOf('! ', midpoint),
+      remaining.lastIndexOf('? ', midpoint),
+    );
+
+    let pivot = Math.max(newlineBreak, punctuationBreak);
+    if (pivot < MIN_SEGMENT_SPLIT_LENGTH) {
+      pivot = midpoint;
+    }
+
+    const chunk = remaining.slice(0, pivot).trim();
+    if (!chunk.length) {
+      break;
+    }
+
+    pieces.push({
+      ...segment,
+      id: `${segment.id}::${String.fromCharCode(97 + counter)}`,
+      index: segment.index * 10 + counter,
+      text: chunk,
+    });
+    remaining = remaining.slice(pivot).trimStart();
+    counter += 1;
+  }
+
+  if (remaining.length) {
+    pieces.push({
+      ...segment,
+      id: `${segment.id}::${String.fromCharCode(97 + counter)}`,
+      index: segment.index * 10 + counter,
+      text: remaining.trim(),
+    });
+  }
+
+  return pieces.length ? pieces : [segment];
+}
+
+function mergeDraftSegmentResults(
+  original: OriginSegment,
+  partialSegments: TranslationDraftAgentSegmentResult[],
+): TranslationDraftAgentSegmentResult {
+  const prefix = `${original.id}::`;
+  const relevant = partialSegments.filter((segment) =>
+    segment.segment_id.startsWith(prefix),
+  );
+
+  if (!relevant.length) {
+    return {
+      segment_id: original.id,
+      origin_segment: original.text,
+      translation_segment: original.text,
+      notes: [],
+      spanPairs: [
+        {
+          source_span_id: original.id,
+          source_start: 0,
+          source_end: original.text.length,
+          target_start: 0,
+          target_end: original.text.length,
+        },
+      ],
+      candidates: [],
+    };
+  }
+
+  const translation = relevant
+    .map((segment) => segment.translation_segment?.trim() ?? '')
+    .filter((value) => value.length)
+    .join(' ')
+    .trim();
+
+  const notes = relevant.flatMap((segment) => segment.notes ?? []);
+
+  return {
+    segment_id: original.id,
+    origin_segment: original.text,
+    translation_segment: translation || original.text,
+    notes,
+    spanPairs: [
+      {
+        source_span_id: original.id,
+        source_start: 0,
+        source_end: original.text.length,
+        target_start: 0,
+        target_end: (translation || original.text).length,
+      },
+    ],
+    candidates: [],
+  };
+}
 
 if (HTTPS_ENABLED) {
   const keyPath = path.join(process.cwd(), 'certs', 'server.key');
@@ -2129,8 +2453,6 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   const authorName = projectMetadata?.author_name ?? null;
   const synopsis = projectMetadata?.description ?? projectMetadata?.memo ?? null;
 
-  const usePipelineV2 = isTranslationPipelineV2Enabled(projectKey);
-
   try {
     await query(
       `UPDATE jobs
@@ -2155,114 +2477,41 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     projectKey,
     buildMemorySeed(translationNotes ?? null, segmentation.segments),
   );
-
-  if (usePipelineV2) {
-    await enqueueTranslationV2Job(
-      {
-        projectId: projectKey,
-        jobId,
-        workflowRunId: workflowRun?.runId ?? null,
-        sourceHash: segmentation.sourceHash,
-        originLanguage,
-        targetLanguage,
-        originSegments: segmentation.segments,
-        translationNotes,
-        projectTitle,
-        authorName,
-        synopsis,
-        register: null,
-        candidateCount: DEFAULT_V2_CANDIDATE_COUNT,
-      },
-      {
-        jobId: `translation-v2-${jobId}`,
-        removeOnComplete: true,
-        removeOnFail: false,
-      },
-    );
-
-    app.log.info(
-      `[TRANSLATE] Queued V2 pipeline job ${jobId} with ${segmentation.segments.length} segments`,
-    );
-
-    reply.send({
+  await enqueueTranslationV2Job(
+    {
+      projectId: projectKey,
       jobId,
       workflowRunId: workflowRun?.runId ?? null,
-      totalPasses: V2_PIPELINE_STAGES.length,
-      segmentCount: segmentation.segments.length,
-      segmentationMode,
-      pipeline: "v2",
-    });
-    return;
-  }
-
-  const stageOrder: TranslationStage[] = [
-    "literal",
-    "style",
-    "emotion",
-    "qa",
-  ];
-  const batchSize = Math.max(1, sequentialConfig.batching.batchSize);
-  const batches: SequentialStageJobSegment[][] = [];
-
-  for (let i = 0; i < segmentation.segments.length; i += batchSize) {
-    const windowSegments = segmentation.segments.slice(i, i + batchSize);
-    const mapped = windowSegments.map((segment, offset) => {
-      const globalIndex = i + offset;
-      const prev = segmentation.segments[globalIndex - 1];
-      const next = segmentation.segments[globalIndex + 1];
-      return {
-        segmentId: segment.id,
-        segmentIndex: globalIndex,
-        textSource: segment.text,
-        prevCtx: prev?.text,
-        nextCtx: next?.text,
-        stageOutputs: {},
-      } satisfies SequentialStageJobSegment;
-    });
-    batches.push(mapped);
-  }
-
-  const batchCount = batches.length;
-
-  await Promise.all(
-    batches.map((segmentBatch, batchIndex) =>
-      enqueueTranslationStageJob(
-        {
-          jobId,
-          projectId: projectKey,
-          workflowRunId: workflowRun?.runId ?? undefined,
-          sourceHash: segmentation.sourceHash,
-          stage: "literal",
-          memoryVersion: 1,
-          config: sequentialConfig,
-          segmentBatch,
-          batchNumber: batchIndex + 1,
-          batchCount,
-          translationNotes,
-        },
-        {
-          jobId: `stage-${jobId}-literal-${batchIndex + 1}`,
-          removeOnComplete: true,
-          removeOnFail: false,
-        },
-      ),
-    ),
+      sourceHash: segmentation.sourceHash,
+      originLanguage,
+      targetLanguage,
+      originSegments: segmentation.segments,
+      translationNotes,
+      projectTitle,
+      authorName,
+      synopsis,
+      register: null,
+      candidateCount: DEFAULT_V2_CANDIDATE_COUNT,
+      stageParameters: sequentialConfig.stageParameters,
+    },
+    {
+      jobId: `translation-v2-${jobId}`,
+      removeOnComplete: true,
+      removeOnFail: false,
+    },
   );
 
-  const totalStages = stageOrder.length;
   app.log.info(
-    `[TRANSLATE] Queued sequential job ${jobId} with ${segmentation.segments.length} segments across ${batchCount} batches`,
+    `[TRANSLATE] Queued V2 pipeline job ${jobId} with ${segmentation.segments.length} segments`,
   );
 
   reply.send({
     jobId,
     workflowRunId: workflowRun?.runId ?? null,
-    totalPasses: totalStages,
+    totalPasses: V2_PIPELINE_STAGES.length,
     segmentCount: segmentation.segments.length,
     segmentationMode,
-    sourceHash: segmentation.sourceHash,
-    stages: stageOrder,
-    batches: batchCount,
+    pipeline: "v2",
   });
 });
 
@@ -2451,7 +2700,10 @@ app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
   }
 
   try {
-    await cancelTranslationDeletes(jobRow.id, reason);
+    await cancelTranslationDeletes(jobRow.id, reason, {
+      projectId: jobRow.project_id,
+      userId,
+    });
   } catch (error) {
     req.log.warn(
       { err: error, jobId: jobRow.id },
@@ -3240,119 +3492,6 @@ function startCoverWorker() {
   app.log.info("[STARTUP] Cover generation worker loop started");
 }
 
-type LeanDraftDocument =
-  Awaited<ReturnType<typeof listSuccessfulDrafts>>[number];
-
-async function handleTranslationDraftJob(job: TranslationDraftJob) {
-  const { data } = job;
-  if (await isJobCancelled(data.jobId)) {
-    await TranslationDraft.findByIdAndUpdate(data.draftId, {
-      $set: {
-        status: "cancelled",
-        error: "Cancelled before start",
-        finished_at: new Date(),
-      },
-    });
-    return;
-  }
-
-  await markJobRunning(data.jobId);
-
-  const draft = await TranslationDraft.findById(data.draftId);
-  if (!draft) {
-    throw new Error(
-      `Draft ${data.draftId} not found for job ${data.jobId}`,
-    );
-  }
-
-  if (draft.status === "cancelled") {
-    return;
-  }
-
-  const runningDraft = await markDraftRunning(
-    draft._id,
-    data.draftConfig?.model ?? null,
-  );
-
-  if (!runningDraft || runningDraft.status === "cancelled") {
-    return;
-  }
-
-  if (await isJobCancelled(data.jobId)) {
-    await TranslationDraft.findByIdAndUpdate(draft._id, {
-      $set: {
-        status: "cancelled",
-        error: "Cancelled before execution",
-        finished_at: new Date(),
-      },
-    });
-    return;
-  }
-
-  let failureReason: string | null = null;
-  const startedAt = Date.now();
-
-  try {
-    const draftResult = await generateTranslationDraft({
-      projectId: data.projectId,
-      jobId: data.jobId,
-      runOrder: data.runOrder,
-      sourceHash: data.sourceHash,
-      originLanguage: data.originLanguage ?? null,
-      targetLanguage: data.targetLanguage ?? null,
-      originSegments: data.originSegments,
-      translationNotes: data.translationNotes ?? null,
-      model: data.draftConfig?.model,
-      verbosity: data.draftConfig?.verbosity as ResponseVerbosity | undefined,
-      reasoningEffort: data.draftConfig?.reasoningEffort as ResponseReasoningEffort | undefined,
-      maxOutputTokens: data.draftConfig?.maxOutputTokens,
-    });
-
-    if (await isJobCancelled(data.jobId)) {
-      await TranslationDraft.findByIdAndUpdate(draft._id, {
-        $set: {
-          status: "cancelled",
-          error: "Cancelled during execution",
-          finished_at: new Date(),
-        },
-      });
-      return;
-    }
-
-    await completeDraft(draft._id, {
-      segments: draftResult.segments,
-      mergedText: draftResult.mergedText,
-      model: draftResult.model,
-      usage: draftResult.usage,
-      meta: draftResult.meta,
-    });
-
-    await recordTokenUsage(app.log, {
-      project_id: data.projectId,
-      job_id: data.jobId,
-      event_type: "translate",
-      model: draftResult.model,
-      input_tokens: draftResult.usage.inputTokens,
-      output_tokens: draftResult.usage.outputTokens,
-      duration_ms: Date.now() - startedAt,
-    });
-
-    app.log.info(
-      `[TRANSLATION] Draft pass ${data.runOrder}/${data.totalPasses} succeeded for job ${data.jobId}`,
-    );
-  } catch (error) {
-    failureReason = error instanceof Error ? error.message : String(error);
-    await failDraft(draft._id, failureReason);
-    app.log.error(
-      { err: error, jobId: data.jobId, draftId: data.draftId },
-      "[TRANSLATION] Draft pass failed",
-    );
-    throw error;
-  } finally {
-    await maybeQueueSynthesis(job, failureReason);
-  }
-}
-
 async function failWorkflowRunSafe(
   workflowRunId?: string | null,
   errorMessage?: string,
@@ -3380,30 +3519,38 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
   let failureReason: string | null = null;
 
   try {
-    const draftResult = await generateTranslationDraft({
-      projectId: data.projectId,
-      jobId: data.jobId,
-      runOrder: 1,
-      sourceHash: data.sourceHash,
-      originLanguage: data.originLanguage ?? null,
-      targetLanguage: data.targetLanguage ?? null,
-      originSegments: data.originSegments,
-      translationNotes: data.translationNotes ?? null,
-      candidateCount: data.candidateCount ?? DEFAULT_V2_CANDIDATE_COUNT,
-      projectTitle: data.projectTitle ?? null,
-      authorName: data.authorName ?? null,
-      synopsis: data.synopsis ?? null,
-      register: data.register ?? null,
-      model: process.env.TRANSLATION_DRAFT_MODEL_V2 ?? process.env.TRANSLATION_DRAFT_MODEL ?? process.env.CHAT_MODEL ?? 'gpt-4o',
-      deliberationModel:
-        process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2 ?? process.env.TRANSLATION_DRAFT_JUDGE_MODEL ?? process.env.CHAT_MODEL ?? 'gpt-4o',
-    });
+    const draftResult = await runDraftStageWithAdaptiveRetries(
+      {
+        projectId: data.projectId,
+        jobId: data.jobId,
+        runOrder: 1,
+        sourceHash: data.sourceHash,
+        originLanguage: data.originLanguage ?? null,
+        targetLanguage: data.targetLanguage ?? null,
+        translationNotes: data.translationNotes ?? null,
+        candidateCount: data.candidateCount ?? DEFAULT_V2_CANDIDATE_COUNT,
+        projectTitle: data.projectTitle ?? null,
+        authorName: data.authorName ?? null,
+        synopsis: data.synopsis ?? null,
+        register: data.register ?? null,
+        model: process.env.TRANSLATION_DRAFT_MODEL_V2 ?? 'gpt-5',
+        deliberationModel:
+          process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2 ?? 'gpt-5-mini',
+      },
+      data.originSegments,
+    );
 
     if (await isJobCancelled(data.jobId)) {
       return;
     }
 
-    const sequentialConfig = getSequentialTranslationConfig();
+    const baseConfig = getSequentialTranslationConfig();
+    const sequentialConfig = data.stageParameters
+      ? {
+          ...baseConfig,
+          stageParameters: data.stageParameters,
+        }
+      : baseConfig;
     const segmentBatch: SequentialStageJobSegment[] = data.originSegments.map(
       (segment, index, arr) => ({
         segmentId: segment.id,
@@ -3414,6 +3561,38 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         stageOutputs: {},
       }),
     );
+
+    await recordTokenUsage(app.log, {
+      project_id: data.projectId,
+      job_id: data.jobId,
+      event_type: 'translate_v2_draft',
+      model: draftResult.model,
+      input_tokens: draftResult.usage.inputTokens,
+      output_tokens: draftResult.usage.outputTokens,
+      duration_ms: Date.now() - startedAt,
+      metadata: {
+        stage: 'draft',
+        verbosity: draftResult.meta.verbosity,
+        reasoningEffort: draftResult.meta.reasoningEffort,
+        maxOutputTokens: draftResult.meta.maxOutputTokens,
+        retryCount: draftResult.meta.retryCount,
+        truncated: draftResult.meta.truncated,
+        fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+      },
+    });
+
+    if (draftResult.meta.truncated) {
+      failureReason = 'draft_truncated';
+      app.log.warn(
+        {
+          jobId: data.jobId,
+          projectId: data.projectId,
+          maxOutputTokens: draftResult.meta.maxOutputTokens,
+        },
+        '[TRANSLATION_V2] Draft output truncated; aborting job',
+      );
+      throw new Error('draft_truncated');
+    }
 
     const stageJob: SequentialStageJob = {
       jobId: data.jobId,
@@ -3429,7 +3608,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       translationNotes: data.translationNotes ?? undefined,
     };
 
-  const stageResults: SequentialStageResult[] = draftResult.segments.map(
+    const stageResults: SequentialStageResult[] = draftResult.segments.map(
       (segment) => ({
         stage: 'draft',
         segmentId: segment.segment_id,
@@ -3456,16 +3635,6 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
 
     await persistStageResults(stageJob, stageResults);
 
-    await recordTokenUsage(app.log, {
-      project_id: data.projectId,
-      job_id: data.jobId,
-      event_type: 'translate_v2_draft',
-      model: draftResult.model,
-      input_tokens: draftResult.usage.inputTokens,
-      output_tokens: draftResult.usage.outputTokens,
-      duration_ms: Date.now() - startedAt,
-    });
-
     app.log.info(
       `[TRANSLATION_V2] Draft stage completed for job ${data.jobId}`,
     );
@@ -3478,10 +3647,48 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       originSegments: data.originSegments,
       draftSegments: draftResult.segments,
       translationNotes: data.translationNotes ?? null,
+      maxOutputTokens: computeMaxOutputTokensForTexts(
+        draftResult.segments.map((segment) => segment.translation_segment ?? ''),
+        REVISE_TOKEN_BUDGET_FACTOR,
+        DEFAULT_REVISE_MAX_OUTPUT_TOKENS,
+        REVISE_MAX_OUTPUT_TOKENS_CAP,
+      ),
     });
 
     if (await isJobCancelled(data.jobId)) {
       return;
+    }
+
+    await recordTokenUsage(app.log, {
+      project_id: data.projectId,
+      job_id: data.jobId,
+      event_type: 'translate_v2_revise',
+      model: revisionResult.model,
+      input_tokens: revisionResult.usage.inputTokens,
+      output_tokens: revisionResult.usage.outputTokens,
+      duration_ms: Date.now() - reviseStartedAt,
+      metadata: {
+        stage: 'revise',
+        verbosity: revisionResult.meta.verbosity,
+        reasoningEffort: revisionResult.meta.reasoningEffort,
+        maxOutputTokens: revisionResult.meta.maxOutputTokens,
+        retryCount: revisionResult.meta.retryCount,
+        truncated: revisionResult.meta.truncated,
+        fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+      },
+    });
+
+    if (revisionResult.meta.truncated) {
+      failureReason = 'revise_truncated';
+      app.log.warn(
+        {
+          jobId: data.jobId,
+          projectId: data.projectId,
+          maxOutputTokens: revisionResult.meta.maxOutputTokens,
+        },
+        '[TRANSLATION_V2] Revise output truncated; aborting job',
+      );
+      throw new Error('revise_truncated');
     }
 
     const reviseStageJob: SequentialStageJob = {
@@ -3517,16 +3724,6 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     );
 
     await persistStageResults(reviseStageJob, reviseStageResults);
-
-    await recordTokenUsage(app.log, {
-      project_id: data.projectId,
-      job_id: data.jobId,
-      event_type: 'translate_v2_revise',
-      model: revisionResult.model,
-      input_tokens: revisionResult.usage.inputTokens,
-      output_tokens: revisionResult.usage.outputTokens,
-      duration_ms: Date.now() - reviseStartedAt,
-    });
 
     app.log.info(
       `[TRANSLATION_V2] Revise stage completed for job ${data.jobId}`,
@@ -3658,370 +3855,6 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
   }
 }
 
-async function maybeQueueSynthesis(
-  job: TranslationDraftJob,
-  failureReason: string | null,
-) {
-  const { data } = job;
-
-  if (await isJobCancelled(data.jobId)) {
-    app.log.info(
-      `[TRANSLATION] Skipping synthesis queue for job ${data.jobId} because it was cancelled`,
-    );
-    return;
-  }
-
-  const outstanding = await TranslationDraft.countDocuments({
-    project_id: data.projectId,
-    job_id: data.jobId,
-    status: { $in: ["queued", "running"] },
-  });
-  if (outstanding > 0) {
-    return;
-  }
-
-  const successfulDrafts = await listSuccessfulDrafts(
-    data.projectId,
-    data.jobId,
-  );
-
-  if (await isJobCancelled(data.jobId)) {
-    app.log.info(
-      `[TRANSLATION] Job ${data.jobId} cancelled after draft completion; skipping synthesis`,
-    );
-    return;
-  }
-
-  if (!successfulDrafts.length) {
-    const errorMessage =
-      failureReason ??
-      "All translation passes failed; no drafts available for synthesis.";
-    await markJobFailed(data.jobId, errorMessage);
-    if (data.workflowRunId) {
-      try {
-        await failWorkflowRun(data.workflowRunId, {
-          jobId: data.jobId,
-          error: errorMessage,
-        });
-      } catch (err) {
-        app.log.warn(
-          { err, runId: data.workflowRunId },
-          "[TRANSLATION] Failed to mark workflow run failure after drafts",
-        );
-      }
-    }
-    return;
-  }
-
-  const flag = await TranslationDraft.findOneAndUpdate(
-    {
-      project_id: data.projectId,
-      job_id: data.jobId,
-      "metadata.synthesisQueued": { $ne: true },
-    },
-    {
-      $set: {
-        "metadata.synthesisQueued": true,
-        "metadata.synthesisQueuedAt": new Date().toISOString(),
-      },
-    },
-    { sort: { run_order: 1 }, returnDocument: "before" },
-  ).lean();
-
-  if (!flag) {
-    return;
-  }
-
-  const candidateDraftIds = successfulDrafts.map((draft) =>
-    draft._id.toString(),
-  );
-
-  await enqueueTranslationSynthesisJob(
-    {
-      projectId: data.projectId,
-      jobId: data.jobId,
-      workflowRunId: data.workflowRunId ?? null,
-      sourceHash: data.sourceHash,
-      segmentationMode: data.segmentationMode,
-      originLanguage: data.originLanguage ?? null,
-      targetLanguage: data.targetLanguage ?? null,
-      originSegments: data.originSegments,
-      translationNotes: data.translationNotes ?? null,
-      candidateDraftIds,
-    },
-    {
-      jobId: `synthesis-${data.jobId}`,
-      removeOnComplete: true,
-      removeOnFail: false,
-      attempts: 1,
-    },
-  );
-
-  app.log.info(
-    `[TRANSLATION] Queued synthesis job for ${data.jobId} with ${candidateDraftIds.length} drafts`,
-  );
-}
-
-async function handleTranslationSynthesisJob(job: TranslationSynthesisJob) {
-  const { data } = job;
-  if (await isJobCancelled(data.jobId)) {
-    app.log.info(
-      `[TRANSLATION] Skipping synthesis for job ${data.jobId} because it was cancelled`,
-    );
-    return;
-  }
-  await markJobRunning(data.jobId);
-
-  try {
-    const drafts = await loadDraftsByIds(data.candidateDraftIds, {
-      projectId: data.projectId,
-      jobId: data.jobId,
-    });
-    if (!drafts.length) {
-      throw new Error("No translation drafts available for synthesis");
-    }
-
-    const synthesisResult = await synthesizeTranslation({
-      projectId: data.projectId,
-      jobId: data.jobId,
-      sourceHash: data.sourceHash,
-      originLanguage: data.originLanguage ?? null,
-      targetLanguage: data.targetLanguage ?? null,
-      originSegments: data.originSegments,
-      translationNotes: data.translationNotes ?? null,
-      model: data.synthesisConfig?.model,
-      verbosity: data.synthesisConfig?.verbosity as ResponseVerbosity | undefined,
-      reasoningEffort: data.synthesisConfig?.reasoningEffort as ResponseReasoningEffort | undefined,
-      maxOutputTokens: data.synthesisConfig?.maxOutputTokens,
-      candidates: drafts.map((draft) => ({
-        draftId: draft._id.toString(),
-        runOrder: draft.run_order,
-        model: draft.model ?? null,
-        temperature: draft.temperature ?? null,
-        topP: draft.top_p ?? null,
-        verbosity: (draft.verbosity ?? null) as ResponseVerbosity | null,
-        reasoningEffort: (draft.reasoning_effort ?? null) as ResponseReasoningEffort | null,
-        maxOutputTokens: draft.max_output_tokens ?? null,
-        segments: draft.segments,
-      })),
-    });
-
-    if (await isJobCancelled(data.jobId)) {
-      app.log.info(
-        `[TRANSLATION] Discarding synthesis result for job ${data.jobId} because it was cancelled`,
-      );
-      return;
-    }
-
-    await recordTokenUsage(app.log, {
-      project_id: data.projectId,
-      job_id: data.jobId,
-      event_type: "translate",
-      model: synthesisResult.model,
-      input_tokens: synthesisResult.usage.inputTokens,
-      output_tokens: synthesisResult.usage.outputTokens,
-    });
-
-    const translationFile = await persistFinalTranslation({
-      projectId: data.projectId,
-      jobId: data.jobId,
-      originSegments: data.originSegments,
-      resultSegments: synthesisResult.segments,
-      mergedText: synthesisResult.mergedText,
-      candidateDrafts: drafts,
-      sourceHash: data.sourceHash,
-      synthesisMeta: synthesisResult.meta,
-    });
-
-    await markJobSucceeded(data.jobId);
-
-    if (data.workflowRunId) {
-      try {
-        await completeWorkflowRun(data.workflowRunId, {
-          jobId: data.jobId,
-          translationFileId: translationFile._id.toString(),
-        });
-      } catch (err) {
-        app.log.warn(
-          { err, runId: data.workflowRunId },
-          "[TRANSLATION] Failed to mark workflow run complete after synthesis",
-        );
-      }
-    }
-
-    app.log.info(
-      `[TRANSLATION] Final translation synthesized for job ${data.jobId}`,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await markJobFailed(data.jobId, message);
-    if (data.workflowRunId) {
-      try {
-        await failWorkflowRun(data.workflowRunId, {
-          jobId: data.jobId,
-          error: message,
-        });
-      } catch (err) {
-        app.log.warn(
-          { err, runId: data.workflowRunId },
-          "[TRANSLATION] Failed to mark workflow run failure during synthesis",
-        );
-      }
-    }
-    throw error;
-  }
-}
-
-interface FinalizationPayload {
-  projectId: string;
-  jobId: string;
-  originSegments: OriginSegment[];
-  resultSegments: TranslationSynthesisSegmentResult[];
-  mergedText: string;
-  candidateDrafts: LeanDraftDocument[];
-  sourceHash: string;
-  synthesisMeta: TranslationSynthesisAgentResultMeta;
-}
-
-async function persistFinalTranslation(
-  options: FinalizationPayload,
-) {
-  const {
-    projectId,
-    jobId,
-    originSegments,
-    resultSegments,
-    mergedText,
-    candidateDrafts,
-    sourceHash,
-    synthesisMeta,
-  } = options;
-
-  const originMap = new Map(
-    originSegments.map((segment) => [segment.id, segment.text]),
-  );
-
-  const metadataSource = candidateDrafts.find(
-    (draft) => draft?.metadata,
-  ) as any;
-
-  const originText =
-    metadataSource?.metadata?.originText ?? reconstructOriginText(originSegments);
-  const originFilename =
-    metadataSource?.metadata?.originFilename ?? `origin-${jobId}.txt`;
-  const originFileSize =
-    metadataSource?.metadata?.originFileSize ??
-    Buffer.byteLength(originText, "utf8");
-
-  const candidateObjectIds = candidateDrafts.map((draft) => draft._id);
-  const now = new Date();
-
-  const translationFile = await TranslationFile.findOneAndUpdate(
-    { project_id: projectId, job_id: jobId },
-    {
-      project_id: projectId,
-      job_id: jobId,
-      variant: "final",
-      is_final: true,
-      source_hash: sourceHash,
-      synthesis_draft_ids: candidateObjectIds,
-      origin_filename: originFilename,
-      origin_file_size: originFileSize,
-      origin_content: originText,
-      translated_content: mergedText,
-      batch_count: resultSegments.length,
-      completed_batches: resultSegments.length,
-      segments_version: 1,
-      completed_at: now,
-      updated_at: now,
-    },
-    { new: true, upsert: true, setDefaultsOnInsert: true },
-  );
-
-  await TranslationSegment.deleteMany({
-    translation_file_id: translationFile._id,
-    variant: "final",
-  });
-
-  await TranslationSegment.insertMany(
-    resultSegments.map((segment, index) => ({
-      project_id: projectId,
-      translation_file_id: translationFile._id,
-      job_id: jobId,
-      variant: "final",
-      segment_id: segment.segment_id,
-      segment_index: index,
-      origin_segment: originMap.get(segment.segment_id) ?? "",
-      translation_segment: segment.translation_segment,
-      source_draft_ids: candidateObjectIds,
-      synthesis_notes: {
-        selectedRunOrder: segment.selected_run_order,
-        rationale: segment.rationale,
-        meta: synthesisMeta,
-      },
-    })),
-  );
-
-  await TranslationDraft.updateMany(
-    { _id: { $in: candidateObjectIds } },
-    {
-      $set: {
-        "metadata.finalTranslationFileId": translationFile._id.toString(),
-        finished_at: now,
-      },
-    },
-  );
-
-  await query(
-    "UPDATE translationprojects SET updated_at = NOW() WHERE project_id = $1",
-    [projectId],
-  );
-
-  let jobOwner: string | null = null;
-  try {
-    const { rows } = await query(
-      "SELECT user_id FROM jobs WHERE id = $1 LIMIT 1",
-      [jobId],
-    );
-    jobOwner = rows[0]?.user_id ?? null;
-  } catch (err) {
-    app.log.warn(
-      { err, jobId },
-      "[TRANSLATION] Failed to load job owner for profile enqueue",
-    );
-  }
-
-  if (jobOwner && mergedText.trim().length) {
-    enqueueProfileAnalysisJob({
-      projectId,
-      userId: jobOwner,
-      payload: {
-        variant: "translation",
-        translationFileId: translationFile._id.toString(),
-        triggeredBy: "translation-synthesis",
-      },
-    }).catch((err) => {
-      app.log.error(
-        { err, jobId, projectId },
-        "[TRANSLATION] Failed to enqueue translation profile job",
-      );
-    });
-  }
-
-  return translationFile;
-}
-
-function resolvePipelineStages(stageCounts: Record<string, number>) {
-  if (
-    stageCounts.draft !== undefined ||
-    stageCounts.revise !== undefined ||
-    stageCounts["micro-check"] !== undefined
-  ) {
-    return V2_PIPELINE_STAGES;
-  }
-  return LEGACY_PIPELINE_STAGES;
-}
-
 async function clearStaleTranslationWorkflowRun(
   projectId: string,
   conflictRun?: WorkflowRunRecord | null,
@@ -4079,36 +3912,62 @@ function reconstructOriginText(segments: OriginSegment[]): string {
 }
 
 function initializeTranslationWorkers() {
-  registerTranslationDraftProcessor(handleTranslationDraftJob);
-  registerTranslationSynthesisProcessor(handleTranslationSynthesisJob);
-  registerTranslationStageProcessor(handleTranslationStageJob);
   registerTranslationV2Processor(handleTranslationV2Job);
   app.log.info("[STARTUP] Translation queue workers registered");
 }
 
-async function cancelTranslationDeletes(jobId: string, reason: string) {
+async function cancelTranslationDeletes(
+  jobId: string,
+  reason: string,
+  context?: { projectId?: string | null; userId?: string | null },
+) {
   await cancelDrafts(jobId, reason);
 
-  const drafts = await TranslationDraft.find({ job_id: jobId })
-    .select({ run_order: 1 })
-    .lean();
-  for (const draft of drafts) {
-    if (typeof draft.run_order === "number") {
-      await removeDraftQueueJob(`draft-${jobId}-${draft.run_order}`);
-    }
-  }
-
-  await removeSynthesisQueueJob(`synthesis-${jobId}`);
-  await removeStageJobsFor(jobId);
+  await removeTranslationV2Job(`translation-v2-${jobId}`);
 
   await query(
     `UPDATE translation_drafts
-        SET status = 'cancelled',
-            needs_review = false,
+        SET needs_review = false,
             updated_at = NOW()
-      WHERE job_id = $1 AND status NOT IN ('succeeded','failed')`,
+      WHERE job_id = $1`,
     [jobId],
   );
+
+  await logTranslationCancellation({
+    jobId,
+    projectId: context?.projectId ?? null,
+    userId: context?.userId ?? null,
+    reason,
+  });
+}
+
+async function logTranslationCancellation(params: {
+  jobId: string;
+  projectId: string | null;
+  userId: string | null;
+  reason: string;
+}) {
+  const { jobId, projectId, userId, reason } = params;
+  try {
+    await query(
+      `INSERT INTO translation_cancellation_logs (job_id, project_id, user_id, reason, created_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [jobId, projectId, userId, reason],
+    );
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code ?? null;
+    if (code === '42P01' || code === '42703') {
+      app.log.warn(
+        { err: error, jobId },
+        '[TRANSLATION] translation_cancellation_logs table or columns missing; please create it to record cancellations.',
+      );
+    } else {
+      app.log.warn(
+        { err: error, jobId },
+        '[TRANSLATION] Failed to log translation cancellation',
+      );
+    }
+  }
 }
 
 
@@ -4380,7 +4239,7 @@ function buildSequentialSummary(
     ? entry.flaggedSegments
     : [];
 
-  const pipelineStages = resolvePipelineStages(stageCounts);
+  const pipelineStages = [...V2_PIPELINE_STAGES];
 
   const completedStages = pipelineStages.filter((stage) => {
     if (!totalSegments) return false;
@@ -4402,7 +4261,7 @@ function buildSequentialSummary(
     currentStage,
     guardFailures,
     flaggedSegments,
-    pipelineStages: Array.from(pipelineStages),
+    pipelineStages: pipelineStages.slice(),
   };
 }
 

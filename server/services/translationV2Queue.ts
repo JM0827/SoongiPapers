@@ -1,6 +1,7 @@
 import { Queue, Worker, type JobsOptions, type Processor, type Job } from "bullmq";
 import { createRedisClient } from "./redis";
 import type { OriginSegment } from "../agents/translation/segmentationAgent";
+import type { SequentialTranslationStageConfig } from "../agents/translation";
 import type { TranslationNotes } from "../models/DocumentProfile";
 
 export interface TranslationV2JobData {
@@ -17,6 +18,7 @@ export interface TranslationV2JobData {
   synopsis?: string | null;
   register?: string | null;
   candidateCount?: number;
+  stageParameters?: SequentialTranslationStageConfig;
 }
 
 const V2_QUEUE_NAME = "translation_v2";
@@ -49,6 +51,13 @@ export async function enqueueTranslationV2Job(
   options?: JobsOptions,
 ) {
   return v2Queue.add("translation-v2", data, options);
+}
+
+export async function removeTranslationV2Job(jobKey: string) {
+  const job = await v2Queue.getJob(jobKey);
+  if (job) {
+    await job.remove();
+  }
 }
 
 export async function pauseTranslationV2Queue() {

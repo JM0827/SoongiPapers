@@ -9,6 +9,14 @@ import {
 } from "../prompts/style";
 import { callStageLLM } from "../../../services/translation/llm";
 
+function resolveMaxTokens(job: SequentialStageJob, proposed: number): number {
+  const budget = job.config.tokenBudget?.completionMax;
+  if (typeof budget === "number" && budget > 0) {
+    return Math.min(proposed, budget);
+  }
+  return proposed;
+}
+
 export async function runStyleStage(
   job: SequentialStageJob,
   prior: SequentialStageResult[],
@@ -26,12 +34,20 @@ export async function runStyleStage(
         memory,
       });
 
+      const stageParams =
+        job.config.stageParameters?.style ?? {
+          verbosity: "medium",
+          reasoningEffort: "low",
+          maxOutputTokens: job.config.tokenBudget?.completionMax ?? 900,
+        };
+
       const callResult = await callStageLLM({
         stage: "style",
         systemPrompt: STYLE_SYSTEM_PROMPT,
         userPrompt,
-        temperature: job.config.temps.style ?? 0.6,
-        maxOutputTokens: job.config.tokenBudget?.completionMax ?? 400,
+        verbosity: stageParams.verbosity,
+        reasoningEffort: stageParams.reasoningEffort,
+        maxOutputTokens: resolveMaxTokens(job, stageParams.maxOutputTokens),
       });
 
       const textTarget = callResult.text || literalResult?.textTarget || segment.textSource;

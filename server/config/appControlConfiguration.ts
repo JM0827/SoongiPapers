@@ -4,22 +4,32 @@ import path from "node:path";
 import type {
   ContextPolicyConfig,
   LanguageCode,
+  ResponseReasoningEffort,
+  ResponseVerbosity,
   SegmentMode,
+  SequentialStageLLMParameters,
   SequentialTranslationBatchingConfig,
   SequentialTranslationConfig,
   SequentialTranslationProofreadConfig,
-  SequentialTranslationTemps,
+  SequentialTranslationStageConfig,
   SequentialTranslationTokenBudget,
 } from "@bookko/translation-types";
+
+type StageParameterOverrides = Partial<
+  Record<
+    keyof SequentialTranslationStageConfig,
+    Partial<SequentialStageLLMParameters>
+  >
+>;
 
 type SequentialTranslationOverrides = Partial<
   Omit<
     SequentialTranslationConfig,
-    "contextPolicy" | "temps" | "batching" | "tokenBudget" | "proofread"
+    "contextPolicy" | "stageParameters" | "batching" | "tokenBudget" | "proofread"
   >
 > & {
   contextPolicy?: Partial<ContextPolicyConfig>;
-  temps?: Partial<SequentialTranslationTemps>;
+  stageParameters?: StageParameterOverrides;
   batching?: Partial<SequentialTranslationBatchingConfig>;
   tokenBudget?: Partial<SequentialTranslationTokenBudget>;
   proofread?: Partial<SequentialTranslationProofreadConfig>;
@@ -28,15 +38,59 @@ type SequentialTranslationOverrides = Partial<
 interface AppControlConfiguration {
   lineJoiner?: boolean;
   translation?: SequentialTranslationOverrides;
-  translationStageQueue?: {
-    removeOnComplete?: boolean;
-    removeOnFailAgeSeconds?: number | null;
-  };
 }
 
 const DEFAULT_SEGMENTATION_MODE: SegmentMode = "paragraph";
 
 type SegmentationMode = SegmentMode;
+
+function buildStageParams(
+  verbosity: ResponseVerbosity,
+  reasoningEffort: ResponseReasoningEffort,
+  maxOutputTokens: number,
+): SequentialStageLLMParameters {
+  return {
+    verbosity,
+    reasoningEffort,
+    maxOutputTokens,
+  };
+}
+
+function mergeStageParameters(
+  base: SequentialTranslationStageConfig,
+  overrides?: StageParameterOverrides,
+): SequentialTranslationStageConfig {
+  const literal = {
+    ...base.literal,
+    ...(overrides?.literal ?? {}),
+  } satisfies SequentialStageLLMParameters;
+  const style = {
+    ...base.style,
+    ...(overrides?.style ?? {}),
+  } satisfies SequentialStageLLMParameters;
+  const emotion = {
+    ...base.emotion,
+    ...(overrides?.emotion ?? {}),
+  } satisfies SequentialStageLLMParameters;
+  const qa = {
+    ...base.qa,
+    ...(overrides?.qa ?? {}),
+  } satisfies SequentialStageLLMParameters;
+
+  return {
+    literal,
+    style,
+    emotion,
+    qa,
+  };
+}
+
+const DEFAULT_STAGE_PARAMETERS: SequentialTranslationStageConfig = {
+  literal: buildStageParams("low", "minimal", 900),
+  style: buildStageParams("medium", "low", 900),
+  emotion: buildStageParams("medium", "medium", 900),
+  qa: buildStageParams("low", "low", 600),
+};
 
 const DEFAULT_TRANSLATION_CONFIG: SequentialTranslationConfig = {
   translationMode: "sequential",
@@ -49,11 +103,7 @@ const DEFAULT_TRANSLATION_CONFIG: SequentialTranslationConfig = {
     summaryMax: 120,
     mode: "hybrid",
   },
-  temps: {
-    literal: 0.35,
-    style: 0.6,
-    emotion: 0.6,
-  },
+  stageParameters: DEFAULT_STAGE_PARAMETERS,
   register: "literary",
   honorifics: "preserve",
   romanizationPolicy: "as-is",
@@ -72,11 +122,6 @@ const DEFAULT_TRANSLATION_CONFIG: SequentialTranslationConfig = {
     minSeverity: "medium",
     autoApplySafeFixes: false,
   },
-};
-
-const DEFAULT_STAGE_QUEUE_CONFIG = {
-  removeOnComplete: true,
-  removeOnFailAgeSeconds: 60 * 60 * 24,
 };
 
 let cachedConfig: AppControlConfiguration | null = null;
@@ -135,8 +180,8 @@ function mergeTranslationConfig(
   const contextOverrides = overrides.contextPolicy as
     | Partial<ContextPolicyConfig>
     | undefined;
-  const tempsOverride = overrides.temps as
-    | Partial<SequentialTranslationTemps>
+  const stageParametersOverride = overrides.stageParameters as
+    | StageParameterOverrides
     | undefined;
   const batchingOverride = overrides.batching as
     | Partial<SequentialTranslationBatchingConfig>
@@ -190,10 +235,10 @@ function mergeTranslationConfig(
       ...DEFAULT_TRANSLATION_CONFIG.contextPolicy,
       ...(contextOverrides ?? {}),
     },
-    temps: {
-      ...DEFAULT_TRANSLATION_CONFIG.temps,
-      ...(tempsOverride ?? {}),
-    },
+    stageParameters: mergeStageParameters(
+      DEFAULT_TRANSLATION_CONFIG.stageParameters,
+      stageParametersOverride,
+    ),
     register,
     honorifics,
     romanizationPolicy,
@@ -241,21 +286,6 @@ export function getTranslationPassCount(): number {
 export function getTranslationConcurrency(): number {
   const config = getSequentialTranslationConfig();
   return Math.max(1, Math.floor(config.batching.workerConcurrency));
-}
-
-export function getTranslationStageQueueConfig() {
-  const config = loadConfiguration();
-  const queueConfig = config.translationStageQueue ?? {};
-  const removeOnComplete =
-    queueConfig.removeOnComplete ?? DEFAULT_STAGE_QUEUE_CONFIG.removeOnComplete;
-  const removeOnFailAgeSeconds =
-    queueConfig.removeOnFailAgeSeconds ??
-    DEFAULT_STAGE_QUEUE_CONFIG.removeOnFailAgeSeconds;
-
-  return {
-    removeOnComplete,
-    removeOnFailAgeSeconds,
-  };
 }
 
 export type { SegmentationMode };

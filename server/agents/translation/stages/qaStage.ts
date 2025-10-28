@@ -49,12 +49,25 @@ export async function runQaStage(
         memory,
       });
 
+      const stageParams =
+        job.config.stageParameters?.qa ?? {
+          verbosity: "low",
+          reasoningEffort: "low",
+          maxOutputTokens: job.config.tokenBudget?.completionMax ?? 600,
+        };
+      const budget = job.config.tokenBudget?.completionMax;
+      const maxOutputTokens =
+        typeof budget === "number" && budget > 0
+          ? Math.min(stageParams.maxOutputTokens, budget)
+          : stageParams.maxOutputTokens;
+
       const callResult = await callStageLLM({
         stage: "qa",
         systemPrompt: QA_SYSTEM_PROMPT,
         userPrompt,
-        temperature: 0,
-        maxOutputTokens: Math.min(job.config.tokenBudget?.completionMax ?? 400, 600),
+        verbosity: stageParams.verbosity,
+        reasoningEffort: stageParams.reasoningEffort,
+        maxOutputTokens,
         responseFormat: { type: "json_object" },
       });
 

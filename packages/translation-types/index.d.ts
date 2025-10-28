@@ -162,6 +162,23 @@ export interface SequentialTranslationTemps {
   emotion: number;
 }
 
+export type ResponseVerbosity = 'low' | 'medium' | 'high';
+
+export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
+export interface SequentialStageLLMParameters {
+  verbosity: ResponseVerbosity;
+  reasoningEffort: ResponseReasoningEffort;
+  maxOutputTokens: number;
+}
+
+export interface SequentialTranslationStageConfig {
+  literal: SequentialStageLLMParameters;
+  style: SequentialStageLLMParameters;
+  emotion: SequentialStageLLMParameters;
+  qa: SequentialStageLLMParameters;
+}
+
 export interface SequentialTranslationMBRConfig {
   enable: boolean;
   k: number;
@@ -227,7 +244,9 @@ export interface SequentialTranslationConfig {
   segmentMode: SegmentMode | string;
   window: number;
   contextPolicy: ContextPolicyConfig;
-  temps: SequentialTranslationTemps;
+  stageParameters: SequentialTranslationStageConfig;
+  /** @deprecated retained for backward compatibility */
+  temps?: SequentialTranslationTemps;
   register?: string;
   honorifics?: string;
   romanizationPolicy?: RomanizationPolicy;
