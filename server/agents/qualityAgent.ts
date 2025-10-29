@@ -20,6 +20,8 @@ import {
   safeExtractOpenAIResponse,
 } from "../services/llm";
 import { SHARED_TRANSLATION_GUIDELINES } from "./prompts/sharedGuidelines";
+import { buildAlignedPairSet } from "./quality/alignedPairs";
+import { buildQualityChunks } from "./quality/chunking";
 
 const DEFAULT_CHUNK_SIZE =
   Number(process.env.LITERARY_QA_CHUNK_SIZE) || 3200;
@@ -114,6 +116,8 @@ export interface EvaluateParams {
   maxCharsPerChunk?: number; // 청크 최대 길이 (기본 3200자)
   overlap?: number; // 청크 간 겹침 길이 (기본 200자)
   strict?: boolean; // 검증 여부 (기본 true)
+  projectId?: string | null;
+  jobId?: string | null;
 }
 
 export type QualityEvaluationEvent =
@@ -136,6 +140,10 @@ export type QualityEvaluationEvent =
       sourceLength: number;
       translatedLength: number;
       maxOutputTokens: number;
+      pairCount?: number;
+      overlapPairCount?: number;
+      sourceTokens?: number;
+      translatedTokens?: number;
     }
   | {
       type: "chunk-retry";
@@ -160,6 +168,10 @@ export type QualityEvaluationEvent =
       missingFields?: string[];
       attempts?: number;
       preview?: string | null;
+      pairCount?: number;
+      overlapPairCount?: number;
+      sourceTokens?: number;
+      translatedTokens?: number;
     }
   | {
       type: "chunk-partial";
@@ -199,7 +211,7 @@ export interface QualityEvaluationOptions {
 // ----------------------------- OpenAI Client -----------------------------
 																   
 
-export const DEFAULT_LITERARY_MODEL = process.env.LITERARY_QA_MODEL || "gpt-5";
+export const DEFAULT_LITERARY_MODEL = process.env.LITERARY_QA_MODEL || "gpt-5-mini";
 
 const parseVerbosity = (value?: string | null) => {
   if (!value) return undefined;
@@ -222,10 +234,10 @@ const QA_REASONING_EFFORT = parseReasoningEffort(
   process.env.LITERARY_QA_MODEL_REASONING_EFFORT,
 );
 const QA_MAX_OUTPUT_TOKENS =
-  Number(process.env.LITERARY_QA_MAX_OUTPUT_TOKENS) || 6000;
+  Number(process.env.LITERARY_QA_MAX_OUTPUT_TOKENS) || 12000;
 const QA_MAX_OUTPUT_TOKENS_CAP = Math.max(
   QA_MAX_OUTPUT_TOKENS,
-  Number(process.env.LITERARY_QA_MAX_OUTPUT_TOKENS_CAP) || 8192,
+  Number(process.env.LITERARY_QA_MAX_OUTPUT_TOKENS_CAP) || 24000,
 );
 
 const isGpt5Model = (model: string) => /^gpt-5/i.test(model);
@@ -478,87 +490,6 @@ OUTPUT CONTRACT:
 
 // 긴 텍스트를 일정 크기 단위로 나누는 함수 (문단 우선 → 문장 분리)
 // overlap 옵션으로 앞 청크 꼬리를 붙여 맥락 보존
-function splitIntoChunks(
-  text: string,
-  target = DEFAULT_CHUNK_SIZE,
-  overlap = DEFAULT_CHUNK_OVERLAP,
-): string[] {
-  if (text.length <= target) return [text];
-  const paras = text.split(/\n{2,}/g); // 문단 단위로 먼저 분리
-  const chunks: string[] = [];
-  let buf: string[] = [];
-  let curLen = 0;
-
-  const flush = () => {
-    if (!buf.length) return;
-    chunks.push(buf.join("\n\n"));
-    buf = [];
-    curLen = 0;
-  };
- 
-
-  for (const p of paras) {
-    const plus = (curLen ? 2 : 0) + p.length;
-    if (curLen + plus <= target) {
-      buf.push(p);
-      curLen += plus;
-    } else if (p.length > target) {
-      // 문단이 너무 길면 문장 단위로 다시 분리
-      const sens = p.split(/(?<=[.!?])\s+/);
-      let sbuf: string[] = [];
-      let slen = 0;
-      const sflush = () => {
-        if (!sbuf.length) return;
-        chunks.push(sbuf.join(" "));
-        sbuf = [];
-        slen = 0;
-      };
-      for (const s of sens) {
-        const add = (slen ? 1 : 0) + s.length;
-        if (slen + add <= target) {
-          sbuf.push(s);
-          slen += add;
-        } else {
-          sflush();
-          sbuf.push(s);
-          slen = s.length;
-        }
-      }
-      sflush();
-      flush();
-    } else {
-      flush();
-      buf.push(p);
-      curLen = p.length;
-    }
-  }
-  flush();
-
-  // overlap 처리: 이전 청크의 꼬리를 붙여 맥락 유지
-  if (overlap > 0 && chunks.length > 1) {
-    const withOverlap: string[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      if (i === 0) withOverlap.push(chunks[i]);
-      else withOverlap.push(chunks[i - 1].slice(-overlap) + chunks[i]);
-    }
-    return withOverlap;
-  }
-  return chunks;
-}
-
-// 번역문은 원작과 길이가 다르므로, 개수 맞춰 비율로 자르기
-function proportionalSliceByCount(text: string, count: number): string[] {
-  if (count <= 1) return [text];
-  const len = text.length;
-  const out: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const s = Math.floor((i / count) * len);
-    const e = Math.floor(((i + 1) / count) * len);
-    out.push(text.slice(s, e));
-  }
-  return out;
-}
-
 // ----------------------------- OpenAI 호출 -----------------------------
 
 // 기대하는 JSON 구조 정의 (Zod로 파싱 검증)
@@ -1155,6 +1086,12 @@ interface ChunkEvaluationRecord {
   index: number;
   sourceLength: number;
   translatedLength: number;
+  sourceTokens: number;
+  translatedTokens: number;
+  pairCount: number;
+  overlapPairCount: number;
+  startPairIndex: number;
+  endPairIndex: number;
   data: z.infer<typeof EvalJson>;
   requestId?: string;
   usage?: {
@@ -1191,6 +1128,8 @@ export async function callQualityModel(
     maxCharsPerChunk = DEFAULT_CHUNK_SIZE,
     overlap = DEFAULT_CHUNK_OVERLAP,
     strict = true,
+    projectId,
+    jobId,
   }: EvaluateParams,
   options: QualityEvaluationOptions = {},
 ): Promise<FinalEvaluation> {
@@ -1228,22 +1167,68 @@ export async function callQualityModel(
     throw new Error("OPENAI_API_KEY is not set.");
   }
 
-  // 1) 원작과 번역문을 청크 단위로 분할
-  console.log("✂️ [QualityAgent] Splitting text into chunks...");
   const chunkSize = maxCharsPerChunk ?? DEFAULT_CHUNK_SIZE;
   const chunkOverlap = overlap ?? DEFAULT_CHUNK_OVERLAP;
+  const tokenBudget = Math.max(200, Math.floor(chunkSize / 3.5));
+  const overlapTokenBudget = Math.max(0, Math.floor(chunkOverlap / 3.5));
 
-  const sChunks = splitIntoChunks(source, chunkSize, chunkOverlap);
-  const tChunks = proportionalSliceByCount(translated, sChunks.length);
+  const pairSet = await buildAlignedPairSet({
+    source,
+    translated,
+    projectId,
+    jobId,
+  });
 
-  console.log(`📑 [QualityAgent] Created ${sChunks.length} chunks`);
+  if (!pairSet.pairs.length) {
+    throw new Error("Unable to derive aligned content for quality evaluation");
+  }
 
-  const chunkDescriptors = sChunks.map((sourceChunk, index) => ({
-    index,
-    sourceChunk,
-    translatedChunk: tChunks[index] ?? "",
-    sourceLength: sourceChunk.length,
-    translatedLength: (tChunks[index] ?? "").length,
+  if (pairSet.source === "segment") {
+    console.log(
+      `[QualityAgent] Using finalized translation segments for alignment (pairs=${pairSet.pairs.length}, file=${pairSet.metadata?.translationFileId ?? "n/a"})`,
+    );
+  } else if (pairSet.source === "draft") {
+    console.log(
+      `[QualityAgent] Using translation draft segments for alignment (pairs=${pairSet.pairs.length}, runOrder=${pairSet.metadata?.runOrder ?? "n/a"})`,
+    );
+  } else {
+    console.log(
+      `[QualityAgent] Falling back to sentence alignment (pairs=${pairSet.pairs.length})`,
+    );
+  }
+
+  console.log("✂️ [QualityAgent] Splitting text into chunks...");
+  const rawChunks = buildQualityChunks(pairSet.pairs, {
+    tokenBudget,
+    overlapTokenBudget,
+  });
+
+  if (!rawChunks.length) {
+    throw new Error("Failed to build chunk descriptors for quality evaluation");
+  }
+
+  console.log(
+    `📑 [QualityAgent] Created ${rawChunks.length} chunks (tokenBudget≈${tokenBudget}, overlapTokens≈${overlapTokenBudget})`,
+  );
+
+  rawChunks.forEach((chunk) => {
+    console.log(
+      `[QualityAgent] Chunk ${chunk.index + 1}: pairs=${chunk.pairCount}, overlap=${chunk.overlapPairCount}, tokens(KO=${chunk.sourceTokens}, EN=${chunk.translatedTokens}), lengths(KO=${chunk.sourceLength}, EN=${chunk.translatedLength})`,
+    );
+  });
+
+  const chunkDescriptors = rawChunks.map((chunk) => ({
+    index: chunk.index,
+    sourceChunk: chunk.sourceText,
+    translatedChunk: chunk.translatedText,
+    sourceLength: chunk.sourceLength,
+    translatedLength: chunk.translatedLength,
+    sourceTokens: chunk.sourceTokens,
+    translatedTokens: chunk.translatedTokens,
+    pairCount: chunk.pairCount,
+    overlapPairCount: chunk.overlapPairCount,
+    startPairIndex: chunk.startPairIndex,
+    endPairIndex: chunk.endPairIndex,
     initialMaxOutputTokens: QA_MAX_OUTPUT_TOKENS,
   }));
 
@@ -1290,6 +1275,10 @@ export async function callQualityModel(
         sourceLength: descriptor.sourceLength,
         translatedLength: descriptor.translatedLength,
         maxOutputTokens: descriptor.initialMaxOutputTokens,
+        pairCount: descriptor.pairCount,
+        overlapPairCount: descriptor.overlapPairCount,
+        sourceTokens: descriptor.sourceTokens,
+        translatedTokens: descriptor.translatedTokens,
       });
 
       const startedAt = Date.now();
@@ -1349,6 +1338,13 @@ export async function callQualityModel(
           index: descriptor.index,
           sourceLength: descriptor.sourceLength,
           translatedLength: descriptor.translatedLength,
+          sourceTokens: descriptor.sourceTokens ?? estimateTokens(descriptor.sourceChunk),
+          translatedTokens:
+            descriptor.translatedTokens ?? estimateTokens(descriptor.translatedChunk),
+          pairCount: descriptor.pairCount ?? 0,
+          overlapPairCount: descriptor.overlapPairCount ?? 0,
+          startPairIndex: descriptor.startPairIndex ?? 0,
+          endPairIndex: descriptor.endPairIndex ?? descriptor.index,
           data,
           requestId,
           usage,
@@ -1381,6 +1377,10 @@ export async function callQualityModel(
           missingFields: missingFields ?? [],
           attempts: attemptsUsed,
           preview: partialPreview ?? null,
+          pairCount: descriptor.pairCount,
+          overlapPairCount: descriptor.overlapPairCount,
+          sourceTokens: descriptor.sourceTokens,
+          translatedTokens: descriptor.translatedTokens,
         });
 
         await options.listeners?.onEvent?.({
@@ -1418,7 +1418,7 @@ export async function callQualityModel(
   ];
 
   const weightedScores = completedRecords.map((record) => ({
-    weight: record.sourceLength,
+    weight: Math.max(record.sourceTokens, record.translatedTokens),
     overall: record.data.overallScore,
   }));
 
@@ -1427,7 +1427,7 @@ export async function callQualityModel(
     score: weightedAverage(
       completedRecords.map((record) => ({
         value: record.data.quantitative[key].score,
-        weight: record.sourceLength,
+        weight: Math.max(record.sourceTokens, record.translatedTokens),
       })),
     ),
     commentary: mergeBilingual(
@@ -1473,6 +1473,12 @@ export async function callQualityModel(
     index: record.index,
     sourceLength: record.sourceLength,
     translatedLength: record.translatedLength,
+    sourceTokens: record.sourceTokens,
+    translatedTokens: record.translatedTokens,
+    pairCount: record.pairCount,
+    overlapPairCount: record.overlapPairCount,
+    startPairIndex: record.startPairIndex,
+    endPairIndex: record.endPairIndex,
     durationMs: record.durationMs,
     requestId: record.requestId,
     maxOutputTokensUsed: record.maxOutputTokensUsed,

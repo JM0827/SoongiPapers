@@ -54,9 +54,8 @@ export interface TranslationReviseAgentResult {
 
 const DEFAULT_REVISE_MODEL =
   process.env.TRANSLATION_REVISE_MODEL_V2?.trim() ||
-  process.env.TRANSLATION_REVISE_MODEL?.trim() ||
   process.env.CHAT_MODEL?.trim() ||
-  'gpt-5';
+  'gpt-5-mini';
 const FALLBACK_REVISE_MODEL =
   process.env.TRANSLATION_REVISE_VALIDATION_MODEL_V2?.trim() ||
   'gpt-5-mini';

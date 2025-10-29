@@ -13,7 +13,7 @@ type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 const WORDS_PER_MINUTE = 220;
 const DEFAULT_MODEL =
-  process.env.PROFILE_AGENT_MODEL?.trim() || "gpt-5";
+  process.env.PROFILE_AGENT_MODEL?.trim() || "gpt-5-mini";
 const FALLBACK_MODEL =
   process.env.PROFILE_AGENT_VALIDATION_MODEL?.trim() || "gpt-5-mini";
 const DEFAULT_VERBOSITY = normalizeVerbosity(

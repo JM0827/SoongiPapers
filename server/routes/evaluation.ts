@@ -691,6 +691,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
             model: body.model,
             maxCharsPerChunk: body.maxCharsPerChunk,
             overlap: body.overlap,
+            projectId: body.projectId,
+            jobId: body.jobId,
           },
           {
             concurrency:
@@ -846,6 +848,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           model: body.model,
           maxCharsPerChunk: body.maxCharsPerChunk,
           overlap: body.overlap,
+          projectId: body.projectId,
+          jobId: body.jobId,
         });
 
         const tokens = result.meta?.tokens;

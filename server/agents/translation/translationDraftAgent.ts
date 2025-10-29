@@ -90,16 +90,12 @@ interface DraftCandidate {
 
 const DEFAULT_TRANSLATION_MODEL =
   process.env.TRANSLATION_DRAFT_MODEL_V2?.trim() ||
-  process.env.TRANSLATION_DRAFT_MODEL?.trim() ||
-  process.env.CHAT_MODEL?.trim() ||
-  'gpt-5';
+  'gpt-5-mini';
 const FALLBACK_TRANSLATION_MODEL =
   process.env.TRANSLATION_DRAFT_VALIDATION_MODEL_V2?.trim() ||
-  process.env.TRANSLATION_DRAFT_VALIDATION_MODEL?.trim() ||
   'gpt-5-mini';
 const DEFAULT_JUDGE_MODEL =
   process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2?.trim() ||
-  process.env.TRANSLATION_DRAFT_JUDGE_MODEL?.trim() ||
   FALLBACK_TRANSLATION_MODEL ||
   'gpt-5-mini';
 const parsedCandidateEnv = Number(

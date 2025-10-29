@@ -3,7 +3,6 @@ import TranslationSegment from "../../models/TranslationSegment";
 import TranslationDraft from "../../models/TranslationDraft";
 import type { OriginSegment } from "../../agents/translation/segmentationAgent";
 import type { SequentialStageJob } from "../../agents/translation";
-import type { TranslationSynthesisSegmentResult } from "../../agents/translation/translationSynthesisAgent";
 import { query } from "../../db";
 import { mergeProjectMemory } from "./memory";
 
@@ -103,18 +102,14 @@ export async function finalizeSequentialJob(
     sentenceIndex: null,
   }));
 
-  const resultSegments: TranslationSynthesisSegmentResult[] = emotionEntries.map(
-    (row) => ({
-      segment_id: row.segment_id,
-      translation_segment: row.text_target ?? "",
-      selected_run_order: null,
-      rationale: null,
-    }),
-  );
+  const resultSegments = emotionEntries.map((row) => ({
+    segment_id: row.segment_id,
+    translation_segment: row.text_target ?? "",
+  }));
 
   const mergedText = joinWithParagraphs(
     resultSegments.map((segment, index) => ({
-      text: segment.translation_segment.trim(),
+      text: (segment.translation_segment ?? "").trim(),
       paragraphIndex: originSegments[index]?.paragraphIndex ?? 0,
     })),
   ).trim();

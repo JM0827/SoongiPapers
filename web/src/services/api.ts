@@ -65,6 +65,10 @@ export type QualityStreamChunkStartEvent = {
   sourceLength: number;
   translatedLength: number;
   maxOutputTokens: number;
+  pairCount?: number;
+  overlapPairCount?: number;
+  sourceTokens?: number;
+  translatedTokens?: number;
 };
 
 export type QualityStreamChunkRetryEvent = {
@@ -91,6 +95,10 @@ export type QualityStreamChunkCompleteEvent = {
   missingFields?: string[];
   attempts?: number;
   preview?: string | null;
+  pairCount?: number;
+  overlapPairCount?: number;
+  sourceTokens?: number;
+  translatedTokens?: number;
 };
 
 export type QualityStreamChunkPartialEvent = {

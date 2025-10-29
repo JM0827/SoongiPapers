@@ -14,7 +14,7 @@ export interface ChatModelOption {
 
 const BASE_MODELS: ChatModelOption[] = [
   {
-    id: "gpt-5.0",
+    id: "gpt-5",
     label: "GPT-5",
     provider: "openai",
     description:
