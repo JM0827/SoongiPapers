@@ -1,4 +1,8 @@
-import { OpenAI } from "openai";
+import type { OpenAI } from "openai";
+
+import { getIntentClassifierDefaults } from "./responsesConfig";
+import { intentClassifierSchema } from "./responsesSchemas";
+import { runJsonSchemaResponse } from "./responsesRunner";
 
 export type IntentType =
   | "translate"
@@ -29,13 +33,13 @@ const DEFAULT_INTENT: IntentClassification = {
 const CLASSIFIER_PROMPT = `You are an intent classifier for a literary translation studio assistant.
 Your job is to interpret the user's latest message and decide which workflow action they want next.
 
-Return a JSON object with this schema:
+Return a JSON object with this schema (all keys required, use null when the value is unknown):
 {
   "intent": "translate" | "proofread" | "quality" | "status" | "cancel" | "upload" | "ebook" | "other",
   "confidence": number between 0 and 1,
   "rerun": boolean,               // true if the user wants to rerun/redo the workflow even if recently done
-  "label": string | null,         // optional run label supplied by the user (e.g., "실험 번역", "2차 교정")
-  "notes": string | null          // any important nuance (max 1 short sentence)
+  "label": string | null,         // run label supplied by the user (e.g., "실험 번역", "2차 교정"). Return null if not provided.
+  "notes": string | null          // any important nuance (max 1 short sentence). Return null when there are no notes.
 }
 
 Guidelines:
@@ -63,9 +67,15 @@ export async function classifyIntent(
   metadata: IntentContextMetadata,
 ): Promise<IntentClassification> {
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.INTENT_CLASSIFIER_MODEL ?? "gpt-4o",
-      response_format: { type: "json_object" },
+    const defaults = getIntentClassifierDefaults();
+    const result = await runJsonSchemaResponse<IntentClassification>({
+      client: openai,
+      model: defaults.model,
+      maxOutputTokens: defaults.maxOutputTokens,
+      maxOutputTokensCap: defaults.maxOutputTokens,
+      verbosity: defaults.verbosity,
+      reasoningEffort: defaults.reasoningEffort,
+      schema: intentClassifierSchema,
       messages: [
         { role: "system", content: CLASSIFIER_PROMPT },
         {
@@ -78,36 +88,29 @@ export async function classifyIntent(
       ],
     });
 
-    const content = response.choices[0]?.message?.content ?? "";
-    if (!content.trim()) {
+    const parsed = result.parsed ?? DEFAULT_INTENT;
+    const maybeIntent = parsed.intent as IntentType | undefined;
+    if (!maybeIntent) {
       return DEFAULT_INTENT;
     }
-    const parsed = JSON.parse(content);
-    const intent = parsed.intent as IntentType | undefined;
-    const confidence = Number(parsed.confidence);
-    const rerun = Boolean(parsed.rerun);
-    const label =
-      typeof parsed.label === "string" && parsed.label.trim()
-        ? parsed.label.trim()
-        : null;
-    const notes =
-      typeof parsed.notes === "string" && parsed.notes.trim()
-        ? parsed.notes.trim()
-        : null;
 
-    if (!intent) {
-      return DEFAULT_INTENT;
-    }
+    const confidence = Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : 0;
 
     return {
-      intent,
-      confidence: Number.isFinite(confidence)
-        ? Math.max(0, Math.min(1, confidence))
-        : 0,
-      rerun,
-      label,
-      notes,
-    };
+      intent: maybeIntent,
+      confidence,
+      rerun: Boolean(parsed.rerun),
+      label:
+        typeof parsed.label === 'string' && parsed.label.trim()
+          ? parsed.label.trim()
+          : null,
+      notes:
+        typeof parsed.notes === 'string' && parsed.notes.trim()
+          ? parsed.notes.trim()
+          : null,
+    } satisfies IntentClassification;
   } catch (error) {
     console.warn("[intent] failed to classify", error);
     return DEFAULT_INTENT;

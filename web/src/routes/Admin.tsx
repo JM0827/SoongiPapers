@@ -7,7 +7,6 @@ import { useAuthStore } from "../store/auth.store";
 import { useProjectList } from "../hooks/useProjectData";
 import { useProjectStore } from "../store/project.store";
 import { api } from "../services/api";
-import type { ProofreadingLogEntry } from "../types/domain";
 
 const formatDateTime = (value?: string | null) => {
   if (!value) return "-";

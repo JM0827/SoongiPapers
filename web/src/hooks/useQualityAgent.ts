@@ -1,10 +1,7 @@
 import { useCallback, useMemo, useEffect } from "react";
 import { api } from "../services/api";
 import type { QualityStreamEvent } from "../services/api";
-import type {
-  ProjectSummary,
-  QualityAssessmentResultPayload,
-} from "../types/domain";
+import type { ProjectSummary } from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
 import type { QualityAgentState } from "../store/workflow.store";
 import { useProjectStore } from "../store/project.store";
@@ -24,20 +21,6 @@ interface UseQualityAgentParams {
     lastUpdatedAt?: string | null;
   };
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const unwrapEvaluation = (
-  payload: unknown,
-): QualityAssessmentResultPayload | null => {
-  if (!isRecord(payload)) return null;
-  const dataCandidate = payload["data"];
-  if (isRecord(dataCandidate)) {
-    return dataCandidate as QualityAssessmentResultPayload;
-  }
-  return payload as QualityAssessmentResultPayload;
-};
 
 const extractProjectModel = (
   project: ProjectSummary | null,

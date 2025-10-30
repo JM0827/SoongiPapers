@@ -2,6 +2,8 @@ import type {
   ChatAction,
   ChatMessagePayload,
   ChatResponse,
+  ChatStreamCompleteEvent,
+  ChatStreamEvent,
   ChatLogRequest,
   ChatHistoryItem,
   EbookResponse,
@@ -1678,6 +1680,109 @@ export const api = {
       profileUpdates: data.profileUpdates,
       model: data.model,
     };
+  },
+
+  async chatStream(
+    token: string,
+    payload: {
+      projectId: string | null;
+      messages: ChatMessagePayload[];
+      contextSnapshot?: ProjectContextSnapshotPayload | null;
+      model?: string | null;
+    },
+    handlers: {
+      onDelta?: (delta: string) => void;
+      onComplete?: (event: ChatStreamCompleteEvent) => void;
+      onError?: (message: string) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const controller = new AbortController();
+    if (handlers.signal) {
+      const abortViaSignal = () => controller.abort();
+      if (handlers.signal.aborted) {
+        controller.abort();
+      } else {
+        handlers.signal.addEventListener('abort', abortViaSignal, { once: true });
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: defaultHeaders(token),
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || 'Failed to stream chat');
+    }
+
+    const body = res.body;
+    if (!body) {
+      throw new Error('Streaming body is not supported in this environment');
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed = false;
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith(':')) continue;
+          if (!trimmed.startsWith('data:')) continue;
+          const payloadText = trimmed.slice(5).trim();
+          if (!payloadText) continue;
+          try {
+            const event = JSON.parse(payloadText) as ChatStreamEvent;
+            switch (event.type) {
+              case 'chat.delta': {
+                if (typeof event.text === 'string') {
+                  handlers.onDelta?.(event.text);
+                }
+                break;
+              }
+              case 'chat.complete': {
+                completed = true;
+                handlers.onComplete?.(event);
+                break;
+              }
+              case 'chat.error': {
+                const message =
+                  typeof event.message === 'string'
+                    ? event.message
+                    : 'Chat stream error';
+                handlers.onError?.(message);
+                throw new Error(message);
+              }
+              case 'chat.end':
+                break;
+              default:
+                break;
+            }
+          } catch (err) {
+            console.warn('[api] failed to parse chat stream event', err);
+          }
+        }
+      }
+    } finally {
+      controller.abort();
+    }
+
+    if (!completed) {
+      throw new Error('Chat stream ended without completion event');
+    }
   },
 
   async listModels(token: string): Promise<ModelListResponse> {

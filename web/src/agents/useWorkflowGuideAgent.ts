@@ -191,7 +191,7 @@ export const useWorkflowGuideAgent = ({
     const prompts: string[] = [];
     if (needsTitle)
       prompts.push("작품 제목을 알려주시면 메타데이터에 반영할게요.");
-    if (needsAuthor) prompts.push("저자 이름도 함께 알려주시면 기록해 둘게요.");
+    if (needsAuthor) prompts.push("");
 
     scheduleTask({
       type: "collectMetadata",

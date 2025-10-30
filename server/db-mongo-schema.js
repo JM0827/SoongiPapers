@@ -189,11 +189,11 @@ const userPreferencesIndexes = [
 // ==============================================
 // Collection: ebook_files
 // Purpose: 생성된 eBook 파일(MongoDB 바이너리) 저장
-// Usage: eBook 생성 API가 mock/실제 파일을 보관하고 PostgreSQL ebook_artifacts와 연결
+// Usage: eBook 생성 API가 mock/실제 파일을 보관하고 향후 외부 저장소 연동 시 참조
 
 const ebookFilesSchema = {
   _id: "ObjectId",
-  ebook_id: "String", // PostgreSQL ebook_artifacts.ebook_id 참조
+  ebook_id: "String", // PostgreSQL ebooks.ebook_id 참조
   project_id: "String",
   translation_file_id: "String",
   format: "String",
@@ -282,7 +282,7 @@ export const mongoSchemaDocumentation = {
     },
 
     ebook_files: {
-      ebook_id: "ebook_artifacts.ebook_id (PostgreSQL)",
+      ebook_id: "ebooks.ebook_id (PostgreSQL)",
       project_id: "translationprojects.project_id (PostgreSQL)",
     },
   },
@@ -293,7 +293,7 @@ export const mongoSchemaDocumentation = {
     "quality_assessments.userId는 PostgreSQL users 테이블의 user_id와 일치해야 함",
     "qualityResult는 JSON 스키마 검증을 통과해야 함",
     "timestamp는 UTC 기준으로 저장되어야 함",
-    "ebook_files.ebook_id는 PostgreSQL ebook_artifacts.ebook_id와 일치해야 함",
+    "ebook_files.ebook_id는 PostgreSQL ebooks.ebook_id와 일치해야 함",
   ],
 };
 

@@ -241,7 +241,7 @@ const ebooksRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send({ projectId, status: "missing", ebook: null });
       }
 
-      const [versionRes, metadataRes, distributionRes] = await Promise.all([
+      const [versionRes, metadataRes] = await Promise.all([
         query(
           `SELECT *
              FROM ebook_versions
@@ -255,12 +255,6 @@ const ebooksRoutes: FastifyPluginAsync = async (fastify) => {
              FROM ebook_metadata
             WHERE ebook_id = $1
             LIMIT 1`,
-          [ebookRow.ebook_id],
-        ),
-        query(
-          `SELECT channel, status, listing_id, price, currency, planned_publish_at, published_at, last_synced_at, failure_reason
-             FROM ebook_distribution_channels
-            WHERE ebook_id = $1`,
           [ebookRow.ebook_id],
         ),
       ]);
@@ -324,7 +318,7 @@ const ebooksRoutes: FastifyPluginAsync = async (fastify) => {
                 : null,
             }
           : null,
-        distribution: distributionRes.rows,
+        distribution: [],
       });
     },
   );

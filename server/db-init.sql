@@ -128,20 +128,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_drafts_job_stage
 CREATE INDEX IF NOT EXISTS idx_translation_drafts_project
   ON translation_drafts (project_id, stage);
 
-CREATE TABLE IF NOT EXISTS ebook_artifacts (
-  ebook_id UUID PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  translation_file_id TEXT NOT NULL,
-  quality_assessment_id TEXT,
-  format TEXT NOT NULL DEFAULT 'txt',
-  status TEXT NOT NULL DEFAULT 'pending',
-  storage_ref TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_artifacts_project ON ebook_artifacts(project_id);
-
 CREATE TABLE IF NOT EXISTS ebooks (
   ebook_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL,
@@ -297,25 +283,6 @@ CREATE TABLE IF NOT EXISTS ebook_metadata (
   extra JSONB,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXISTS ebook_distribution_channels (
-  channel_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ebook_id UUID NOT NULL,
-  channel TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  listing_id TEXT,
-  price NUMERIC(10,2),
-  currency TEXT,
-  planned_publish_at TIMESTAMPTZ,
-  published_at TIMESTAMPTZ,
-  last_synced_at TIMESTAMPTZ,
-  failure_reason TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_ebook ON ebook_distribution_channels(ebook_id);
 
 CREATE TABLE IF NOT EXISTS ebook_audit_log (
   log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

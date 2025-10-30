@@ -154,8 +154,8 @@ export const ProofreadIssueTray = () => {
               </div>
               <ul className="divide-y divide-slate-100">
                 {entries.map((issue, index) => {
-                  const severity = normalizeSeverity(issue.severity);
-                  const severityClass = severityBadgeClasses[severity] ?? severityBadgeClasses.default;
+                const severity = normalizeSeverity(issue.severity);
+                const severityClass = severityBadgeClasses[severity] ?? severityBadgeClasses.default;
                   const title =
                     issue.issue?.issue_en ??
                     issue.issue?.issue_ko ??
@@ -198,30 +198,51 @@ export const ProofreadIssueTray = () => {
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${statusClass}`}>
                             {statusLabel(statusValue)}
                           </span>
-                          {issue.guardStatusLabel && (
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${
-                                guardBadgeClasses[issue.guardStatus ?? 'default'] ?? guardBadgeClasses.default
-                              }`}
-                            >
-                              {issue.guardStatusLabel}
-                            </span>
-                          )}
+                  {typeof issue.guardStatusLabel === 'string' && issue.guardStatusLabel.trim().length > 0 && (
+                    (() => {
+                      const guardStatusKey =
+                        typeof issue.guardStatus === 'string' && issue.guardStatus.trim().length
+                          ? issue.guardStatus.trim()
+                          : 'default';
+                      return (
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${
+                            guardBadgeClasses[guardStatusKey] ?? guardBadgeClasses.default
+                          }`}
+                        >
+                          {issue.guardStatusLabel}
+                        </span>
+                      );
+                    })()
+                  )}
                           {timestamp && <span>{timestamp}</span>}
                         </div>
                         {guardFindings.length > 0 && (
                           <div className="flex flex-wrap gap-2 text-[10px]">
-                            {guardFindings.slice(0, 2).map((finding, guardIndex) => (
-                              <span
-                                key={`${issue.id}-guard-${guardIndex}`}
-                                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-700"
-                              >
-                                <span className="font-semibold">
-                                  {guardTypeLabel(finding.type)}
+                            {guardFindings.slice(0, 2).map((finding, guardIndex) => {
+                              const guardType =
+                                typeof finding.type === 'string' && finding.type.trim().length
+                                  ? finding.type
+                                  : 'guard';
+                              const summary =
+                                typeof finding.summary === 'string' && finding.summary.trim().length
+                                  ? finding.summary
+                                  : null;
+                              if (!summary) {
+                                return null;
+                              }
+                              return (
+                                <span
+                                  key={`${issue.id}-guard-${guardIndex}`}
+                                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-700"
+                                >
+                                  <span className="font-semibold">
+                                    {guardTypeLabel(guardType)}
+                                  </span>
+                                  <span>{summary}</span>
                                 </span>
-                                <span>{finding.summary}</span>
-                              </span>
-                            ))}
+                              );
+                            })}
                             {guardFindings.length > 2 && (
                               <span className="text-rose-500">+{guardFindings.length - 2} more</span>
                             )}

@@ -3082,27 +3082,6 @@ app.post("/api/ebook/generate", async (req, reply) => {
     ],
   );
 
-  await query(
-    `INSERT INTO ebook_artifacts (ebook_id, project_id, translation_file_id, quality_assessment_id, format, status, storage_ref, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
-     ON CONFLICT (ebook_id) DO UPDATE SET
-       translation_file_id = EXCLUDED.translation_file_id,
-       quality_assessment_id = EXCLUDED.quality_assessment_id,
-       format = EXCLUDED.format,
-       status = EXCLUDED.status,
-       storage_ref = EXCLUDED.storage_ref,
-       updated_at = now();`,
-    [
-      ebookRowId,
-      projectId,
-      String(translationDoc._id ?? translationFileId),
-      qaDoc?.assessmentId ?? null,
-      finalFormat,
-      "ready",
-      manuscriptPublicUrl,
-    ],
-  );
-
   await recordTokenUsage(app.log, {
     project_id: projectId,
     job_id: translationDoc.job_id ?? jobId ?? null,

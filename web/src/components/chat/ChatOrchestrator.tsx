@@ -49,24 +49,11 @@ import {
   getOriginPrepGuardMessage,
   isOriginPrepReady,
 } from "../../lib/originPrep";
-
-type MessageTone = "default" | "success" | "error";
-
-type MessageRole = "assistant" | "user" | "system";
-
+import {
+  useChatMessages,
+  type ChatMessage as Message,
+} from "../../hooks/useChatMessages";
 type StageKey = "origin" | "translation" | "proofreading" | "quality" | "publishing";
-
-interface Message {
-  id: string;
-  role: MessageRole;
-  text: string;
-  badge?: {
-    label: string;
-    description?: string;
-    tone?: MessageTone;
-  };
-  actions?: ChatAction[];
-}
 
 const SUPPORTED_ORIGIN_EXTENSIONS = [
   ".txt",
@@ -214,7 +201,13 @@ export const ChatOrchestrator = ({
     },
     [locale],
   );
-  const [messages, setMessages] = useState<Message[]>(() => []);
+  const {
+    messages,
+    addMessage: addChatMessage,
+    updateMessage: updateChatMessage,
+    syncHistory: syncChatHistory,
+    reset: resetChatMessages,
+  } = useChatMessages();
   const [quickReplies, setQuickReplies] = useState<QuickReplyItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -381,9 +374,14 @@ export const ChatOrchestrator = ({
     }
   }, [systemPrompt]);
 
-  const pushMessage = useCallback((message: Message) => {
-    setMessages((prev) => [...prev, message]);
-  }, []);
+  const pushMessage = useCallback(
+    (message: Message) => {
+      addChatMessage(message, {
+        optimistic: message.role !== "assistant",
+      });
+    },
+    [addChatMessage],
+  );
 
   const pushAssistant = useCallback(
     (
@@ -394,48 +392,39 @@ export const ChatOrchestrator = ({
       _contextId?: string,
     ) => {
       validateAssistantMessage(text);
+      const normalized = text.trim();
+      const last = messages[messages.length - 1];
       let appended = false;
-      const message: Message = {
-        id: generateMessageId(),
-        role: "assistant",
-        text,
-        badge,
-        actions,
-      };
+      let appendedMessage: Message | null = null;
 
-      setMessages((previous) => {
-        if (!previous.length) {
-          appended = true;
-          return [message];
-        }
-
-        const next = [...previous];
-        const lastIndex = next.length - 1;
-        const last = next[lastIndex];
-        if (
-          last &&
-          last.role === "assistant" &&
-          last.text.trim() === text.trim()
-        ) {
-          next[lastIndex] = {
-            ...last,
-            badge: badge ?? last.badge,
-            actions: actions ?? last.actions,
-          };
-          return next;
-        }
-
+      if (
+        last &&
+        last.role === "assistant" &&
+        last.text.trim() === normalized
+      ) {
+        updateChatMessage(last.id, (message) => ({
+          ...message,
+          badge: badge ?? message.badge,
+          actions: actions ?? message.actions,
+        }));
+      } else {
         appended = true;
-        next.push(message);
-        return next;
-      });
+        appendedMessage = {
+          id: generateMessageId(),
+          role: "assistant",
+          text,
+          badge,
+          actions,
+        };
+        addChatMessage(appendedMessage);
+      }
 
-      if (appended && persist && token && projectId) {
+      if (appended && persist && token && projectId && appendedMessage) {
         void api
           .chatLog(token, {
             projectId,
             role: "assistant",
-            content: text,
+            content: appendedMessage.text,
             actions,
           })
           .catch((err) => {
@@ -443,7 +432,20 @@ export const ChatOrchestrator = ({
           });
       }
     },
-    [projectId, token],
+    [
+      messages,
+      updateChatMessage,
+      addChatMessage,
+      projectId,
+      token,
+    ],
+  );
+
+  const updateAssistantMessage = useCallback(
+    (messageId: string, updater: (message: Message) => Message) => {
+      updateChatMessage(messageId, updater);
+    },
+    [updateChatMessage],
   );
 
   const handleQuickUpload = useCallback(() => {
@@ -502,6 +504,30 @@ export const ChatOrchestrator = ({
   const refreshContentOnly = useCallback(
     () => refreshProjectContext("content"),
     [refreshProjectContext],
+  );
+
+  const processAssistantActions = useCallback(
+    async (
+      actions: ChatAction[] = [],
+      profileUpdates?: Record<string, unknown> | null,
+    ) => {
+      for (const action of actions) {
+        if (!action?.type) continue;
+        switch (action.type) {
+          case "startUploadFile":
+            setShowUploader(true);
+            break;
+          default:
+            break;
+        }
+      }
+
+      if (profileUpdates) {
+        onProfileUpdated?.();
+      }
+      void refreshProjectContext("content");
+    },
+    [onProfileUpdated, refreshProjectContext, setShowUploader],
   );
 
   const {
@@ -2423,7 +2449,7 @@ export const ChatOrchestrator = ({
 
   useEffect(() => {
     setHistoryLoaded(false);
-    setMessages([]);
+    resetChatMessages();
     setInputDraft(null);
     firstRunScriptShownRef.current = false;
     stageAnchorRefs.current = {
@@ -2433,20 +2459,18 @@ export const ChatOrchestrator = ({
       quality: null,
       publishing: null,
     };
-  }, [projectId]);
+  }, [projectId, resetChatMessages]);
 
   useEffect(() => {
     if (!projectId) {
-      setMessages([]);
+      resetChatMessages();
       setHistoryLoaded(false);
       return;
     }
 
     if (history && !historyLoaded && !isHistoryLoading) {
-      if (!history.length) {
-        setMessages([]);
-      } else {
-        setMessages(
+      if (history.length) {
+        syncChatHistory(
           history.map((item) => ({
             id: item.id,
             role: item.role,
@@ -2465,6 +2489,8 @@ export const ChatOrchestrator = ({
                       : "default",
                   }
                 : undefined,
+            createdAt: item.created_at,
+            serverId: item.id,
           })),
         );
       }
@@ -2476,6 +2502,8 @@ export const ChatOrchestrator = ({
     historyLoaded,
     isHistoryLoading,
     adaptActionsForOrigin,
+    resetChatMessages,
+    syncChatHistory,
   ]);
 
   const handleCreateProject = useCallback(async () => {
@@ -2885,158 +2913,123 @@ export const ChatOrchestrator = ({
         return;
       }
 
+      const baseMessages = toPayload([...messages, userMessage]);
+      const payloadMessages = contextSystemMessage
+        ? [contextSystemMessage, ...baseMessages]
+        : baseMessages;
+
+      const assistantMessageId = generateMessageId();
+      addChatMessage(
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          text: "",
+          actions: [],
+        },
+        { optimistic: true },
+      );
+
+      const streamPayload = {
+        projectId,
+        messages: payloadMessages,
+        contextSnapshot: snapshot,
+        model: selectedModel,
+      };
+
+      let streamCompleted = false;
+
       try {
-        const baseMessages = toPayload([...messages, userMessage]);
-        const payloadMessages = contextSystemMessage
-          ? [contextSystemMessage, ...baseMessages]
-          : baseMessages;
-
-        const response = await api.chat(token, {
-          projectId,
-          messages: payloadMessages,
-          contextSnapshot: snapshot,
-          model: selectedModel,
-        });
-
-        const actions = (response.actions ?? []) as Array<{
-          type: string;
-          reason?: string;
-        }>;
-        const filteredActions = actions.filter(
-          (action) => action.type !== "acknowledge",
-        );
-
-        const adaptedActions = adaptActionsForOrigin(
-          filteredActions as ChatAction[],
-        );
-
-        const displayableActions = formatActionsForDisplay(adaptedActions);
-
-        pushAssistant(response.reply, undefined, displayableActions);
-        for (const action of adaptedActions ?? []) {
-          if (!action.autoStart) {
-            continue;
-          }
-          switch (action.type) {
-            case "startTranslation":
-              if (!translationPrepReady) {
-                const guardMessage =
-                  prepGuardMessage ??
-                  localize(
-                    "origin_prep_guard_generic",
-                    "Finish the manuscript prep steps before translating.",
-                  );
-                pushAssistant(guardMessage, {
-                  label: localize("origin_prep_guard_label", "Prep needed"),
-                  tone: "default",
-                });
-                setTab("preview");
-                setPreviewExpanded("origin", true);
-                break;
-              }
-              await startTranslation({
-                label: action.label ?? nextTranslationLabel ?? null,
-                allowParallel: action.allowParallel ?? false,
-                originPrep,
-              });
-              refreshWorkflowView();
-              break;
-            case "cancelTranslation":
-              await cancelTranslation({
-                jobId: action.jobId ?? undefined,
-                workflowRunId: action.workflowRunId ?? undefined,
-                reason: action.reason ?? undefined,
-              });
-              refreshWorkflowView();
-              break;
-            case "startProofread":
-              await startProofread({
-                label: action.label ?? null,
-                allowParallel: action.allowParallel ?? false,
-              });
-              refreshWorkflowView();
-              break;
-            case "startQuality":
-              await runQuality({
-                label: action.label ?? null,
-                allowParallel: action.allowParallel ?? false,
-              });
-              refreshWorkflowView();
-              break;
-            case "openExportPanel":
-              setTab("export");
-              pushAssistant(
-                localize(
-                  "chat_context_ebook_no_status",
-                  "전자책 내보내기 패널을 열어두었습니다.",
-                ),
-                {
-                  label: localize(
-                    "chat_action_open_export",
-                    "전자책 패널 열기",
-                  ),
-                  tone: "default",
-                },
-              );
-              break;
-            case "createProject":
-              await handleCreateProject();
-              break;
-            case "startUploadFile":
-              setShowUploader(true);
-              break;
-            default:
-              break;
-          }
-        }
-        if (response.profileUpdates) {
-          onProfileUpdated?.();
-        }
-        void refreshProjectContext("content");
-      } catch (err) {
-        pushAssistant(
-          "대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-          {
-            label: "Chat error",
-            description: err instanceof Error ? err.message : "Unknown error",
-            tone: "error",
+        await api.chatStream(token, streamPayload, {
+          onDelta: (delta) => {
+            if (!delta) return;
+            updateAssistantMessage(assistantMessageId, (message) => ({
+              ...message,
+              text: `${message.text}${delta}`,
+            }));
           },
-        );
+          onComplete: async (event) => {
+            streamCompleted = true;
+            const adaptedActions = adaptActionsForOrigin(
+              (event.actions ?? []) as ChatAction[],
+            );
+            const displayableActions = formatActionsForDisplay(adaptedActions);
+            updateAssistantMessage(assistantMessageId, (message) => ({
+              ...message,
+              text: event.reply,
+              actions: displayableActions,
+            }));
+            await processAssistantActions(
+              adaptedActions,
+              event.profileUpdates ?? null,
+            );
+          },
+          onError: (message) => {
+            updateAssistantMessage(assistantMessageId, (msg) => ({
+              ...msg,
+              text: message,
+              badge: { label: "Chat error", tone: "error" },
+            }));
+          },
+        });
+      } catch (streamError) {
+        if (streamCompleted) {
+          return;
+        }
+        try {
+          const fallback = await api.chat(token, streamPayload);
+          const adaptedActions = adaptActionsForOrigin(
+            (fallback.actions ?? []) as ChatAction[],
+          );
+          const displayableActions = formatActionsForDisplay(adaptedActions);
+          updateAssistantMessage(assistantMessageId, (message) => ({
+            ...message,
+            text: fallback.reply,
+            actions: displayableActions,
+          }));
+          await processAssistantActions(
+            adaptedActions,
+            fallback.profileUpdates ?? null,
+          );
+        } catch (fallbackError) {
+          const message =
+            fallbackError instanceof Error
+              ? fallbackError.message
+              : "Unknown error";
+          updateAssistantMessage(assistantMessageId, (msg) => ({
+            ...msg,
+            text: "대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            badge: {
+              label: "Chat error",
+              description: message,
+              tone: "error",
+            },
+            actions: [],
+          }));
+        }
       }
     },
     [
       token,
-      projectId,
+      updateAssistantMessage,
+      processAssistantActions,
       messages,
       pushMessage,
       pushAssistant,
       toPayload,
-      startTranslation,
-      runQuality,
-      startProofread,
       setShowUploader,
       setInputDraft,
-      onProfileUpdated,
-      handleCreateProject,
-      contextSystemMessage,
-      refreshProjectContext,
       handleLocalQuestion,
+      contextSystemMessage,
       snapshot,
       selectedModel,
       adaptActionsForOrigin,
       formatActionsForDisplay,
-      refreshWorkflowView,
-      nextTranslationLabel,
-      cancelTranslation,
       activeEditingAction,
       guessEditingIntent,
       processEditingCommand,
       setActiveEditingAction,
-      setTab,
-      localize,
     ],
   );
-
   const processFile = useCallback(
     async (file: File) => {
       if (!token) {

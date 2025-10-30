@@ -336,10 +336,20 @@ export interface ProofreadEditorIssueEntry {
     before?: string | null;
     after?: string | null;
   } | null;
+  guardStatus?: ProofreadingGuardStatus | string | null;
+  guardStatusLabel?: string | null;
   spans?: Array<{ start: number; end: number }>;
   documentSpan?: { start?: number | null; end?: number | null } | null;
   updatedAt?: string | null;
   createdAt?: string | null;
+  notes?: {
+    guardFindings?: Array<{
+      type?: string | null;
+      summary?: string | null;
+      severity?: string | null;
+    }>;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -925,7 +935,7 @@ export interface EditingSuggestionResponse {
 }
 
 interface BaseChatAction {
-  reason?: string;
+  reason?: string | null;
   label?: string | null;
   allowParallel?: boolean;
   autoStart?: boolean;
@@ -999,6 +1009,28 @@ export interface ChatResponse {
   };
   model?: string;
 }
+
+export interface ChatStreamCompleteEvent {
+  type: 'chat.complete';
+  reply: string;
+  actions: ChatAction[];
+  profileUpdates?: Record<string, unknown> | null;
+  meta?: {
+    model?: string;
+    tokens?: {
+      input?: number | null;
+      output?: number | null;
+      total?: number | null;
+    };
+    truncated?: boolean;
+  };
+}
+
+export type ChatStreamEvent =
+  | { type: 'chat.delta'; text: string }
+  | { type: 'chat.error'; message: string }
+  | { type: 'chat.end' }
+  | ChatStreamCompleteEvent;
 
 export interface ChatHistoryItem {
   id: string;

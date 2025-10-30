@@ -6,7 +6,6 @@ DROP TABLE IF EXISTS translation_drafts CASCADE;
 DROP TABLE IF EXISTS proofreading_history CASCADE;
 DROP TABLE IF EXISTS proofreading_logs CASCADE;
 DROP TABLE IF EXISTS ebook_cover_sets CASCADE;
-DROP TABLE IF EXISTS ebook_artifacts CASCADE;
 DROP TABLE IF EXISTS project_usage_totals CASCADE;
 DROP TABLE IF EXISTS token_usage_events CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
@@ -268,20 +267,6 @@ CREATE TABLE IF NOT EXISTS project_usage_totals (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS ebook_artifacts (
-  ebook_id UUID PRIMARY KEY,
-  project_id UUID REFERENCES translationprojects(project_id) ON DELETE CASCADE,
-  translation_file_id TEXT NOT NULL,
-  quality_assessment_id TEXT,
-  format TEXT NOT NULL DEFAULT 'txt',
-  status TEXT NOT NULL DEFAULT 'pending',
-  storage_ref TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_artifacts_project ON ebook_artifacts(project_id);
-
 CREATE TABLE IF NOT EXISTS ebooks (
   ebook_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
@@ -458,26 +443,6 @@ CREATE TABLE IF NOT EXISTS ebook_metadata (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ebook_metadata_isbn ON ebook_metadata(isbn) WHERE isbn IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS ebook_distribution_channels (
-  channel_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ebook_id UUID NOT NULL REFERENCES ebooks(ebook_id) ON DELETE CASCADE,
-  channel TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  listing_id TEXT,
-  price NUMERIC(10,2),
-  currency TEXT,
-  planned_publish_at TIMESTAMPTZ,
-  published_at TIMESTAMPTZ,
-  last_synced_at TIMESTAMPTZ,
-  failure_reason TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_ebook ON ebook_distribution_channels(ebook_id);
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_channel ON ebook_distribution_channels(channel);
 
 CREATE TABLE IF NOT EXISTS ebook_audit_log (
   log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
