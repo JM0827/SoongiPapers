@@ -188,6 +188,14 @@ export interface ProjectUsageResponse {
 
 export type ProofreadingSeverity = "low" | "medium" | "high";
 
+export type ProofreadingGuardStatus = "qa_also" | "llm_only" | "guard_only";
+
+export interface ProofreadingEvidence {
+  reference: "source" | "target" | "memory" | "other";
+  quote: string;
+  note?: string | null;
+}
+
 export interface ProofreadingIssue {
   id: string;
   kr_sentence_id?: number | null;
@@ -208,6 +216,9 @@ export interface ProofreadingIssue {
   sourceExcerpt?: string;
   translationExcerpt?: string;
   tags?: string[];
+  guardStatus?: ProofreadingGuardStatus;
+  guardStatusLabel?: string;
+  evidence?: ProofreadingEvidence[];
   status?: string;
   appliedAt?: string | null;
   applied_at?: string | null;
@@ -246,6 +257,28 @@ export interface ProofreadingReport {
     target?: { lang: string; path: string };
     alignment?: string;
     generatedAt?: string;
+    llm?: {
+      runs: Array<{
+        tier: "quick" | "deep";
+        subfeatureKey: string;
+        subfeatureLabel: string;
+        chunkIndex: number;
+        model: string;
+        maxOutputTokens: number;
+        attempts: number;
+        truncated: boolean;
+        requestId: string | null;
+        usage: {
+          promptTokens: number | null;
+          completionTokens: number | null;
+          totalTokens: number | null;
+        };
+        verbosity: "low" | "medium" | "high";
+        reasoningEffort: "minimal" | "low" | "medium" | "high";
+        guardSegments: number;
+        memoryContextVersion: number | null;
+      }>;
+    };
   };
   results?: ProofreadingBucket[];
   summary?: ProofreadingReportSummary;
@@ -322,6 +355,50 @@ export interface ProofreadEditorResponse {
   issueAssignments: Record<string, string[]>;
   versions: ProofreadEditorVersions;
   featureToggles: Record<string, boolean>;
+}
+
+export interface ProofreadingLogEntry {
+  id: string;
+  projectId: string;
+  jobId: string;
+  proofreadingId: string;
+  runId: string;
+  tier: "quick" | "deep";
+  subfeatureKey: string;
+  subfeatureLabel: string;
+  chunkIndex: number;
+  model: string;
+  maxOutputTokens: number;
+  attempts: number;
+  truncated: boolean;
+  requestId: string | null;
+  guardSegments: number;
+  memoryVersion: number | null;
+  usagePromptTokens: number | null;
+  usageCompletionTokens: number | null;
+  usageTotalTokens: number | null;
+  verbosity: string;
+  reasoningEffort: string;
+  createdAt: string;
+}
+
+export interface TranslationDraftAdminRun {
+  id: string;
+  projectId: string;
+  jobId: string;
+  runOrder: number;
+  model: string | null;
+  verbosity: string | null;
+  reasoningEffort: string | null;
+  maxOutputTokens: number | null;
+  retryCount: number;
+  attempts: number | null;
+  truncated: boolean;
+  fallbackModelUsed: boolean;
+  usageInputTokens: number | null;
+  usageOutputTokens: number | null;
+  finishedAt: string | null;
+  updatedAt: string;
 }
 
 export interface ProofreadEditorPatchSegmentInput {

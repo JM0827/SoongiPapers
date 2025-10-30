@@ -180,4 +180,91 @@ export async function loadDraftsByIds(
     .lean();
 }
 
+export interface TranslationDraftRunSummary {
+  id: string;
+  projectId: string;
+  jobId: string;
+  runOrder: number;
+  model: string | null;
+  verbosity: string | null;
+  reasoningEffort: string | null;
+  maxOutputTokens: number | null;
+  retryCount: number;
+  attempts: number | null;
+  truncated: boolean;
+  fallbackModelUsed: boolean;
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+  finishedAt: Date | null;
+  updatedAt: Date;
+}
+
+export async function listRecentDraftRuns(config: {
+  projectId?: string;
+  limit?: number;
+}): Promise<TranslationDraftRunSummary[]> {
+  const filter: Record<string, unknown> = { status: "succeeded" };
+  if (config.projectId) {
+    filter.project_id = config.projectId;
+  }
+
+  const limit = Math.max(1, Math.min(config.limit ?? 50, 200));
+
+  const docs = await TranslationDraft.find(filter)
+    .sort({ finished_at: -1, updated_at: -1 })
+    .limit(limit)
+    .select({
+      project_id: 1,
+      job_id: 1,
+      run_order: 1,
+      model: 1,
+      verbosity: 1,
+      reasoning_effort: 1,
+      max_output_tokens: 1,
+      retry_count: 1,
+      metadata: 1,
+      truncated: 1,
+      fallback_model_used: 1,
+      usage: 1,
+      finished_at: 1,
+      updated_at: 1,
+    })
+    .lean();
+
+  return docs.map((doc) => {
+    const analysisMeta = (
+      (doc.metadata as { analysis_meta?: { attempts?: unknown } } | null | undefined)?.analysis_meta ??
+      null
+    );
+
+    const attempts =
+      analysisMeta && typeof analysisMeta.attempts === "number"
+        ? analysisMeta.attempts
+        : null;
+
+    return {
+      id: doc._id.toString(),
+      projectId: doc.project_id,
+      jobId: doc.job_id,
+      runOrder: doc.run_order,
+      model: doc.model ?? null,
+      verbosity: doc.verbosity ?? null,
+      reasoningEffort: doc.reasoning_effort ?? null,
+      maxOutputTokens: doc.max_output_tokens ?? null,
+      retryCount: doc.retry_count ?? 0,
+      attempts,
+      truncated: Boolean(doc.truncated),
+      fallbackModelUsed: Boolean(doc.fallback_model_used),
+      usage: {
+        inputTokens: doc.usage?.input_tokens ?? null,
+        outputTokens: doc.usage?.output_tokens ?? null,
+      },
+      finishedAt: doc.finished_at ?? null,
+      updatedAt: doc.updated_at,
+    } satisfies TranslationDraftRunSummary;
+  });
+}
+
 export type { TranslationDraftDocument, TranslationDraftSegmentDocument };

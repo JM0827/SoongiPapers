@@ -19,6 +19,7 @@ import {
   isFatalParamErr,
   safeExtractOpenAIResponse,
 } from "../services/llm";
+import { runResponsesWithRetry } from "../services/openaiResponses";
 import { SHARED_TRANSLATION_GUIDELINES } from "./prompts/sharedGuidelines";
 import { buildAlignedPairSet } from "./quality/alignedPairs";
 import { buildQualityChunks } from "./quality/chunking";
@@ -96,12 +97,15 @@ export interface FinalEvaluation {
       fallbackApplied?: boolean;
       missingFields?: string[];
       preview?: string | null;
+      truncated?: boolean;
     }>;
     config?: {
       maxOutputTokens: number;
       maxOutputTokensCap: number;
       concurrency: number;
     };
+    truncatedChunks?: number;
+    totalAttempts?: number;
   };
 }
 
@@ -172,6 +176,7 @@ export type QualityEvaluationEvent =
       overlapPairCount?: number;
       sourceTokens?: number;
       translatedTokens?: number;
+      truncated?: boolean;
     }
   | {
       type: "chunk-partial";
@@ -736,6 +741,8 @@ interface EvalChunkCallbacks {
 }
 
 // 단일 청크 평가 요청
+const DELAY_BASE_MS = 600;
+
 async function evalChunk(
   params: {
     model: string;
@@ -761,6 +768,7 @@ async function evalChunk(
   missingFields?: string[];
   attemptsUsed: number;
   partialPreview?: string | null;
+  truncated: boolean;
 }> {
   const {
     model,
@@ -796,263 +804,251 @@ async function evalChunk(
     throw new Error("Chunk too large for model context");
   }
 
-  try {
-    console.log(
-      `🤖 [QualityAgent] Calling OpenAI with model: ${model}, attempt: ${attempt}`,
-    );
-    console.log(
-      `📝 [QualityAgent] Source chunk length: ${sourceChunk.length}, Translated chunk length: ${translatedChunk.length}`,
-    );
-
-    const textConfig: {
-      format: {
-        type: "json_schema";
-        name: string;
-        schema: Record<string, unknown>;
-        strict: true;
-      };
-      verbosity?: "low" | "medium" | "high";
-    } = {
-      format: {
-        type: "json_schema",
-        name: evalResponseJsonSchema.name,
-        schema: evalResponseJsonSchema.schema,
-        strict: true,
-      },
+  const textConfig: {
+    format: {
+      type: "json_schema";
+      name: string;
+      schema: Record<string, unknown>;
+      strict: true;
     };
+    verbosity?: "low" | "medium" | "high";
+  } = {
+    format: {
+      type: "json_schema",
+      name: evalResponseJsonSchema.name,
+      schema: evalResponseJsonSchema.schema,
+      strict: true,
+    },
+  };
 
-    if (isGpt5Model(model) && QA_VERBOSITY) {
-      textConfig.verbosity = QA_VERBOSITY;
+  if (isGpt5Model(model) && QA_VERBOSITY) {
+    textConfig.verbosity = QA_VERBOSITY;
+  }
+
+  const reasoningConfig =
+    isGpt5Model(model) && QA_REASONING_EFFORT
+      ? { effort: QA_REASONING_EFFORT }
+      : undefined;
+
+  let currentMaxTokens = maxOutputTokens;
+  let totalAttempts = 0;
+  let truncatedEncountered = false;
+  let lastPreview: string | null = null;
+  let lastRequestId: string | undefined;
+  let lastUsage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      }
+    | undefined;
+
+  for (let outerAttempt = attempt; outerAttempt <= MAX_CHUNK_ATTEMPTS; outerAttempt += 1) {
+    let previousTokens = currentMaxTokens;
+    let runResult;
+
+    try {
+      runResult = await runResponsesWithRetry({
+        client,
+        initialMaxOutputTokens: currentMaxTokens,
+        maxOutputTokensCap,
+        maxAttempts: Math.min(3, MAX_CHUNK_ATTEMPTS - outerAttempt + 1),
+        minOutputTokens: 200,
+        onAttempt: ({ attemptIndex, maxOutputTokens }) => {
+          if (attemptIndex > 0) {
+            void callbacks.onRetry?.({
+              index: chunkIndex,
+              from: previousTokens,
+              to: maxOutputTokens,
+            });
+          }
+          previousTokens = maxOutputTokens;
+        },
+        buildRequest: ({ maxOutputTokens }) =>
+          client.responses.create({
+            model,
+            max_output_tokens: maxOutputTokens,
+            text: textConfig,
+            reasoning: reasoningConfig,
+            input: [
+              {
+                role: "system",
+                content: [{ type: "input_text", text: SYSTEM_PROMPT }],
+              },
+              {
+                role: "user",
+                content: [{ type: "input_text", text: userBlock }],
+              },
+            ],
+          }),
+      });
+    } catch (error) {
+      if (isFatalParamErr(error)) {
+        throw error;
+      }
+      if (outerAttempt >= MAX_CHUNK_ATTEMPTS) {
+        console.error(
+          `❌ [QualityAgent] OpenAI call failed for chunk ${chunkIndex + 1}`,
+          error,
+        );
+        throw error;
+      }
+      console.warn(
+        `⚠️ [QualityAgent] OpenAI call failed for chunk ${chunkIndex + 1}, retrying (outer attempt ${outerAttempt + 1})`,
+        error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      continue;
     }
 
-    const reasoningConfig =
-      isGpt5Model(model) && QA_REASONING_EFFORT
-        ? { effort: QA_REASONING_EFFORT }
-        : undefined;
-
-    const resp = await client.responses.create({
-      model,
-      max_output_tokens: maxOutputTokens,
-      text: textConfig,
-      reasoning: reasoningConfig,
-      input: [
-        {
-          role: "system",
-          content: [{ type: "input_text", text: SYSTEM_PROMPT }],
-        },
-        {
-          role: "user",
-          content: [{ type: "input_text", text: userBlock }],
-        },
-      ],
-    });
+    totalAttempts += runResult.attempts;
+    currentMaxTokens = runResult.maxOutputTokens;
+    truncatedEncountered = truncatedEncountered || runResult.truncated;
 
     const { parsedJson, text, requestId, usage } =
-      safeExtractOpenAIResponse(resp);
+      safeExtractOpenAIResponse(runResult.response);
 
-    console.log(
-      `📤 [QualityAgent] OpenAI response received, request ID: ${requestId}`,
-    );
-    console.log(
-      `📄 [QualityAgent] Raw response length: ${text?.length || 0} (chunk ${chunkIndex + 1})`,
-    );
+    lastRequestId = requestId ?? runResult.response.id ?? undefined;
+    lastUsage = usage;
+    lastPreview = text
+      ? `${text.slice(0, 280)}${text.length > 280 ? "…" : ""}`
+      : null;
 
     if (!parsedJson || typeof parsedJson !== "object") {
-      const preview = text
-        ? `${text.slice(0, 280)}${text.length > 280 ? "…" : ""}`
-        : null;
-      console.warn(
-        `⚠️ [QualityAgent] Parsed JSON missing for chunk ${chunkIndex + 1} (attempt ${attempt})`,
-        preview ? { preview } : undefined,
+      await callbacks.onPartial?.({
+        index: chunkIndex,
+        attempt: outerAttempt,
+        missingFields: [],
+        requestId: lastRequestId,
+        preview: lastPreview,
+        fallbackApplied: false,
+      });
+
+      if (outerAttempt >= MAX_CHUNK_ATTEMPTS) {
+        const err = new Error("quality_missing_json");
+        (err as any).metadata = {
+          chunkIndex,
+          attempt: outerAttempt,
+          requestId: lastRequestId,
+          hasText: Boolean(text),
+          textPreview: lastPreview,
+        };
+        throw err;
+      }
+
+      const nextTokens = Math.min(
+        maxOutputTokensCap,
+        Math.round(currentMaxTokens * 1.4),
       );
-      const err = new Error("quality_missing_json");
-      (err as any).metadata = {
-        chunkIndex,
-        attempt,
-        requestId,
-        hasText: Boolean(text),
-        textPreview: preview,
-      };
-      throw err;
+      if (nextTokens > currentMaxTokens) {
+        await callbacks.onRetry?.({
+          index: chunkIndex,
+          from: currentMaxTokens,
+          to: nextTokens,
+        });
+        currentMaxTokens = nextTokens;
+      }
+      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      continue;
     }
 
     const partialResult = EvalJsonPartial.safeParse(parsedJson);
     if (!partialResult.success) {
-      console.warn(
-        `⚠️ [QualityAgent] JSON structure invalid for chunk ${chunkIndex + 1} (attempt ${attempt})`,
-        { issues: partialResult.error.issues },
-      );
-      const err = new Error("quality_invalid_json");
-      (err as any).metadata = {
-        chunkIndex,
-        attempt,
-        requestId,
-        issues: partialResult.error.issues,
-      };
-      throw err;
+      await callbacks.onPartial?.({
+        index: chunkIndex,
+        attempt: outerAttempt,
+        missingFields: [],
+        requestId: lastRequestId,
+        preview: lastPreview,
+        fallbackApplied: false,
+      });
+
+      if (outerAttempt >= MAX_CHUNK_ATTEMPTS) {
+        const err = new Error("quality_invalid_json");
+        (err as any).metadata = {
+          chunkIndex,
+          attempt: outerAttempt,
+          requestId: lastRequestId,
+          issues: partialResult.error.issues,
+        };
+        throw err;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      continue;
     }
 
     const partial = partialResult.data;
     const missingFields = collectMissingFields(partial);
-    const preview = text
-      ? `${text.slice(0, 280)}${text.length > 280 ? "…" : ""}`
-      : null;
 
     if (!missingFields.length) {
-      console.log(`✅ [QualityAgent] JSON parsing successful`);
       const parsed = EvalJson.parse(partial);
-      console.log(
-        `✅ [QualityAgent] Zod validation successful, overall score: ${parsed.overallScore}`,
-      );
       return {
         data: parsed,
-        requestId,
-        usage,
-        maxOutputTokensUsed: maxOutputTokens,
+        requestId: lastRequestId,
+        usage: lastUsage,
+        maxOutputTokensUsed: currentMaxTokens,
         fallbackApplied: false,
-        missingFields,
-        attemptsUsed: attempt,
+        missingFields: [],
+        attemptsUsed: totalAttempts,
         partialPreview: null,
+        truncated: truncatedEncountered,
       };
     }
 
     await callbacks.onPartial?.({
       index: chunkIndex,
-      attempt,
+      attempt: outerAttempt,
       missingFields,
-      requestId,
-      preview,
+      requestId: lastRequestId,
+      preview: lastPreview,
       fallbackApplied: false,
     });
 
-    console.warn(
-      `⚠️ [QualityAgent] Chunk ${chunkIndex + 1} missing fields: ${missingFields.join(", ")}`,
-    );
-
     const fallbackReady =
-      attempt >= MAX_CHUNK_ATTEMPTS || maxOutputTokens >= maxOutputTokensCap;
+      outerAttempt >= MAX_CHUNK_ATTEMPTS || currentMaxTokens >= maxOutputTokensCap;
 
     if (fallbackReady) {
-      console.warn(
-        `⚠️ [QualityAgent] Applying fallback completion for chunk ${chunkIndex + 1}`,
-      );
       const completed = buildFallbackEvaluation(partial);
       await callbacks.onPartial?.({
         index: chunkIndex,
-        attempt,
+        attempt: outerAttempt,
         missingFields,
-        requestId,
-        preview,
+        requestId: lastRequestId,
+        preview: lastPreview,
         fallbackApplied: true,
       });
+
       return {
         data: completed,
-        requestId,
-        usage,
-        maxOutputTokensUsed: maxOutputTokens,
+        requestId: lastRequestId,
+        usage: lastUsage,
+        maxOutputTokensUsed: currentMaxTokens,
         fallbackApplied: true,
         missingFields,
-        attemptsUsed: attempt,
-        partialPreview: preview,
+        attemptsUsed: totalAttempts,
+        partialPreview: lastPreview ?? null,
+        truncated: truncatedEncountered,
       };
     }
 
-    const err = new Error("quality_missing_json");
-    (err as any).metadata = {
-      chunkIndex,
-      attempt,
-      requestId,
-      hasText: Boolean(text),
-      textPreview: preview,
-      missingFields,
-      partial,
-    };
-    throw err;
-  } catch (err) {
-    const metadata = (err as any)?.metadata ?? {};
-    const incompleteReason = metadata.reason;
-    const isIncompleteDueToTokens =
-      (err as any)?.code === "openai_response_incomplete" &&
-      incompleteReason === "max_output_tokens";
-    const isMissingJson = err instanceof Error && err.message === "quality_missing_json";
-    const isInvalidJson = err instanceof Error && err.message === "quality_invalid_json";
-
-    if (isIncompleteDueToTokens && maxOutputTokens < maxOutputTokensCap) {
-      const nextTokens = Math.min(
-        maxOutputTokensCap,
-        Math.round(maxOutputTokens * 1.5),
-      );
-      if (nextTokens > maxOutputTokens) {
-        console.log(
-          `[QualityAgent] Chunk ${chunkIndex + 1} exceeded max_output_tokens (${maxOutputTokens}); retrying with ${nextTokens}`,
-        );
-        await callbacks.onRetry?.({
-          index: chunkIndex,
-          from: maxOutputTokens,
-          to: nextTokens,
-        });
-        return evalChunk({
-          ...params,
-          maxOutputTokens: nextTokens,
-          attempt: attempt + 1,
-        }, callbacks);
-      }
-    }
-
-    if (isMissingJson && attempt < MAX_CHUNK_ATTEMPTS) {
-      const missingFields: string[] = metadata.missingFields ?? [];
-      const nextTokensCandidate = Math.min(
-        maxOutputTokensCap,
-        Math.round(maxOutputTokens * 1.4),
-      );
-      const nextTokens = Math.max(nextTokensCandidate, maxOutputTokens);
-      console.log(
-        `[QualityAgent] Chunk ${chunkIndex + 1} missing fields (${missingFields.join(", ")}); retrying with ${nextTokens}`,
-      );
+    const nextTokens = Math.min(
+      maxOutputTokensCap,
+      Math.round(currentMaxTokens * 1.4),
+    );
+    if (nextTokens > currentMaxTokens) {
       await callbacks.onRetry?.({
         index: chunkIndex,
-        from: maxOutputTokens,
+        from: currentMaxTokens,
         to: nextTokens,
       });
-      if (nextTokens > maxOutputTokens) {
-        return evalChunk({
-          ...params,
-          maxOutputTokens: nextTokens,
-          attempt: attempt + 1,
-        }, callbacks);
-      }
-      console.log(
-        `[QualityAgent] Chunk ${chunkIndex + 1} retrying with unchanged token budget`,
-      );
-      await new Promise((r) => setTimeout(r, 600 * attempt));
-      return evalChunk({ ...params, attempt: attempt + 1 }, callbacks);
+      currentMaxTokens = nextTokens;
     }
 
-    if (isInvalidJson && attempt < MAX_CHUNK_ATTEMPTS) {
-      console.warn(
-        `[QualityAgent] Invalid JSON payload for chunk ${chunkIndex + 1}; retrying (attempt ${attempt + 1})`,
-      );
-      await new Promise((r) => setTimeout(r, 600 * attempt));
-      return evalChunk({ ...params, attempt: attempt + 1 }, callbacks);
-    }
-
-    console.error(
-      `💥 [QualityAgent] OpenAI call failed (attempt ${attempt}):`,
-      err,
-    );
-
-    if (isFatalParamErr(err)) {
-      throw err;
-    }
-
-    if (attempt < MAX_CHUNK_ATTEMPTS) {
-      console.log(`🔄 [QualityAgent] Retrying in ${600 * attempt}ms...`);
-      await new Promise((r) => setTimeout(r, 600 * attempt));
-      return evalChunk({ ...params, attempt: attempt + 1 }, callbacks);
-    }
-    console.error(`❌ [QualityAgent] All retry attempts failed`);
-    throw err;
+    await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
   }
+
+  throw new Error("quality_chunk_failed");
 }
 
 // ----------------------------- 집계 함수 -----------------------------
@@ -1106,6 +1102,7 @@ interface ChunkEvaluationRecord {
   fallbackApplied: boolean;
   missingFields: string[];
   partialPreview?: string | null;
+  truncated: boolean;
 }
 
 const roundScore = (value: number) => Math.round(value);
@@ -1292,6 +1289,7 @@ export async function callQualityModel(
           missingFields,
           attemptsUsed,
           partialPreview,
+          truncated,
         } = await evalChunk(
           {
             model,
@@ -1355,6 +1353,7 @@ export async function callQualityModel(
           fallbackApplied: Boolean(fallbackApplied),
           missingFields: missingFields ?? [],
           partialPreview: partialPreview ?? null,
+          truncated,
         };
 
         if (usage) {
@@ -1381,6 +1380,7 @@ export async function callQualityModel(
           overlapPairCount: descriptor.overlapPairCount,
           sourceTokens: descriptor.sourceTokens,
           translatedTokens: descriptor.translatedTokens,
+          truncated,
         });
 
         await options.listeners?.onEvent?.({
@@ -1483,10 +1483,11 @@ export async function callQualityModel(
     requestId: record.requestId,
     maxOutputTokensUsed: record.maxOutputTokensUsed,
     usage: record.usage,
-     attempts: record.attempts,
-     fallbackApplied: record.fallbackApplied,
-     missingFields: record.missingFields,
-     preview: record.partialPreview ?? null,
+    attempts: record.attempts,
+    fallbackApplied: record.fallbackApplied,
+    missingFields: record.missingFields,
+    preview: record.partialPreview ?? null,
+    truncated: record.truncated,
   }));
 
   const result: FinalEvaluation = {
@@ -1510,6 +1511,11 @@ export async function callQualityModel(
         maxOutputTokensCap: QA_MAX_OUTPUT_TOKENS_CAP,
         concurrency,
       },
+      truncatedChunks: completedRecords.filter((record) => record.truncated).length,
+      totalAttempts: completedRecords.reduce(
+        (sum, record) => sum + record.attempts,
+        0,
+      ),
     },
   };
 

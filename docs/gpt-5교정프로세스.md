@@ -99,6 +99,12 @@
 | M3 | Rewrite 루프(승인형), Guard↔LLM UI 피드백, Quality 점수 연계 | 번역-교정 통합 품질 상승, 사용자 피드백 루프 구축 |
 | M4 | Ensemble/연상형 Guard, KPI 대시보드 제공, 자동 Guard 학습 검토 | 휴먼 수준 상회 목표에 근접 |
 
+### 진행 상태 메모
+- ✅ M0 Responses 전환 적용 완료 (proofreading/quality) + `runResponsesWithRetry` 헬퍼 단위 테스트(`server/services/__tests__/openaiResponses.test.ts`) 추가 완료.
+- ✅ M1 완료 (Spec/ENV 정비, Observability 확대, evidence 필수화).
+- ✅ Proofreading 기본 모델을 GPT-5로 전환하고 quick tier는 `gpt-5-mini` → `gpt-5` 순으로 시도하도록 재구성, gpt-4 계열 제거.
+- ▶️ 다음 작업: 번역 Draft/Revise 에이전트 헬퍼 적용 완료 사항 모니터링 및 M2 항목(dual-pass alignment/self-consistency) 추진.
+
 ## 9. 결론
 - GPT-5 Responses API 도입은 교정 파이프라인의 안정성과 표현력을 크게 향상시킬 기반이다.
 - Guard, Spec, Project Memory, Quality Evaluation을 교차 연계한 “증거 기반 교정” 체계를 구축하면 휴먼 번역을 뛰어넘는 품질을 실현할 수 있다.

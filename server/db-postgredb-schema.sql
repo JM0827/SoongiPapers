@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS translation_memory_versions CASCADE;
 DROP TABLE IF EXISTS translation_memory CASCADE;
 DROP TABLE IF EXISTS translation_drafts CASCADE;
 DROP TABLE IF EXISTS proofreading_history CASCADE;
+DROP TABLE IF EXISTS proofreading_logs CASCADE;
 DROP TABLE IF EXISTS ebook_cover_sets CASCADE;
 DROP TABLE IF EXISTS ebook_artifacts CASCADE;
 DROP TABLE IF EXISTS project_usage_totals CASCADE;
@@ -203,6 +204,34 @@ CREATE TABLE IF NOT EXISTS proofread_runs (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proofread_runs_dedupe
   ON proofread_runs (project_id, translation_file_id, memory_version, final_text_hash);
+
+CREATE TABLE IF NOT EXISTS proofreading_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  proofreading_id UUID NOT NULL,
+  run_id TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  subfeature_key TEXT NOT NULL,
+  subfeature_label TEXT NOT NULL,
+  chunk_index INT NOT NULL,
+  model TEXT NOT NULL,
+  max_output_tokens INT NOT NULL,
+  attempts INT NOT NULL,
+  truncated BOOLEAN NOT NULL,
+  request_id TEXT,
+  guard_segments INT NOT NULL,
+  memory_version INT,
+  usage_prompt_tokens INT,
+  usage_completion_tokens INT,
+  usage_total_tokens INT,
+  verbosity TEXT NOT NULL,
+  reasoning_effort TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proofreading_logs_project_created_at
+  ON proofreading_logs (project_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS token_usage_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

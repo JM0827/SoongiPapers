@@ -126,6 +126,26 @@ const guardBadgeTone: Record<string, string> = {
   default: "border-slate-200 bg-slate-50 text-slate-600",
 };
 
+const guardStatusClasses: Record<string, string> = {
+  qa_also:
+    "inline-flex items-center rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700",
+  llm_only:
+    "inline-flex items-center rounded-full border border-sky-200 bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700",
+  guard_only:
+    "inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600",
+  default:
+    "inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600",
+};
+
+const evidenceReferenceLabel = (reference: string) => {
+  const normalized = reference.toLowerCase();
+  if (normalized === "source") return "Source";
+  if (normalized === "target") return "Translation";
+  if (normalized === "memory") return "Memory";
+  if (normalized === "other") return "Other";
+  return reference;
+};
+
 const guardTypeLabel = (type: string) => {
   const normalized = type.toLowerCase();
   switch (normalized) {
@@ -246,6 +266,15 @@ const IssueCard = ({
           {typeof issue.confidence === "number" && (
             <span>Confidence {formatPercent(issue.confidence)}</span>
           )}
+          {issue.guardStatusLabel && (
+            <span
+              className={
+                guardStatusClasses[issue.guardStatus ?? "default"] ?? guardStatusClasses.default
+              }
+            >
+              {issue.guardStatusLabel}
+            </span>
+          )}
           {issue.tags?.length ? (
             <span className="flex flex-wrap gap-1">
               {issue.tags.map((tag) => (
@@ -347,13 +376,33 @@ const IssueCard = ({
               <p className="mt-1 whitespace-pre-wrap text-slate-700">
                 {issue.recommendation_en}
               </p>
-            </div>
           </div>
+        </div>
 
-      {sourceText && (
-        <div className="mt-2 text-xs">
-          <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-            Origin
+        {Array.isArray(issue.evidence) && issue.evidence.length > 0 && (
+          <div className="mt-3 space-y-2 text-xs">
+            <h4 className="font-semibold uppercase text-slate-500">Evidence</h4>
+            <ul className="space-y-1">
+              {issue.evidence.map((entry, idx) => (
+                <li
+                  key={`${issue.id}-evidence-${idx}`}
+                  className="rounded border border-slate-100 bg-slate-50 p-2 text-slate-700"
+                >
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                    <span>{evidenceReferenceLabel(entry.reference)}</span>
+                    {entry.note && <span className="font-normal text-slate-400">{entry.note}</span>}
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap">{entry.quote}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {sourceText && (
+          <div className="mt-2 text-xs">
+            <h4 className="text-[11px] font-semibold uppercase text-slate-500">
+              Origin
           </h4>
           <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
             {sourceText}

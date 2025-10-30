@@ -10,6 +10,13 @@ const severityBadgeClasses: Record<string, string> = {
   default: 'bg-slate-200 text-slate-700',
 };
 
+const guardBadgeClasses: Record<string, string> = {
+  qa_also: 'bg-amber-100 text-amber-700 border border-amber-200',
+  llm_only: 'bg-sky-100 text-sky-700 border border-sky-200',
+  guard_only: 'bg-slate-200 text-slate-600 border border-slate-200',
+  default: 'bg-slate-200 text-slate-600 border border-slate-200',
+};
+
 const guardTypeLabel = (type: string) => {
   const normalized = type.toLowerCase();
   switch (normalized) {
@@ -191,6 +198,15 @@ export const ProofreadIssueTray = () => {
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${statusClass}`}>
                             {statusLabel(statusValue)}
                           </span>
+                          {issue.guardStatusLabel && (
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${
+                                guardBadgeClasses[issue.guardStatus ?? 'default'] ?? guardBadgeClasses.default
+                              }`}
+                            >
+                              {issue.guardStatusLabel}
+                            </span>
+                          )}
                           {timestamp && <span>{timestamp}</span>}
                         </div>
                         {guardFindings.length > 0 && (

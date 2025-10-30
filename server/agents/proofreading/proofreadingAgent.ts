@@ -11,7 +11,10 @@ import {
   updateProofreadRunStatus,
 } from "../../db/pg";
 import { getProofreadingSpec } from "./proofreadingHelper";
-import { runGenericWorker } from "./genericWorker";
+import {
+  runGenericWorker,
+  buildProofreadingMemoryContext,
+} from "./genericWorker";
 import {
   splitSentencesByLang,
   alignBySpecAsync,
@@ -24,6 +27,9 @@ import { filterBuckets, recomputeCounts } from "./postProcess";
 import { SHARED_TRANSLATION_GUIDELINES } from "../prompts/sharedGuidelines";
 import { getCurrentMemoryRecord } from "../../services/translation/memory";
 import type { GuardFindingDetail } from "@bookko/translation-types";
+import { normalizeTranslationNotes } from "../../models/DocumentProfile";
+import type { IssueItem, ProofreadingLLMRunMeta } from "./config";
+import { insertProofreadingLog } from "../../db/proofreadingLog";
 
 type Tier = "quick" | "deep";
 
@@ -32,8 +38,7 @@ type SubfeatureSpec = {
   label: string;
   enabled: boolean;
   tier?: Tier;
-  model: string;
-  temperature: number;
+  model?: string;
   prompt: { system: string };
 };
 
@@ -115,6 +120,8 @@ const parseGuardFindings = (value: unknown): GuardFindingDetail[] => {
         type: typeof entry.type === "string" ? entry.type : "unknown",
         summary,
         ok: entry.ok !== false,
+        severity: "info",
+        details: {},
       };
       const severity = normalizeSeverity(entry.severity);
       if (severity) {
@@ -309,6 +316,14 @@ export async function runProofreading(
 
   const memoryRecord = await getCurrentMemoryRecord(project_id);
   const memoryVersion = memoryRecord?.version ?? null;
+  const translationNotes = normalizeTranslationNotes(
+    (doc.raw as { translation_notes?: unknown })?.translation_notes ?? null,
+  );
+  const memoryContext = buildProofreadingMemoryContext({
+    memory: memoryRecord?.memory ?? null,
+    translationNotes,
+    version: memoryVersion,
+  });
 
   const existingRun = await findProofreadRun({
     projectId: project_id,
@@ -341,6 +356,15 @@ export async function runProofreading(
   const proofreadRunId = String(proofreadRunRecord.id);
 
   const guardSegments = await loadSegmentGuards(job_id);
+
+  const llmRuns: ProofreadingLLMRunMeta[] = [];
+  const tierRunMeta: Partial<Record<Tier, ProofreadingLLMRunMeta[]>> = {};
+  const ensureTierRuns = (tier: Tier): ProofreadingLLMRunMeta[] => {
+    if (!tierRunMeta[tier]) {
+      tierRunMeta[tier] = [];
+    }
+    return tierRunMeta[tier]!;
+  };
 
   const proofreading_id = uuidv4();
   await markInProgressHistoryAsError(project_id, job_id);
@@ -419,11 +443,12 @@ export async function runProofreading(
             status: "in_progress",
           });
 
-          const subItems: any[] = [];
+          const subItems: IssueItem[] = [];
+          const tierRuns = ensureTierRuns(tier);
 
           try {
             await Promise.all(
-              pairs.map(async (pair) => {
+              pairs.map(async (pair, chunkIndex) => {
                 if (!pair.kr || !pair.en) return;
                 const matchedSegments = collectGuardSegmentsForTarget(
                   pair.en ?? "",
@@ -453,19 +478,102 @@ export async function runProofreading(
                       })),
                     }
                   : undefined;
-                const items = await runGenericWorker({
-                  model: sf.model,
-                  temperature: sf.temperature,
+                const { items, meta } = await runGenericWorker({
+                  model: sf.model ?? undefined,
                   systemPrompt: `${sf.prompt.system}\n\n${SHARED_TRANSLATION_GUIDELINES}`,
                   subKey: sf.key,
+                  tier,
                   kr: pair.kr!,
                   en: pair.en!,
                   kr_id: pair.kr_id ?? null,
                   en_id: pair.en_id ?? null,
                   guardContext,
+                  memoryContext,
                 });
                 if (items.length) {
                   subItems.push(...items);
+                }
+
+                const runMeta: ProofreadingLLMRunMeta = {
+                  tier,
+                  subfeatureKey: sf.key,
+                  subfeatureLabel: sf.label,
+                  chunkIndex,
+                  model: meta.model,
+                  maxOutputTokens: meta.maxOutputTokens,
+                  attempts: meta.attempts,
+                  truncated: meta.truncated,
+                  requestId: meta.requestId,
+                  usage: meta.usage,
+                  verbosity: meta.verbosity,
+                  reasoningEffort: meta.reasoningEffort,
+                  guardSegments: meta.guardSegments,
+                  memoryContextVersion: meta.memoryContextVersion,
+                };
+                tierRuns.push(runMeta);
+                llmRuns.push(runMeta);
+
+                if (spec.runtime?.debugLogging) {
+                  const summary = {
+                    tier,
+                    subfeatureKey: sf.key,
+                    chunkIndex,
+                    model: meta.model,
+                    maxOutputTokens: meta.maxOutputTokens,
+                    attempts: meta.attempts,
+                    truncated: meta.truncated,
+                    guardSegments: meta.guardSegments,
+                    memoryVersion,
+                    requestId: meta.requestId,
+                    usage: meta.usage,
+                  };
+                  console.info(
+                    "[proofreading] llm run",
+                    JSON.stringify({
+                      projectId: project_id,
+                      jobId: job_id,
+                      proofreadingId: proofreading_id,
+                      run: summary,
+                    }),
+                  );
+                }
+
+                try {
+                  await insertProofreadingLog({
+                    projectId: project_id,
+                    jobId: job_id,
+                    proofreadingId: proofreading_id,
+                    runId: proofreadRunId,
+                    tier,
+                    subfeatureKey: sf.key,
+                    subfeatureLabel: sf.label,
+                    chunkIndex,
+                    meta: {
+                      model: meta.model,
+                      maxOutputTokens: meta.maxOutputTokens,
+                      attempts: meta.attempts,
+                      truncated: meta.truncated,
+                      requestId: meta.requestId,
+                      guardSegments: meta.guardSegments,
+                      memoryContextVersion: meta.memoryContextVersion,
+                      usage: meta.usage,
+                      verbosity: meta.verbosity,
+                      reasoningEffort: meta.reasoningEffort,
+                    },
+                  });
+                } catch (error) {
+                  console.error(
+                    "[proofreading] failed to record llm run",
+                    JSON.stringify({
+                      projectId: project_id,
+                      jobId: job_id,
+                      proofreadingId: proofreading_id,
+                      tier,
+                      subfeatureKey: sf.key,
+                      chunkIndex,
+                      error: error instanceof Error ? error.message : String(error),
+                    }),
+                  );
                 }
               }),
             );
@@ -515,14 +623,20 @@ export async function runProofreading(
         minSeverity: tier === "quick" ? "medium" : "low",
       });
 
+      const baseMeta = buildReportMeta({
+        sourcePath: "mongo.translation_files",
+        targetPath: "mongo.translation_files",
+        sourceLang: spec.language.source,
+        targetLang: spec.language.target,
+        alignment: tier === "quick" ? "paragraph" : "paragraph",
+      });
+      const tierReportRuns = ensureTierRuns(tier);
+      const reportMeta = tierReportRuns.length
+        ? { ...baseMeta, llm: { runs: tierReportRuns } }
+        : baseMeta;
+
       const report = {
-        meta: buildReportMeta({
-          sourcePath: "mongo.translation_files",
-          targetPath: "mongo.translation_files",
-          sourceLang: spec.language.source,
-          targetLang: spec.language.target,
-          alignment: tier === "quick" ? "paragraph" : "paragraph",
-        }),
+        meta: reportMeta,
         results: tierResults,
         summary: {
           countsBySubfeature: recomputeCounts(tierResults),
@@ -560,14 +674,19 @@ export async function runProofreading(
       minSeverity: "low",
     });
 
+    const baseMeta = buildReportMeta({
+      sourcePath: "mongo.translation_files",
+      targetPath: "mongo.translation_files",
+      sourceLang: spec.language.source,
+      targetLang: spec.language.target,
+      alignment: "paragraph",
+    });
+    const finalMeta = llmRuns.length
+      ? { ...baseMeta, llm: { runs: llmRuns } }
+      : baseMeta;
+
     const report = {
-      meta: buildReportMeta({
-        sourcePath: "mongo.translation_files",
-        targetPath: "mongo.translation_files",
-        sourceLang: spec.language.source,
-        targetLang: spec.language.target,
-        alignment: "paragraph",
-      }),
+      meta: finalMeta,
       results: filteredBuckets,
       summary: {
         countsBySubfeature: recomputeCounts(filteredBuckets),

@@ -61,6 +61,7 @@ import ebooksRoutes from "./routes/ebooks";
 import modelsRoutes from "./routes/models";
 import workflowRoutes from "./routes/workflow";
 import memoryRoutes from "./routes/memory";
+import adminRoutes from "./routes/admin";
 import { resolveLocale } from "./services/localeService";
 import {
   cancelAction as cancelWorkflowRun,
@@ -229,6 +230,7 @@ async function runDraftStageWithAdaptiveRetries(
           verbosity: left.meta.verbosity,
           reasoningEffort: left.meta.reasoningEffort,
           maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
+          attempts: left.meta.attempts + right.meta.attempts,
           retryCount: left.meta.retryCount + right.meta.retryCount,
           truncated: false,
           fallbackModelUsed:
@@ -336,6 +338,7 @@ async function runDraftStageWithAdaptiveRetries(
         verbosity: left.meta.verbosity,
         reasoningEffort: left.meta.reasoningEffort,
         maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
+        attempts: left.meta.attempts + right.meta.attempts,
         retryCount: left.meta.retryCount + right.meta.retryCount,
         truncated: false,
         fallbackModelUsed:
@@ -849,6 +852,7 @@ app.register(fastifyOauth2, {
 app.register(evaluationRoutes);
 app.register(proofreadingRoutes);
 app.register(proofreadEditorRoutes);
+app.register(adminRoutes);
 app.register(translationDraftRoutes);
 app.register(dictionaryRoutes);
 app.register(chatRoutes);

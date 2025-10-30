@@ -5,6 +5,7 @@ import { Studio } from "./routes/Studio";
 import { ProjectHub } from "./routes/ProjectHub";
 import { OAuthCallback } from "./routes/OAuthCallback";
 import { ProtectedRoute } from "./components/layout/ProtectedRoute";
+import { Admin } from "./routes/Admin";
 
 const queryClient = new QueryClient();
 
@@ -25,6 +26,14 @@ const App = () => {
             element={
               <ProtectedRoute>
                 <Studio />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute>
+                <Admin />
               </ProtectedRoute>
             }
           />

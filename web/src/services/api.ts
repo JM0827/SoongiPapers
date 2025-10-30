@@ -24,6 +24,7 @@ import type {
   WorkflowSummary,
   WorkflowRunRecord,
   TranslationDraftSummary,
+  TranslationDraftAdminRun,
   ProofreadEditorResponse,
   ProofreadEditorPatchPayload,
   ProofreadEditorPatchResponse,
@@ -33,6 +34,7 @@ import type {
   TranslationStageKey,
   EditingSelectionPayload,
   EditingSuggestionResponse,
+  ProofreadingLogEntry,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
 import { streamNdjson } from "./sse";
@@ -99,6 +101,7 @@ export type QualityStreamChunkCompleteEvent = {
   overlapPairCount?: number;
   sourceTokens?: number;
   translatedTokens?: number;
+  truncated?: boolean;
 };
 
 export type QualityStreamChunkPartialEvent = {
@@ -938,6 +941,173 @@ export const api = {
       body: JSON.stringify(payload),
     });
     return handle<EbookResponse>(res);
+  },
+
+  async fetchProofreadingLogs(
+    token: string,
+    params: { projectId?: string; limit?: number } = {},
+  ): Promise<ProofreadingLogEntry[]> {
+    const search = new URLSearchParams();
+    if (params.projectId) {
+      search.set("projectId", params.projectId);
+    }
+    if (params.limit) {
+      search.set("limit", String(params.limit));
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/admin/proofreading/logs${
+        search.toString() ? `?${search.toString()}` : ""
+      }`,
+      {
+        headers: defaultHeaders(token),
+      },
+    );
+
+    type RawEntry = {
+      id: string;
+      project_id: string;
+      job_id: string;
+      proofreading_id: string;
+      run_id: string;
+      tier: string;
+      subfeature_key: string;
+      subfeature_label: string;
+      chunk_index: number;
+      model: string;
+      max_output_tokens: number;
+      attempts: number;
+      truncated: boolean;
+      request_id: string | null;
+      guard_segments: number;
+      memory_version: number | null;
+      usage_prompt_tokens: number | null;
+      usage_completion_tokens: number | null;
+      usage_total_tokens: number | null;
+      verbosity: string;
+      reasoning_effort: string;
+      created_at: string;
+    };
+
+    const data = await handle<{ logs?: RawEntry[] }>(res);
+    const rows = Array.isArray(data.logs) ? data.logs : [];
+
+    return rows.map((entry) => ({
+      id: String(entry.id ?? ""),
+      projectId: String(entry.project_id ?? ""),
+      jobId: String(entry.job_id ?? ""),
+      proofreadingId: String(entry.proofreading_id ?? ""),
+      runId: String(entry.run_id ?? ""),
+      tier:
+        entry.tier === "deep" ? "deep" : (entry.tier === "quick" ? "quick" : "quick"),
+      subfeatureKey: String(entry.subfeature_key ?? ""),
+      subfeatureLabel: String(entry.subfeature_label ?? ""),
+      chunkIndex: Number(entry.chunk_index ?? 0),
+      model: String(entry.model ?? ""),
+      maxOutputTokens: Number(entry.max_output_tokens ?? 0),
+      attempts: Number(entry.attempts ?? 0),
+      truncated: Boolean(entry.truncated),
+      requestId: entry.request_id ?? null,
+      guardSegments: Number(entry.guard_segments ?? 0),
+      memoryVersion:
+        entry.memory_version === null || entry.memory_version === undefined
+          ? null
+          : Number(entry.memory_version),
+      usagePromptTokens:
+        entry.usage_prompt_tokens === null || entry.usage_prompt_tokens === undefined
+          ? null
+          : Number(entry.usage_prompt_tokens),
+      usageCompletionTokens:
+        entry.usage_completion_tokens === null ||
+        entry.usage_completion_tokens === undefined
+          ? null
+          : Number(entry.usage_completion_tokens),
+      usageTotalTokens:
+        entry.usage_total_tokens === null || entry.usage_total_tokens === undefined
+          ? null
+          : Number(entry.usage_total_tokens),
+      verbosity: String(entry.verbosity ?? ""),
+      reasoningEffort: String(entry.reasoning_effort ?? ""),
+      createdAt: String(entry.created_at ?? ""),
+    }));
+  },
+
+  async fetchTranslationDraftRuns(
+    token: string,
+    params: { projectId?: string; limit?: number } = {},
+  ): Promise<TranslationDraftAdminRun[]> {
+    const search = new URLSearchParams();
+    if (params.projectId) {
+      search.set("projectId", params.projectId);
+    }
+    if (params.limit) {
+      search.set("limit", String(params.limit));
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/admin/translation/drafts${
+        search.toString() ? `?${search.toString()}` : ""
+      }`,
+      {
+        headers: defaultHeaders(token),
+      },
+    );
+
+    type RawDraft = {
+      id?: string;
+      projectId?: string;
+      jobId?: string;
+      runOrder?: number;
+      model?: string | null;
+      verbosity?: string | null;
+      reasoningEffort?: string | null;
+      maxOutputTokens?: number | null;
+      retryCount?: number | null;
+      attempts?: number | null;
+      truncated?: boolean;
+      fallbackModelUsed?: boolean;
+      usage?: {
+        inputTokens?: number | null;
+        outputTokens?: number | null;
+      };
+      finishedAt?: string | null;
+      updatedAt?: string;
+    };
+
+    const data = await handle<{ drafts?: RawDraft[] }>(res);
+    const rows = Array.isArray(data.drafts) ? data.drafts : [];
+
+    return rows.map((entry) => ({
+      id: String(entry.id ?? ""),
+      projectId: String(entry.projectId ?? ""),
+      jobId: String(entry.jobId ?? ""),
+      runOrder: Number(entry.runOrder ?? 0),
+      model: entry.model ?? null,
+      verbosity: entry.verbosity ?? null,
+      reasoningEffort: entry.reasoningEffort ?? null,
+      maxOutputTokens:
+        entry.maxOutputTokens === null || entry.maxOutputTokens === undefined
+          ? null
+          : Number(entry.maxOutputTokens),
+      retryCount: Number(entry.retryCount ?? 0),
+      attempts:
+        entry.attempts === null || entry.attempts === undefined
+          ? null
+          : Number(entry.attempts),
+      truncated: Boolean(entry.truncated),
+      fallbackModelUsed: Boolean(entry.fallbackModelUsed),
+      usageInputTokens:
+        entry.usage?.inputTokens === null || entry.usage?.inputTokens === undefined
+          ? null
+          : Number(entry.usage.inputTokens),
+      usageOutputTokens:
+        entry.usage?.outputTokens === null ||
+        entry.usage?.outputTokens === undefined
+          ? null
+          : Number(entry.usage.outputTokens),
+      finishedAt: entry.finishedAt ?? null,
+      updatedAt: String(entry.updatedAt ?? ""),
+    }));
   },
 
   async fetchProjectTranslations(

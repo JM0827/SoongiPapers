@@ -4,6 +4,7 @@ import type { TranslationNotes } from '../../models/DocumentProfile';
 import type { OriginSegment } from './segmentationAgent';
 import type { TranslationDraftAgentSegmentResult } from './translationDraftAgent';
 import { safeExtractOpenAIResponse } from '../../services/llm';
+import { runResponsesWithRetry } from '../../services/openaiResponses';
 
 import type { ResponseReasoningEffort, ResponseVerbosity } from './translationDraftAgent';
 
@@ -36,6 +37,7 @@ export interface TranslationReviseAgentResultMeta {
   verbosity: ResponseVerbosity;
   reasoningEffort: ResponseReasoningEffort;
   maxOutputTokens: number;
+  attempts: number;
   retryCount: number;
   truncated: boolean;
   fallbackModelUsed: boolean;
@@ -50,6 +52,22 @@ export interface TranslationReviseAgentResult {
   segments: TranslationReviseSegmentResult[];
   mergedText: string;
   meta: TranslationReviseAgentResultMeta;
+  llm?: { runs: TranslationReviseLLMRunMeta[] };
+}
+
+export interface TranslationReviseLLMRunMeta {
+  requestId: string | null;
+  model: string;
+  maxOutputTokens: number;
+  attempts: number;
+  truncated: boolean;
+  verbosity: ResponseVerbosity;
+  reasoningEffort: ResponseReasoningEffort;
+  usage: {
+    promptTokens: number | null;
+    completionTokens: number | null;
+    totalTokens: number | null;
+  };
 }
 
 const DEFAULT_REVISE_MODEL =
@@ -77,6 +95,13 @@ const REVISE_MAX_OUTPUT_TOKENS_CAP = normalizePositiveInteger(
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
+
+function isTranslationDebugEnabled(): boolean {
+  const flag = process.env.TRANSLATION_V2_DEBUG;
+  if (!flag) return false;
+  const normalized = flag.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+}
 
 const reviseResponseSchema = {
   name: 'translation_revise_segments',
@@ -188,160 +213,170 @@ export async function generateTranslationRevision(
   );
 
   const expectedIds = options.originSegments.map((segment) => segment.id);
-
-  let dynamicMaxOutputTokens = baseMaxTokens;
-  let lastRequestMaxTokens = Math.min(
-    dynamicMaxOutputTokens,
-    REVISE_MAX_OUTPUT_TOKENS_CAP,
-  );
-  let parsedPayload: { segments: Array<{ segmentId: string; revision: string }> } | null =
-    null;
-  let responseModel = baseModel;
-  let usage = { inputTokens: 0, outputTokens: 0 };
-  let selectedAttemptIndex = -1;
-  let fallbackModelUsed = false;
-  let truncated = false;
-  let lastError: unknown = null;
-
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
-    const requestMaxTokens = Math.min(
-      dynamicMaxOutputTokens,
-      REVISE_MAX_OUTPUT_TOKENS_CAP,
-    );
-    lastRequestMaxTokens = requestMaxTokens;
-
-    try {
-      const response = await openai.responses.create({
-        model: attempt.model,
-        max_output_tokens: requestMaxTokens,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: reviseResponseSchema.name,
-            schema: reviseResponseSchema.schema,
-            strict: true,
-          },
-          verbosity: attempt.verbosity,
+  const attemptConfigs = attempts.length
+    ? attempts
+    : [
+        {
+          model: baseModel,
+          verbosity: baseVerbosity,
+          effort: baseEffort,
         },
-        reasoning: { effort: attempt.effort },
-       input: [
-         {
-           role: 'system',
-           content: [{ type: 'input_text', text: systemPrompt }],
-         },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text:
-                  'Revise the draft segments according to the rules. Return JSON matching the schema and nothing else.',
-              },
-            ],
-          },
-          {
-            role: 'user',
-            content: [{ type: 'input_text', text: JSON.stringify(userPayload) }],
-          },
-        ],
-      });
+      ];
 
-      const { parsedJson, text: rawText, usage: responseUsage } =
-        safeExtractOpenAIResponse(response);
-
-      const payload = (parsedJson || (rawText ? JSON.parse(rawText) : null)) as
-        | { segments?: Array<{ segmentId?: string; revision?: string }> }
-        | null;
-
-      if (!payload?.segments) {
-        throw new Error('Revision response did not include any segments');
-      }
-
-      const hasAll = payload.segments.every((segment) =>
-        typeof segment?.segmentId === 'string' &&
-        typeof segment?.revision === 'string',
-      );
-      if (!hasAll) {
-        throw new Error('Revision response returned invalid segment entries');
-      }
-
-      const providedIds = new Set(
-        payload.segments.map((segment) => segment.segmentId as string),
-      );
-      const missing = expectedIds.filter((id) => !providedIds.has(id));
-      if (missing.length) {
-        throw new Error(
-          `Revision response missing segments: ${missing.slice(0, 5).join(', ')}`,
-        );
-      }
-
-      parsedPayload = {
-        segments: payload.segments.map((segment) => ({
-          segmentId: segment.segmentId as string,
-          revision: (segment.revision ?? '').toString(),
-        })),
-      };
-
-      responseModel = response.model || attempt.model;
-      usage = {
-        inputTokens: responseUsage?.prompt_tokens ?? 0,
-        outputTokens: responseUsage?.completion_tokens ?? 0,
-      };
-      selectedAttemptIndex = index;
-      fallbackModelUsed = fallbackModelUsed || attempt.model !== attempts[0]?.model;
-      break;
-    } catch (error) {
-      lastError = error;
-      // eslint-disable-next-line no-console
-      console.warn('[TRANSLATION] Revision attempt failed', {
-        attempt,
-        error,
-      });
-
-      if (
-        error &&
-        typeof error === 'object' &&
-        (error as { code?: string }).code === 'openai_response_incomplete'
-      ) {
-        truncated = true;
-        dynamicMaxOutputTokens = Math.min(
-          Math.ceil(dynamicMaxOutputTokens * 2),
-          REVISE_MAX_OUTPUT_TOKENS_CAP,
-        );
-        if (index + 1 < attempts.length) {
-          attempts[index + 1] = {
-            ...attempts[index + 1],
-            verbosity: 'low',
-            effort: 'minimal',
-          };
-        }
-        continue;
-      }
-
-      if (error instanceof Error && error.name === 'SyntaxError') {
-        dynamicMaxOutputTokens = Math.min(
-          Math.ceil(dynamicMaxOutputTokens * 1.5),
-          REVISE_MAX_OUTPUT_TOKENS_CAP,
-        );
-        if (index + 1 < attempts.length) {
-          attempts[index + 1] = {
-            ...attempts[index + 1],
-            verbosity: 'low',
-            effort: 'minimal',
-          };
-        }
-        continue;
-      }
+  const resolveAttemptConfig = (
+    attemptIndex: number,
+  ): {
+    model: string;
+    verbosity: ResponseVerbosity;
+    effort: ResponseReasoningEffort;
+  } => {
+    const boundedIndex = Math.min(
+      Math.max(0, attemptIndex),
+      Math.max(0, attemptConfigs.length - 1),
+    );
+    const baseConfig = attemptConfigs[boundedIndex];
+    if (attemptIndex < attemptConfigs.length) {
+      return baseConfig;
     }
+    return {
+      verbosity: 'low',
+      effort: 'minimal',
+      model: baseConfig.model,
+    };
+  };
+
+  const runResult = await runResponsesWithRetry({
+    client: openai,
+    initialMaxOutputTokens: baseMaxTokens,
+    maxOutputTokensCap: REVISE_MAX_OUTPUT_TOKENS_CAP,
+    maxAttempts: Math.max(attemptConfigs.length + 2, 3),
+    minOutputTokens: 200,
+    onAttempt: ({ attemptIndex, maxOutputTokens: requestTokens }) => {
+      if (!isTranslationDebugEnabled()) {
+        return;
+      }
+      const attemptConfig = resolveAttemptConfig(attemptIndex);
+      console.debug('[TRANSLATION] revise run attempt', {
+        attempt: attemptIndex + 1,
+        model: attemptConfig.model,
+        verbosity: attemptConfig.verbosity,
+        effort: attemptConfig.effort,
+        maxOutputTokens: requestTokens,
+      });
+    },
+    buildRequest: async ({ maxOutputTokens: requestTokens, attemptIndex }) => {
+      const attemptConfig = resolveAttemptConfig(attemptIndex);
+      try {
+        return await openai.responses.create({
+          model: attemptConfig.model,
+          max_output_tokens: requestTokens,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: reviseResponseSchema.name,
+              schema: reviseResponseSchema.schema,
+              strict: true,
+            },
+            verbosity: attemptConfig.verbosity,
+          },
+          reasoning: { effort: attemptConfig.effort },
+          input: [
+            {
+              role: 'system',
+              content: [{ type: 'input_text', text: systemPrompt }],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text:
+                    'Revise the draft segments according to the rules. Return JSON matching the schema and nothing else.',
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [{ type: 'input_text', text: JSON.stringify(userPayload) }],
+            },
+          ],
+        });
+      } catch (error) {
+        if (isTranslationDebugEnabled()) {
+          console.debug('[TRANSLATION] revise run attempt failed', {
+            attempt: attemptIndex + 1,
+            model: attemptConfig.model,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      }
+    },
+  });
+
+  const { parsedJson, text: rawText, usage: responseUsage, requestId } =
+    safeExtractOpenAIResponse(runResult.response);
+
+  const payload = (parsedJson || (rawText ? JSON.parse(rawText) : null)) as
+    | { segments?: Array<{ segmentId?: string; revision?: string }> }
+    | null;
+
+  if (!payload?.segments) {
+    throw new Error('Revision response did not include any segments');
   }
 
-  if (!parsedPayload) {
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error('Failed to generate translation revision');
+  const hasAll = payload.segments.every((segment) =>
+    typeof segment?.segmentId === 'string' && typeof segment?.revision === 'string',
+  );
+  if (!hasAll) {
+    throw new Error('Revision response returned invalid segment entries');
   }
+
+  const providedIds = new Set(payload.segments.map((segment) => segment.segmentId as string));
+  const missing = expectedIds.filter((id) => !providedIds.has(id));
+  if (missing.length) {
+    throw new Error(
+      `Revision response missing segments: ${missing.slice(0, 5).join(', ')}`,
+    );
+  }
+
+  const parsedSegments = payload.segments.map((segment) => ({
+    segmentId: segment.segmentId as string,
+    revision: (segment.revision ?? '').toString(),
+  }));
+
+  const usage = {
+    inputTokens: responseUsage?.prompt_tokens ?? 0,
+    outputTokens: responseUsage?.completion_tokens ?? 0,
+  };
+
+  const finalAttemptIndex = Math.max(0, runResult.attempts - 1);
+  const finalAttemptConfig = resolveAttemptConfig(finalAttemptIndex);
+  const firstAttemptConfig = resolveAttemptConfig(0);
+
+  if (isTranslationDebugEnabled()) {
+    console.debug('[TRANSLATION] revise run success', {
+      attempts: runResult.attempts,
+      truncated: runResult.truncated,
+      model: runResult.response.model ?? finalAttemptConfig.model,
+      maxOutputTokens: runResult.maxOutputTokens,
+    });
+  }
+
+  const llmRun: TranslationReviseLLMRunMeta = {
+    requestId: requestId ?? runResult.response.id ?? null,
+    model: runResult.response.model ?? finalAttemptConfig.model,
+    maxOutputTokens: runResult.maxOutputTokens,
+    attempts: runResult.attempts,
+    truncated: runResult.truncated,
+    verbosity: finalAttemptConfig.verbosity,
+    reasoningEffort: finalAttemptConfig.effort,
+    usage: {
+      promptTokens: responseUsage?.prompt_tokens ?? null,
+      completionTokens: responseUsage?.completion_tokens ?? null,
+      totalTokens: responseUsage?.total_tokens ?? null,
+    },
+  };
 
   const draftMap = new Map(
     options.draftSegments.map((segment) => [segment.segment_id, segment]),
@@ -349,11 +384,11 @@ export async function generateTranslationRevision(
 
   const orderedSegments: TranslationReviseSegmentResult[] = options.originSegments.map(
     (segment) => {
-      const revisionEntry = parsedPayload?.segments.find(
-        (entry) => entry.segmentId === segment.id,
-      );
+      const revisionEntry = parsedSegments.find((entry) => entry.segmentId === segment.id);
       const draft = draftMap.get(segment.id);
-      const revision = (revisionEntry?.revision ?? draft?.translation_segment ?? segment.text).trim();
+      const revision = (
+        revisionEntry?.revision ?? draft?.translation_segment ?? segment.text
+      ).trim();
       return {
         segment_id: segment.id,
         revised_segment: revision,
@@ -371,23 +406,21 @@ export async function generateTranslationRevision(
   );
 
   const mergedText = mergeSegmentsToText(options.originSegments, orderedSegments);
-
-  const selectedAttempt =
-    attempts[Math.max(0, selectedAttemptIndex)] ?? attempts[attempts.length - 1];
-
   return {
-    model: responseModel,
+    model: runResult.response.model ?? finalAttemptConfig.model,
     usage,
     segments: orderedSegments,
     mergedText,
     meta: {
-      verbosity: selectedAttempt.verbosity,
-      reasoningEffort: selectedAttempt.effort,
-      maxOutputTokens: lastRequestMaxTokens,
-      retryCount: Math.max(0, selectedAttemptIndex),
-      truncated,
-      fallbackModelUsed,
+      verbosity: finalAttemptConfig.verbosity,
+      reasoningEffort: finalAttemptConfig.effort,
+      maxOutputTokens: runResult.maxOutputTokens,
+      attempts: runResult.attempts,
+      retryCount: Math.max(0, runResult.attempts - 1),
+      truncated: runResult.truncated,
+      fallbackModelUsed: finalAttemptConfig.model !== firstAttemptConfig.model,
     },
+    llm: { runs: [llmRun] },
   };
 }
 
