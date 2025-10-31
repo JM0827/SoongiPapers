@@ -77,14 +77,6 @@ interface UIState {
   setLeftPanelWidth: (width: number | ((current: number) => number)) => void;
   rightPanelWidth: number;
   setRightPanelWidth: (width: number | ((current: number) => number)) => void;
-  previewExpanded: {
-    origin: boolean;
-    translation: boolean;
-  };
-  setPreviewExpanded: (
-    section: "origin" | "translation",
-    expanded: boolean,
-  ) => void;
   openExtraTab: (tab: { key: RightPanelExtraTab; label: string }) => void;
   clearExtraTab: () => void;
   locale: UILocale;
@@ -151,11 +143,6 @@ export const useUIStore = create<UIState>((set) => ({
     set((state) => ({
       rightPanelWidth:
         typeof width === "function" ? width(state.rightPanelWidth) : width,
-    })),
-  previewExpanded: { origin: false, translation: false },
-  setPreviewExpanded: (section, expanded) =>
-    set((state) => ({
-      previewExpanded: { ...state.previewExpanded, [section]: expanded },
     })),
   openExtraTab: ({ key, label }) =>
     set(() => ({

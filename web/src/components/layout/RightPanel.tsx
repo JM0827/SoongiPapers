@@ -1,9 +1,6 @@
 import {
   type ChangeEvent,
   type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -21,11 +18,7 @@ import { useAuthStore } from "../../store/auth.store";
 import { useAuth } from "../../hooks/useAuth";
 import { useProjectStore } from "../../store/project.store";
 import { ProofList } from "../proofreading/ProofList";
-import {
-  ProofreadIssuesProvider,
-  useProofreadIssues,
-  type ProofreadHighlightSegment,
-} from "../../context/ProofreadIssuesContext";
+import { ProofreadIssuesProvider } from "../../context/ProofreadIssuesContext";
 import { ProofreadEditorProvider } from "../../context/proofreadEditor";
 import { ProofreadEditorTab } from "../proofreading/ProofreadEditorTab";
 import { ExportPanel } from "../export/ExportPanel";
@@ -33,11 +26,7 @@ import { useUILocale } from "../../hooks/useUILocale";
 import { translate } from "../../lib/locale";
 import { ProjectProfileCard } from "../project/ProjectProfileCard";
 import { Modal } from "../common/Modal";
-import {
-  Collapsible,
-  handleKeyboardToggle,
-  isEventFromInteractive,
-} from "../common/Collapsible";
+import { Collapsible } from "../common/Collapsible";
 import { QualityAssessmentDialog } from "../quality/QualityAssessmentDialog";
 import type {
   DocumentProfileSummary,
@@ -388,361 +377,6 @@ const USER_MENU_ITEMS: Array<{ key: RightPanelExtraTab; label: string }> = [
   { key: "privacy", label: "Privacy" },
 ];
 
-const iconClass = "h-5 w-5";
-
-const OpenBookIcon = () => (
-  <svg
-    className={iconClass}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M12 5c-1.8-1.2-4.1-1.7-7-1.7v13.4c2.9 0 5.2.5 7 1.7 1.8-1.2 4.1-1.7 7-1.7V3.3C16.1 3.3 13.8 3.8 12 5Z" />
-    <path d="M12 5v13.4" />
-  </svg>
-);
-
-const ClosedBookIcon = () => (
-  <svg
-    className={iconClass}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M6.5 4h9.5a2 2 0 0 1 2 2v12h-8.5a2 2 0 0 0-2 2V6a2 2 0 0 1 1-1.732" />
-    <path d="M7.5 4.5a2 2 0 0 0-2 2V22" />
-  </svg>
-);
-
-const SummaryCard = ({
-  title,
-  summary,
-  fullText,
-  expanded,
-  timestamp,
-  onToggle,
-  highlights,
-  editable = false,
-  onSave,
-  autoSaveDelay = 5000,
-  placeholder,
-  statusLabel,
-  localize,
-}: {
-  title: string;
-  summary?: string | null;
-  fullText?: string | null;
-  expanded: boolean;
-  timestamp?: string | null;
-  onToggle: (expanded: boolean) => void;
-  highlights?: ProofreadHighlightSegment[];
-  editable?: boolean;
-  onSave?: (nextValue: string) => Promise<void>;
-  autoSaveDelay?: number;
-  placeholder?: string;
-  statusLabel?: string;
-  localize?: LocalizeFn;
-}) => {
-  const baseText = fullText ?? summary ?? "";
-  const [draft, setDraft] = useState(baseText);
-  const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<
-    "idle" | "dirty" | "saving" | "saved" | "error"
-  >("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const isMountedRef = useRef(true);
-
-  const translateText = (
-    key: string,
-    fallback: string,
-    params?: Record<string, string | number>,
-  ) => (localize ? localize(key, fallback, params) : applyParams(fallback, params));
-
-  useEffect(
-    () => () => {
-      isMountedRef.current = false;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!dirty) {
-      setDraft(baseText);
-      setStatus("idle");
-      setErrorMessage(null);
-    }
-  }, [baseText, dirty]);
-
-  useEffect(() => {
-    if (status === "saved") {
-      const id = window.setTimeout(() => {
-        if (isMountedRef.current) {
-          setStatus("idle");
-        }
-      }, 1500);
-      return () => window.clearTimeout(id);
-    }
-  }, [status]);
-
-  const clearTimer = () => {
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-  };
-
-  const flushSave = useCallback(async () => {
-    if (!editable || !onSave || !dirty) return;
-    clearTimer();
-    setStatus("saving");
-    try {
-      await onSave(draft);
-      if (!isMountedRef.current) return;
-      setStatus("saved");
-      setErrorMessage(null);
-      setDirty(false);
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      setStatus("error");
-      setErrorMessage(
-        err instanceof Error && err.message
-          ? err.message
-          : translateText(
-              "rightpanel_summarycard_error",
-              "Failed to save.",
-            ),
-      );
-    }
-  }, [editable, onSave, dirty, draft]);
-
-  const flushSaveRef = useRef(flushSave);
-
-  useEffect(() => {
-    flushSaveRef.current = flushSave;
-  }, [flushSave]);
-
-  useEffect(
-    () => () => {
-      void flushSaveRef.current?.();
-      clearTimer();
-    },
-    [],
-  );
-
-  const scheduleSave = useCallback(() => {
-    if (!editable || !onSave) return;
-    clearTimer();
-    saveTimerRef.current = window.setTimeout(() => {
-      void flushSave();
-    }, autoSaveDelay);
-  }, [editable, onSave, autoSaveDelay, flushSave]);
-
-  const handleChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) => {
-      setDraft(event.target.value);
-      setDirty(true);
-      setStatus("dirty");
-      setErrorMessage(null);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
-
-  const handleBlur = useCallback(() => {
-    void flushSave();
-  }, [flushSave]);
-
-  const handleFocus = useCallback(() => {
-    if (!expanded) {
-      onToggle(true);
-    }
-  }, [expanded, onToggle]);
-
-  const displayText = expanded ? draft : draft.slice(0, 400);
-  const truncated = !expanded && draft.length > 400;
-
-  const renderWithHighlights = (value: string) => {
-    if (!highlights?.length) {
-      return <>{value}</>;
-    }
-    const segments = [...highlights]
-      .filter((segment) => segment.start < value.length && segment.end > 0)
-      .sort((a, b) => a.start - b.start);
-    const nodes: ReactNode[] = [];
-    let cursor = 0;
-    segments.forEach((segment, index) => {
-      const clampedStart = Math.max(segment.start, 0);
-      const clampedEnd = Math.min(segment.end, value.length);
-      if (clampedStart > cursor) {
-        nodes.push(
-          <span key={`plain-${index}-${cursor}`}>
-            {value.slice(cursor, clampedStart)}
-          </span>,
-        );
-      }
-      nodes.push(
-        <span
-          key={`hl-${index}-${segment.start}`}
-          className={`${segment.colorClass} rounded px-0.5`}
-          title={segment.tooltip}
-        >
-          {value.slice(clampedStart, clampedEnd)}
-        </span>,
-      );
-      cursor = clampedEnd;
-    });
-    if (cursor < value.length) {
-      nodes.push(<span key={`tail-${cursor}`}>{value.slice(cursor)}</span>);
-    }
-    return nodes;
-  };
-
-  const handleHeaderClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isEventFromInteractive(event.target)) {
-      return;
-    }
-    onToggle(!expanded);
-  };
-
-  const handleHeaderKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (isEventFromInteractive(event.target)) {
-      return;
-    }
-    handleKeyboardToggle(event, () => onToggle(!expanded));
-  };
-
-  const containerClass = expanded
-    ? "flex h-full flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm"
-    : "flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm";
-  const bodyClass = expanded
-    ? "flex-1 overflow-y-auto whitespace-pre-wrap text-slate-700"
-    : "max-h-80 overflow-y-auto whitespace-pre-wrap text-slate-700";
-  const timestampLabel = timestamp ? new Date(timestamp).toLocaleString() : null;
-  const collapseLabel = translateText(
-    "rightpanel_summarycard_action_collapse",
-    "Collapse {{title}}",
-    { title },
-  );
-  const expandLabel = translateText(
-    "rightpanel_summarycard_action_expand",
-    "Expand {{title}}",
-    { title },
-  );
-  const emptyText = placeholder
-    ? placeholder
-    : translateText(
-        "rightpanel_summarycard_empty",
-        "{{title}} content is not available yet.",
-        { title },
-      );
-
-  return (
-    <div className={containerClass}>
-      <header className="flex items-start justify-between gap-3">
-        <div
-          className="flex flex-1 cursor-pointer flex-col gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-          role="button"
-          tabIndex={0}
-          aria-expanded={expanded}
-          onClick={handleHeaderClick}
-          onKeyDown={handleHeaderKeyDown}
-        >
-          <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
-          {statusLabel ? (
-            <p className="text-xs text-slate-500">{statusLabel}</p>
-          ) : null}
-          {timestampLabel ? (
-            <p className="text-xs text-slate-400">
-              {translateText(
-                "rightpanel_summarycard_updated",
-                "Updated: {{timestamp}}",
-                { timestamp: timestampLabel },
-              )}
-            </p>
-          ) : null}
-        </div>
-        <button
-          className="flex items-center justify-center rounded px-2 py-1 text-slate-600 transition hover:text-slate-800 focus:outline-none"
-          onClick={() => onToggle(!expanded)}
-          aria-label={expanded ? collapseLabel : expandLabel}
-          title={expanded ? collapseLabel : expandLabel}
-          data-collapsible-ignore
-        >
-          {expanded ? <OpenBookIcon /> : <ClosedBookIcon />}
-        </button>
-      </header>
-      <div className={`${bodyClass} relative`}>
-        <div className="pointer-events-none whitespace-pre-wrap text-slate-800">
-          {draft ? (
-            renderWithHighlights(displayText)
-          ) : (
-            <span className="text-slate-400">
-              {emptyText}
-            </span>
-          )}
-          {draft && !expanded && truncated && "…"}
-        </div>
-        {editable ? (
-          <textarea
-            className="absolute inset-0 h-full w-full resize-none border-none bg-transparent text-transparent caret-slate-800 focus:outline-none"
-            value={draft}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            onFocus={handleFocus}
-            placeholder={placeholder ?? emptyText}
-            spellCheck={false}
-            style={{ color: "transparent" }}
-          />
-        ) : null}
-      </div>
-      {editable && (
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>
-            {status === "saving" &&
-              translateText(
-                "rightpanel_summarycard_status_saving",
-                "Saving…",
-              )}
-            {status === "saved" &&
-              translateText(
-                "rightpanel_summarycard_status_saved",
-                "Saved.",
-              )}
-            {status === "dirty" &&
-              translateText(
-                "rightpanel_summarycard_status_dirty",
-                "Changes are queued for auto-save.",
-              )}
-            {status === "error" &&
-              (errorMessage ??
-                translateText(
-                  "rightpanel_summarycard_error",
-                  "Failed to save.",
-                ))}
-          </span>
-          {dirty && status !== "saving" && status !== "error" && (
-            <span>
-              {translateText(
-                "rightpanel_summarycard_autosave_hint",
-                "Auto-save scheduled",
-              )}
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 interface UserMenuProps {
   avatarInitial: string | null;
   avatarTone: string;
@@ -874,49 +508,6 @@ const UserMenu = ({
   );
 };
 
-const TranslationSummaryCard = ({
-  projectKey,
-  timestamp,
-  expanded,
-  onToggle,
-  onSave,
-  localize,
-}: {
-  projectKey: string;
-  timestamp?: string | null;
-  expanded: boolean;
-  onToggle: (expanded: boolean) => void;
-  onSave: (nextValue: string) => Promise<void>;
-  localize: LocalizeFn;
-}) => {
-  const { translationText, highlights } = useProofreadIssues();
-  const titleLabel = localize(
-    "rightpanel_preview_translation_card_title",
-    "Translation",
-  );
-  const placeholderLabel = localize(
-    "rightpanel_preview_translation_card_placeholder",
-    "Enter the translated text.",
-  );
-  return (
-    <SummaryCard
-      key={`translation-${projectKey}`}
-      title={titleLabel}
-      summary={translationText.slice(0, 400)}
-      fullText={translationText}
-      timestamp={timestamp ?? null}
-      expanded={expanded}
-      onToggle={onToggle}
-      editable
-      onSave={onSave}
-      autoSaveDelay={5000}
-      placeholder={placeholderLabel}
-      highlights={highlights}
-      localize={localize}
-    />
-  );
-};
-
 export const RightPanel = ({
   content,
   isContentLoading,
@@ -931,8 +522,6 @@ export const RightPanel = ({
   const extraTab = useUIStore((state) => state.extraTab);
   const openExtraTab = useUIStore((state) => state.openExtraTab);
   const clearExtraTab = useUIStore((state) => state.clearExtraTab);
-  const previewExpanded = useUIStore((state) => state.previewExpanded);
-  const setPreviewExpanded = useUIStore((state) => state.setPreviewExpanded);
   const qualityDialogOpen = useUIStore((state) => state.qualityDialogOpen);
   const closeQualityDialog = useUIStore((state) => state.closeQualityDialog);
   const advancedProofreadEnabled = useUIStore(
@@ -1165,15 +754,6 @@ export const RightPanel = ({
       return legacy.original_filename;
     }
     return undefined;
-  }, [content]);
-
-  const translationJobId = useMemo(() => {
-    const translationMeta = content?.content?.translation;
-    if (translationMeta?.jobId) return translationMeta.jobId;
-    if ((translationMeta as { job_id?: string | null } | undefined)?.job_id) {
-      return (translationMeta as { job_id?: string | null }).job_id ?? null;
-    }
-    return content?.latestJob?.jobId ?? null;
   }, [content]);
 
   const handleReanalyzeOrigin = useCallback(async () => {
@@ -1798,73 +1378,6 @@ export const RightPanel = ({
     }
   }, [serverProofreadingStage, handleRefreshContent]);
 
-  const handleSaveOrigin = useCallback(
-    async (nextValue: string) => {
-      if (!token || !activeProjectId) {
-        throw new Error("로그인 상태를 확인해 주세요.");
-      }
-      const response = await api.saveOrigin(token, activeProjectId, {
-        content: nextValue,
-        filename: originFilename,
-      });
-      queryClient.setQueryData<ProjectContent | null>(
-        projectKeys.content(activeProjectId),
-        (previous) => {
-          if (!previous) return previous;
-          const originPayload =
-            (response as { origin?: { content?: string; updated_at?: string; filename?: string | null } }).origin ??
-            null;
-          const updatedContent = originPayload?.content ?? nextValue;
-          const updatedTimestamp =
-            originPayload?.updated_at ?? new Date().toISOString();
-          const updatedFilename = originPayload?.filename ?? null;
-
-          const previousContent = previous.content ?? {};
-          const nextContent = {
-            ...previousContent,
-            origin: {
-              ...(previousContent.origin ?? {}),
-              content: updatedContent,
-              timestamp: updatedTimestamp,
-              filename:
-                updatedFilename ?? previousContent.origin?.filename ?? null,
-            },
-          };
-
-          return {
-            ...previous,
-            content: nextContent,
-          } as ProjectContent;
-        },
-      );
-      await handleRefreshContent();
-    },
-    [
-      token,
-      activeProjectId,
-      originFilename,
-      handleRefreshContent,
-      queryClient,
-    ],
-  );
-
-  const handleSaveTranslation = useCallback(
-    async (nextValue: string) => {
-      if (!token || !activeProjectId) {
-        throw new Error("로그인 상태를 확인해 주세요.");
-      }
-      if (!nextValue.trim().length) {
-        return;
-      }
-      await api.saveTranslation(token, activeProjectId, {
-        content: nextValue,
-        jobId: translationJobId ?? undefined,
-      });
-      await handleRefreshContent();
-    },
-    [token, activeProjectId, translationJobId, handleRefreshContent],
-  );
-
   const handleSaveTranslationNotes = useCallback(
     async (nextNotes: DocumentProfileSummary["translationNotes"] | null) => {
       if (!token || !activeProjectId) {
@@ -2215,44 +1728,6 @@ export const RightPanel = ({
                   originHeaderAccessory={originSummaryAccessory}
                   translationHeaderAccessory={translationSummaryAccessory}
                 />
-                <div className="grid gap-4 md:grid-cols-2">
-                  <SummaryCard
-                    key={`origin-${content?.projectId ?? activeProjectId ?? "unknown"}`}
-                    title={localize(
-                      "rightpanel_preview_origin_card_title",
-                      "Origin",
-                    )}
-                    summary={
-                      content?.content?.origin?.content?.slice(0, 400) ?? ""
-                    }
-                    fullText={content?.content?.origin?.content ?? ""}
-                    timestamp={content?.content?.origin?.timestamp ?? null}
-                    expanded={previewExpanded.origin}
-                    onToggle={(expanded) =>
-                      setPreviewExpanded("origin", expanded)
-                    }
-                    editable
-                    onSave={handleSaveOrigin}
-                    autoSaveDelay={5000}
-                    placeholder={localize(
-                      "rightpanel_preview_origin_card_placeholder",
-                      "Enter the manuscript text.",
-                    )}
-                    localize={localize}
-                  />
-                  <TranslationSummaryCard
-                    projectKey={
-                      content?.projectId ?? activeProjectId ?? "unknown"
-                    }
-                    timestamp={content?.content?.translation?.timestamp ?? null}
-                    expanded={previewExpanded.translation}
-                    onToggle={(expanded) =>
-                      setPreviewExpanded("translation", expanded)
-                    }
-                    onSave={handleSaveTranslation}
-                    localize={localize}
-                  />
-                </div>
               </div>
             </div>
           )}

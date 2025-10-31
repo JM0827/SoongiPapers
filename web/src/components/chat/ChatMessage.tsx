@@ -221,7 +221,7 @@ export const ChatMessage = ({
               <ActionBadge
                 key={`${action.type}-${idx}`}
                 label={getActionLabel(action, localize)}
-                description={action.reason}
+                description={action.reason ?? undefined}
                 tone={getActionTone(action)}
                 onClick={onAction ? () => onAction(action) : undefined}
               />

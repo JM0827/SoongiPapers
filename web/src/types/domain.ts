@@ -895,8 +895,6 @@ export interface ProjectContextSnapshotPayload {
   };
   ui: {
     rightPanelTab: string;
-    originExpanded: boolean;
-    translationExpanded: boolean;
   };
   jobs: {
     status: string | null;

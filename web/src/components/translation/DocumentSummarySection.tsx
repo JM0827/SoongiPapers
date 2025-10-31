@@ -325,14 +325,7 @@ export const DocumentSummaryCard = ({
           <p className="mt-4 text-sm text-slate-500">
             {localize('rightpanel_summary_loading', 'Fetching analysis…')}
           </p>
-        ) : (
-          <p className="mt-4 text-sm text-slate-500">
-            {localize(
-              'rightpanel_summary_generation_hint',
-              'A summary will be generated once the text is saved.',
-            )}
-          </p>
-        ))}
+        ) : null)}
     </section>
   );
 };
