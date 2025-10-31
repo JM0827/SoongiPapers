@@ -47,8 +47,6 @@ const buildSnapshot = (params: {
   jobs: ReturnType<typeof useProjectJobs>["data"];
   uiState: {
     rightPanelTab: string;
-    originExpanded: boolean;
-    translationExpanded: boolean;
   };
 }): ProjectContextSnapshot => {
   const { projectId, projectTitle, projectTargetLang, content, jobs, uiState } =
@@ -359,10 +357,6 @@ export const useProjectContext = () => {
     (state) => state.setActiveProjectName,
   );
   const rightPanelTab = useUIStore((state) => state.rightPanelTab);
-  const originExpanded = useUIStore((state) => state.previewExpanded.origin);
-  const translationExpanded = useUIStore(
-    (state) => state.previewExpanded.translation,
-  );
   const queryClient = useQueryClient();
 
   const projectSummary = useMemo(
@@ -401,8 +395,6 @@ export const useProjectContext = () => {
         jobs: [],
         uiState: {
           rightPanelTab,
-          originExpanded,
-          translationExpanded,
         },
       });
     }
@@ -415,8 +407,6 @@ export const useProjectContext = () => {
       jobs: jobs ?? [],
       uiState: {
         rightPanelTab,
-        originExpanded,
-        translationExpanded,
       },
     });
   }, [
@@ -426,8 +416,6 @@ export const useProjectContext = () => {
     normalizedContent,
     jobs,
     rightPanelTab,
-    originExpanded,
-    translationExpanded,
   ]);
 
   const refreshContent = useCallback(async () => {

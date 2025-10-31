@@ -963,11 +963,9 @@ export const LeftSidebar = () => {
         translationRunning,
       status: originAnalysisRunning
         ? "running"
-        : translationRunning
-          ? "running"
-          : originReady
-            ? "done"
-            : "default",
+        : originReady
+          ? "done"
+          : "default",
       onClick: async () => {
         if (
           !chatExecutorReady ||

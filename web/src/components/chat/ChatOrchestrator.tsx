@@ -233,7 +233,6 @@ export const ChatOrchestrator = ({
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const setTab = useUIStore((state) => state.setRightPanelTab);
   const triggerQualityDialog = useUIStore((state) => state.openQualityDialog);
-  const setPreviewExpanded = useUIStore((state) => state.setPreviewExpanded);
   const isSidebarCollapsed = useUIStore((state) => state.isSidebarCollapsed);
   const leftPanelWidth = useUIStore((state) => state.leftPanelWidth);
   const rightPanelWidth = useUIStore((state) => state.rightPanelWidth);
@@ -2161,14 +2160,14 @@ export const ChatOrchestrator = ({
           if (snapshot.originPrep) {
             return `Origin text is saved${filename} and last updated ${updatedAt}; prep checklist is complete.`;
           }
-          return `Origin text is saved${filename} and last updated ${updatedAt}; it is ${snapshot.ui.originExpanded ? "already open" : "available"} in the preview panel.`;
+          return `Origin text is saved${filename} and last updated ${updatedAt}; the full content can be opened from the preview summary when needed.`;
         })()
       : "Origin text has not been provided yet; invite the user to upload or paste it.";
 
     const translationLifecycle = snapshot.lifecycle.translation;
     const translationDetails = (() => {
       if (snapshot.translation.hasContent) {
-        return `Translation output exists (stage: ${stageLabel(translationLifecycle.stage)}) and was last updated ${snapshot.translation.lastUpdatedAt ?? translationLifecycle.lastUpdatedAt ?? "at an unknown time"}; it is ${snapshot.ui.translationExpanded ? "expanded" : "collapsed"} in the preview.`;
+        return `Translation output exists (stage: ${stageLabel(translationLifecycle.stage)}) and was last updated ${snapshot.translation.lastUpdatedAt ?? translationLifecycle.lastUpdatedAt ?? "at an unknown time"}; the full content can be opened from the preview summary when needed.`;
       }
       if (translationLifecycle.stage === "translating") {
         const progress =
@@ -2276,22 +2275,11 @@ export const ChatOrchestrator = ({
               `현재 ${snapshot.ui.rightPanelTab} 탭이 열려 있어 미리보기로 전환하면`,
               { tab: snapshot.ui.rightPanelTab },
             );
-      if (section === "origin") {
-        return snapshot.ui.originExpanded
-          ? localize(
-              "chat_origin_view_open",
-              "우측 미리보기 탭에서 원작 섹션을 이미 펼쳐두었습니다.",
-            )
-          : localize(
-              "chat_origin_view_hint",
-              `${tabLabel} 원작 섹션을 확인할 수 있습니다.`,
-              { tabLabel },
-            );
-      }
-      return snapshot.ui.translationExpanded
+      return section === "origin"
         ? localize(
-            "chat_translation_view_open",
-            "우측 미리보기 탭에서 번역본 섹션을 펼쳐두었습니다.",
+            "chat_origin_view_hint",
+            `${tabLabel} 원작 섹션을 확인할 수 있습니다.`,
+            { tabLabel },
           )
         : localize(
             "chat_translation_view_hint",
@@ -2299,7 +2287,7 @@ export const ChatOrchestrator = ({
             { tabLabel },
           );
     },
-    [snapshot, localize],
+    [snapshot.ui.rightPanelTab, localize],
   );
 
   const handleLocalQuestion = useCallback(
@@ -2346,17 +2334,21 @@ export const ChatOrchestrator = ({
         /open\s+origin|show\s+origin/.test(normalized);
       if (directOriginCommand) {
         setTab("preview");
-        setPreviewExpanded("origin", true);
+        const previewHint = localize(
+          "chat_preview_modal_hint",
+          "요약 카드 옆의 문서 아이콘을 눌러 전문을 확인할 수 있습니다.",
+        );
         if (snapshot.origin.hasContent) {
           const timestamp = snapshot.origin.lastUpdatedAt
             ? new Date(snapshot.origin.lastUpdatedAt).toLocaleString()
             : localize("chat_timestamp_unknown", "시간 정보 없음");
+          const baseMessage = localize(
+            "chat_origin_ready_message",
+            `${describeLocation("origin")} (최근 업데이트: ${timestamp})`,
+            { description: describeLocation("origin"), timestamp },
+          );
           pushAssistant(
-            localize(
-              "chat_origin_ready_message",
-              `${describeLocation("origin")} (최근 업데이트: ${timestamp})`,
-              { description: describeLocation("origin"), timestamp },
-            ),
+            `${baseMessage}\n${previewHint}`,
             {
               label: "Origin ready",
               tone: "success",
@@ -2389,17 +2381,21 @@ export const ChatOrchestrator = ({
         /open\s+translation|show\s+translation/.test(normalized);
       if (directTranslationCommand) {
         setTab("preview");
-        setPreviewExpanded("translation", true);
+        const previewHint = localize(
+          "chat_preview_modal_hint",
+          "요약 카드 옆의 문서 아이콘을 눌러 전문을 확인할 수 있습니다.",
+        );
         if (snapshot.translation.hasContent) {
           const timestamp = snapshot.translation.lastUpdatedAt
             ? new Date(snapshot.translation.lastUpdatedAt).toLocaleString()
             : localize("chat_timestamp_unknown", "시간 정보 없음");
+          const baseMessage = localize(
+            "chat_translation_ready_message",
+            `${describeLocation("translation")} (최근 업데이트: ${timestamp})`,
+            { description: describeLocation("translation"), timestamp },
+          );
           pushAssistant(
-            localize(
-              "chat_translation_ready_message",
-              `${describeLocation("translation")} (최근 업데이트: ${timestamp})`,
-              { description: describeLocation("translation"), timestamp },
-            ),
+            `${baseMessage}\n${previewHint}`,
             {
               label: "Translation ready",
               tone: "success",
@@ -2449,7 +2445,6 @@ export const ChatOrchestrator = ({
       snapshot,
       pushAssistant,
       setTab,
-      setPreviewExpanded,
       describeLocation,
       localize,
     ],
@@ -2578,7 +2573,6 @@ export const ChatOrchestrator = ({
               tone: "default",
             });
             setTab("preview");
-            setPreviewExpanded("origin", true);
             return;
           }
           await startTranslation({
@@ -2629,19 +2623,29 @@ export const ChatOrchestrator = ({
         case "createProject":
           await handleCreateProject();
           return;
-        case "viewTranslatedText":
+        case "viewTranslatedText": {
           setTab("preview");
-          setPreviewExpanded("translation", true);
-          pushAssistant(
+          const previewHint = localize(
+            "chat_preview_modal_hint",
+            "요약 카드 옆의 문서 아이콘을 눌러 전문을 확인할 수 있습니다.",
+          );
+          const baseMessage = localize(
             proofreadingState.status === "running"
-              ? "번역본을 우측 패널에서 열어두었습니다. 교정 결과가 적용되면 바로 반영됩니다."
-              : "번역본을 우측 패널에서 확인할 수 있도록 열어두었습니다.",
+              ? "chat_translation_preview_running"
+              : "chat_translation_preview_ready",
+            proofreadingState.status === "running"
+              ? "The translation is available in the preview tab, and changes from proofreading will apply automatically when they finish."
+              : "The translation is available in the preview tab.",
+          );
+          pushAssistant(
+            `${baseMessage}\n${previewHint}`,
             {
               label: "Translation preview",
               tone: "success",
             },
           );
           return;
+        }
         case "viewTranslationStatus": {
           if (translationState.status === "running") {
             const { progressCompleted, progressTotal, lastMessage } =
@@ -2837,7 +2841,6 @@ export const ChatOrchestrator = ({
       pushAssistant,
       setTab,
       triggerQualityDialog,
-      setPreviewExpanded,
       handleCreateProject,
       hasOrigin,
       openFileDialog,
