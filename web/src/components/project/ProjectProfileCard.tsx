@@ -7,20 +7,44 @@ import {
   type ChangeEvent,
   type JSX,
 } from "react";
-import { AlertCircle, CheckCircle2, Circle, Loader2 } from "lucide-react";
+import clsx from "clsx";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { useAuthStore } from "../../store/auth.store";
 import { useProjectStore } from "../../store/project.store";
 import { api } from "../../services/api";
-import type { ProjectContent } from "../../types/domain";
+import type { ProjectContent, ProjectSummary } from "../../types/domain";
 import { translate } from "../../lib/locale";
 import { useUILocale } from "../../hooks/useUILocale";
 
+interface UserConsentRecord {
+  consented?: boolean;
+  status?: string;
+  statusKo?: string;
+  statusEn?: string;
+  consentedAt?: string | null;
+  userName?: string | null;
+  originTitle?: string | null;
+  translatedTitle?: string | null;
+  authorName?: string | null;
+  translatorName?: string | null;
+  version?: number;
+  [key: string]: unknown;
+}
+
+interface ProfileStatusSnapshot {
+  consent: boolean;
+  requiredFilled: boolean;
+  complete: boolean;
+}
+
 interface ProjectProfileCardProps {
   content?: ProjectContent | null;
+  projectSummary?: ProjectSummary | null;
   onUpdated?: () => void;
   onActionReady?: (
     controls: { isEditing: boolean; startEdit: () => void } | null,
   ) => void;
+  onStatusChange?: (status: ProfileStatusSnapshot) => void;
   requireAuthor?: boolean;
 }
 
@@ -31,52 +55,147 @@ interface ProfileDraft {
   translatorName: string;
   originalAuthorNotes: string;
   translatorNotes: string;
+  copyrightConsent: boolean;
+  consentRecord: UserConsentRecord;
 }
 
-const deriveDraft = (content?: ProjectContent | null): ProfileDraft => {
-  const profile = content?.projectProfile;
-  const rawMeta = profile?.meta;
-  const meta =
-    typeof rawMeta === "string"
-      ? (() => {
-          try {
-            return JSON.parse(rawMeta) as Record<string, unknown>;
-          } catch {
-            return {} as Record<string, unknown>;
-          }
-        })()
-      : (rawMeta as Record<string, unknown> | null | undefined) ?? {};
+const AUTO_SAVE_DELAY_MS = 1200;
+
+const coerceMetaString = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+const parseMeta = (meta: unknown): Record<string, unknown> => {
+  if (!meta) return {};
+  if (typeof meta === "string") {
+    try {
+      const parsed = JSON.parse(meta);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch (error) {
+      console.warn("[profile-card] failed to parse meta", error);
+      return {};
+    }
+  }
+  if (typeof meta === "object") {
+    return { ...(meta as Record<string, unknown>) };
+  }
+  return {};
+};
+
+const parseUserConsent = (value: unknown): UserConsentRecord => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch (error) {
+      console.warn("[profile-card] failed to parse user consent", error);
+      return {};
+    }
+  }
+  if (typeof value === "object") {
+    return { ...(value as Record<string, unknown>) } as UserConsentRecord;
+  }
+  return {};
+};
+
+const deriveConsentFlag = (record: UserConsentRecord): boolean => {
+  if (!record) return false;
+  if (record.consented === true) return true;
+  const statusTokens = new Set([
+    "동의",
+    "동의함",
+    "consented",
+    "consent",
+    "received",
+    "yes",
+    "granted",
+  ]);
+  const statusRaw = coerceMetaString(record.status);
+  const statusKoRaw = coerceMetaString(record.statusKo);
+  const statusEnRaw = coerceMetaString(record.statusEn);
+  const normalized = statusRaw.replace(/\s+/g, "").toLowerCase();
+  const normalizedKo = statusKoRaw.replace(/\s+/g, "").toLowerCase();
+  const normalizedEn = statusEnRaw.replace(/\s+/g, "").toLowerCase();
+  return (
+    statusTokens.has(normalized) ||
+    statusTokens.has(normalizedKo) ||
+    statusTokens.has(normalizedEn)
+  );
+};
+
+const pickFirstText = (...values: Array<unknown>): string => {
+  for (const value of values) {
+    const text = coerceMetaString(value);
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  return "";
+};
+
+const deriveDraft = (
+  content: ProjectContent | null | undefined,
+  summary: ProjectSummary | null | undefined,
+  fallbackTranslator: string,
+): ProfileDraft => {
+  const profile = content?.projectProfile ?? null;
+  const profileMeta = parseMeta(profile?.meta);
+  const summaryMeta = parseMeta(summary?.meta);
+  const consentRecord = parseUserConsent(summary?.user_consent ?? null);
+
+  const bookTitleKo = pickFirstText(
+    profile?.bookTitle,
+    profile?.title,
+    summary?.book_title,
+    summary?.title,
+  );
+  const authorNameKo = pickFirstText(
+    profile?.authorName,
+    profileMeta.author,
+    summary?.author_name,
+    summaryMeta.author,
+  );
+  const bookTitleEn = pickFirstText(
+    profileMeta.bookTitleEn,
+    summaryMeta.bookTitleEn,
+    summaryMeta.book_title_en,
+  );
+  const translatorName = pickFirstText(
+    profile?.translatorName,
+    profileMeta.translator,
+    summary?.translator_name,
+    fallbackTranslator,
+  );
+  const originalAuthorNotes = pickFirstText(
+    profileMeta.originalAuthorNotes,
+    profileMeta.context,
+    summaryMeta.originalAuthorNotes,
+    summaryMeta.context,
+    profile?.description,
+    profile?.intention,
+    summary?.description,
+    summary?.intention,
+  );
+  const translatorNotes = pickFirstText(
+    profileMeta.translatorNotes,
+    summaryMeta.translatorNotes,
+    profile?.memo,
+    summaryMeta.notes,
+  );
+
   return {
-    bookTitleKo: (profile?.bookTitle ?? profile?.title ?? "").trim(),
-    authorNameKo:
-      (profile?.authorName as string | null | undefined)?.trim() ??
-      (meta.author as string | null | undefined)?.trim() ??
-      "",
-    bookTitleEn:
-      (meta.bookTitleEn as string | null | undefined)?.trim() ??
-      (meta.book_title_en as string | null | undefined)?.trim() ??
-      "",
-    translatorName:
-      (profile?.translatorName as string | null | undefined)?.trim() ??
-      (meta.translator as string | null | undefined)?.trim() ??
-      "",
-    originalAuthorNotes:
-      (meta.originalAuthorNotes as string | null | undefined)?.trim() ??
-      (meta.context as string | null | undefined)?.trim() ??
-      profile?.intention ??
-      profile?.description ??
-      "",
-    translatorNotes:
-      (meta.translatorNotes as string | null | undefined)?.trim() ??
-      (profile?.memo ?? "").trim(),
+    bookTitleKo,
+    authorNameKo,
+    bookTitleEn,
+    translatorName,
+    originalAuthorNotes,
+    translatorNotes,
+    copyrightConsent: deriveConsentFlag(consentRecord),
+    consentRecord,
   };
 };
 
-const buildMemoFromDraft = (draft: ProfileDraft) => {
-  return draft.translatorNotes.trim();
-};
-
-const AUTO_SAVE_DELAY_MS = 1200;
+const buildMemoFromDraft = (draft: ProfileDraft) => draft.translatorNotes.trim();
 
 const sanitizeDraft = (draft: ProfileDraft): ProfileDraft => ({
   bookTitleKo: draft.bookTitleKo.trim(),
@@ -85,20 +204,139 @@ const sanitizeDraft = (draft: ProfileDraft): ProfileDraft => ({
   translatorName: draft.translatorName.trim(),
   originalAuthorNotes: draft.originalAuthorNotes.trim(),
   translatorNotes: draft.translatorNotes.trim(),
+  copyrightConsent: Boolean(draft.copyrightConsent),
+  consentRecord:
+    typeof draft.consentRecord === "object" && draft.consentRecord !== null
+      ? { ...draft.consentRecord }
+      : {},
 });
 
-const draftsMatch = (left: ProfileDraft, right: ProfileDraft) =>
-  JSON.stringify(sanitizeDraft(left)) === JSON.stringify(sanitizeDraft(right));
+const computeStatusSnapshot = (draft: ProfileDraft): ProfileStatusSnapshot => {
+  const sanitized = sanitizeDraft(draft);
+  const requiredFilled = (
+    sanitized.bookTitleKo.length > 0 &&
+    sanitized.bookTitleEn.length > 0 &&
+    sanitized.authorNameKo.length > 0 &&
+    sanitized.translatorName.length > 0
+  );
+  return {
+    consent: sanitized.copyrightConsent,
+    requiredFilled,
+    complete: requiredFilled && sanitized.copyrightConsent,
+  };
+};
+
+const draftsMatch = (left: ProfileDraft, right: ProfileDraft) => {
+  const sanitizedLeft = sanitizeDraft(left);
+  const sanitizedRight = sanitizeDraft(right);
+  const { consentRecord: leftConsent, ...restLeft } = sanitizedLeft;
+  const { consentRecord: rightConsent, ...restRight } = sanitizedRight;
+  return (
+    JSON.stringify(restLeft) === JSON.stringify(restRight) &&
+    JSON.stringify(leftConsent ?? {}) === JSON.stringify(rightConsent ?? {})
+  );
+};
+
+const composeUpdatedMeta = (
+  sanitized: ProfileDraft,
+  baseMeta: Record<string, unknown>,
+  translatorValue: string | null,
+): Record<string, unknown> => {
+  const next = { ...baseMeta };
+  next.author = sanitized.authorNameKo || null;
+  next.translator = translatorValue || null;
+  next.bookTitleEn = sanitized.bookTitleEn || null;
+  next.originalAuthorNotes = sanitized.originalAuthorNotes || null;
+  next.translatorNotes = sanitized.translatorNotes || null;
+  next.context = sanitized.originalAuthorNotes || null;
+  next.notes = sanitized.translatorNotes || null;
+  if (!Object.prototype.hasOwnProperty.call(next, "translationDirection")) {
+    next.translationDirection = null;
+  }
+  return next;
+};
+
+const buildUserConsentRecord = (params: {
+  consented: boolean;
+  draft: ProfileDraft;
+  userName: string | null;
+  previous: UserConsentRecord;
+}): UserConsentRecord => {
+  const { consented, draft, userName, previous } = params;
+
+  const historical = {
+    ...(previous ?? {}),
+    ...(draft.consentRecord ?? {}),
+  } as UserConsentRecord;
+
+  const version =
+    typeof historical.version === "number" && Number.isFinite(historical.version)
+      ? historical.version
+      : 1;
+
+  const base: UserConsentRecord = {
+    version,
+    userName:
+      userName ??
+      (typeof historical.userName === "string" ? historical.userName : null),
+    originTitle:
+      draft.bookTitleKo ||
+      (typeof historical.originTitle === "string" ? historical.originTitle : null),
+    translatedTitle:
+      draft.bookTitleEn ||
+      (typeof historical.translatedTitle === "string"
+        ? historical.translatedTitle
+        : null),
+    authorName:
+      draft.authorNameKo ||
+      (typeof historical.authorName === "string" ? historical.authorName : null),
+    translatorName:
+      draft.translatorName ||
+      (typeof historical.translatorName === "string"
+        ? historical.translatorName
+        : null),
+  };
+
+  if (consented) {
+    const existingConsentTimestamp =
+      historical.consented === true && typeof historical.consentedAt === "string"
+        ? historical.consentedAt
+        : null;
+    return {
+      ...base,
+      consented: true,
+      status: "동의",
+      statusKo: "동의",
+      statusEn: "received",
+      consentedAt: existingConsentTimestamp ?? new Date().toISOString(),
+    };
+  }
+
+  return {
+    ...base,
+    consented: false,
+    status: "동의 안함",
+    statusKo: "동의 안함",
+    statusEn: "not_received",
+    consentedAt: null,
+  };
+};
 
 export const ProjectProfileCard = ({
   content,
+  projectSummary,
   onUpdated,
   onActionReady,
-  requireAuthor = false,
+  onStatusChange,
+  requireAuthor = true,
 }: ProjectProfileCardProps) => {
   const { locale } = useUILocale();
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
@@ -108,14 +346,11 @@ export const ProjectProfileCard = ({
   const user = useAuthStore((state) => state.user);
   const userName = (user?.name ?? "").trim();
   const projectId = useProjectStore((state) => state.activeProjectId);
-  const [draft, setDraft] = useState<ProfileDraft>(() => {
-    const base = deriveDraft(content);
-    if (!base.translatorName && userName) {
-      return { ...base, translatorName: userName };
-    }
-    return base;
-  });
+  const [draft, setDraft] = useState<ProfileDraft>(() =>
+    deriveDraft(content ?? null, projectSummary ?? null, userName),
+  );
   const draftRef = useRef<ProfileDraft>(draft);
+  const statusSnapshotRef = useRef<ProfileStatusSnapshot | null>(null);
   const [status, setStatus] = useState<
     "idle" | "dirty" | "saving" | "saved" | "error"
   >("idle");
@@ -125,7 +360,9 @@ export const ProjectProfileCard = ({
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{
     bookTitleKo?: string;
+    bookTitleEn?: string;
     authorNameKo?: string;
+    translatorName?: string;
   }>({});
 
   useEffect(() => {
@@ -140,20 +377,31 @@ export const ProjectProfileCard = ({
   const computeValidation = useCallback(
     (snapshot: ProfileDraft) => {
       const sanitized = sanitizeDraft(snapshot);
-      const errors: { bookTitleKo?: string; authorNameKo?: string } = {};
+      const requiredMessage = localize(
+        "project_profile_error_required_field",
+        "필수 입력 항목입니다.",
+      );
+      const errors: {
+        bookTitleKo?: string;
+        bookTitleEn?: string;
+        authorNameKo?: string;
+        translatorName?: string;
+      } = {};
 
       if (!sanitized.bookTitleKo) {
-        errors.bookTitleKo = localize(
-          "project_profile_error_book_title",
-          "Please enter the original book title.",
-        );
+        errors.bookTitleKo = requiredMessage;
+      }
+
+      if (!sanitized.bookTitleEn) {
+        errors.bookTitleEn = requiredMessage;
       }
 
       if (requireAuthor && !sanitized.authorNameKo) {
-        errors.authorNameKo = localize(
-          "project_profile_error_author",
-          "Please enter the author.",
-        );
+        errors.authorNameKo = requiredMessage;
+      }
+
+      if (!sanitized.translatorName) {
+        errors.translatorName = requiredMessage;
       }
 
       return { sanitized, errors };
@@ -161,13 +409,36 @@ export const ProjectProfileCard = ({
     [localize, requireAuthor],
   );
 
-  const externalDraft = useMemo(() => {
-    const base = deriveDraft(content);
-    if (!base.translatorName && userName) {
-      return { ...base, translatorName: userName };
+  const externalDraft = useMemo(
+    () => deriveDraft(content ?? null, projectSummary ?? null, userName),
+    [content, projectSummary, userName],
+  );
+
+  const statusSnapshot = useMemo(() => computeStatusSnapshot(draft), [draft]);
+
+  useEffect(() => {
+    const previous = statusSnapshotRef.current;
+    if (!onStatusChange) {
+      statusSnapshotRef.current = statusSnapshot;
+      return;
     }
-    return base;
-  }, [content, userName]);
+    if (
+      !previous ||
+      previous.complete !== statusSnapshot.complete ||
+      previous.consent !== statusSnapshot.consent ||
+      previous.requiredFilled !== statusSnapshot.requiredFilled
+    ) {
+      onStatusChange(statusSnapshot);
+    }
+    statusSnapshotRef.current = statusSnapshot;
+  }, [statusSnapshot, onStatusChange]);
+
+  useEffect(() => {
+    setLastSavedAt(null);
+    setHasLocalChanges(false);
+    setStatus("idle");
+    setError(null);
+  }, [projectId]);
 
   useEffect(() => {
     if (hasLocalChanges) return;
@@ -228,6 +499,20 @@ export const ProjectProfileCard = ({
       const translatorValue = translatorValueRaw.trim();
       const effectiveTranslator = translatorValue.length ? translatorValue : null;
       const payloadMemo = buildMemoFromDraft(sanitized);
+      const profileMeta = parseMeta(content?.projectProfile?.meta ?? null);
+      const summaryMeta = parseMeta(projectSummary?.meta ?? null);
+      const combinedMeta = { ...summaryMeta, ...profileMeta };
+      const nextUserConsent = buildUserConsentRecord({
+        consented: sanitized.copyrightConsent,
+        draft: sanitized,
+        userName: userName.length > 0 ? userName : effectiveTranslator,
+        previous: sanitized.consentRecord ?? {},
+      });
+      const updatedMeta = composeUpdatedMeta(
+        sanitized,
+        combinedMeta,
+        effectiveTranslator,
+      );
 
       try {
         await api.updateProject(token, projectId, {
@@ -237,16 +522,8 @@ export const ProjectProfileCard = ({
           description: sanitized.originalAuthorNotes || undefined,
           intention: undefined,
           memo: payloadMemo || undefined,
-          meta: {
-            author: sanitized.authorNameKo || null,
-            translator: effectiveTranslator,
-            bookTitleEn: sanitized.bookTitleEn || null,
-            originalAuthorNotes: sanitized.originalAuthorNotes || null,
-            translatorNotes: sanitized.translatorNotes || null,
-            context: sanitized.originalAuthorNotes || null,
-            notes: sanitized.translatorNotes || null,
-            translationDirection: null,
-          },
+          meta: updatedMeta,
+          user_consent: nextUserConsent,
         });
 
         setLastSavedAt(new Date().toISOString());
@@ -256,6 +533,7 @@ export const ProjectProfileCard = ({
         const persistedDraft: ProfileDraft = {
           ...sanitized,
           translatorName: effectiveTranslator ?? "",
+          consentRecord: nextUserConsent,
         };
 
         const stillDirty = !draftsMatch(draftRef.current, persistedDraft);
@@ -273,13 +551,22 @@ export const ProjectProfileCard = ({
           err instanceof Error
             ? err.message
             : localize(
-                'project_profile_error_generic',
-                'Unable to save the project information.',
+                "project_profile_error_generic",
+                "Unable to save the project information.",
               ),
         );
       }
     },
-    [computeValidation, localize, onUpdated, projectId, token, userName],
+    [
+      computeValidation,
+      content,
+      projectSummary,
+      localize,
+      onUpdated,
+      projectId,
+      token,
+      userName,
+    ],
   );
 
   const scheduleSave = useCallback(
@@ -314,6 +601,14 @@ export const ProjectProfileCard = ({
     [scheduleSave],
   );
 
+  const handleConsentToggle = useCallback(() => {
+    const next = {
+      ...draftRef.current,
+      copyrightConsent: !draftRef.current.copyrightConsent,
+    };
+    scheduleSave(next);
+  }, [scheduleSave]);
+
   type StatusTone = "info" | "warn" | "success" | "error";
 
   const statusInfo = useMemo<
@@ -323,52 +618,99 @@ export const ProjectProfileCard = ({
       case "saving":
         return {
           icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />,
-          label: localize('project_profile_status_saving', 'Saving…'),
+          label: localize("project_profile_status_saving", "Saving…"),
           tone: "info" as const,
-        };
-      case "dirty":
-        return {
-          icon: <Circle className="h-3.5 w-3.5 text-amber-500" />,
-          label: localize(
-            "project_profile_status_dirty",
-            "Changes are waiting to be saved.",
-          ),
-          tone: "warn" as const,
-        };
-      case "saved":
-        return {
-          icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />,
-          label: lastSavedAt
-            ? localize(
-                "project_profile_status_saved_at",
-                "Last saved {{time}}",
-                { time: new Date(lastSavedAt).toLocaleTimeString() },
-              )
-            : localize("project_profile_status_saved", "Saved."),
-          tone: "success" as const,
         };
       case "error":
         return {
           icon: <AlertCircle className="h-3.5 w-3.5 text-rose-500" />,
-          label: error ?? localize('project_profile_status_error', 'Failed to save profile.'),
+          label:
+            error ??
+            localize(
+              "project_profile_status_error",
+              "Failed to save profile.",
+            ),
           tone: "error" as const,
         };
       default:
         return null;
     }
-  }, [error, lastSavedAt, localize, status]);
+  }, [error, localize, status]);
+
+  const consentLabel = localize(
+    "project_consent_label",
+    "Original copyright consent",
+  );
+  const consentStatusEnabled = localize(
+    "project_consent_received",
+    "Received",
+  );
+  const consentStatusDisabled = localize(
+    "project_consent_not_received",
+    "Not received",
+  );
+  const consentEnabled = draft.copyrightConsent;
+  const consentStatusLabel = consentEnabled
+    ? consentStatusEnabled
+    : consentStatusDisabled;
+  const savedBadgeLabel = localize(
+    "project_profile_status_saved_badge",
+    "Saved",
+  );
+  const showSavedBadge = !hasLocalChanges && Boolean(lastSavedAt);
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-4">
       {statusInfo && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
           {statusInfo.icon}
           <span>{statusInfo.label}</span>
         </div>
       )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+          <button
+            type="button"
+            onClick={handleConsentToggle}
+            className={clsx(
+              "relative h-5 w-9 rounded-full border transition-colors duration-150",
+              consentEnabled
+                ? "border-emerald-500 bg-emerald-500"
+                : "border-slate-300 bg-slate-200",
+            )}
+            aria-pressed={consentEnabled}
+            aria-label={consentLabel}
+          >
+            <span
+              className={clsx(
+                "absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-white transition-transform duration-150",
+                consentEnabled ? "translate-x-4" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span>{consentLabel}</span>
+          <span
+            className={clsx(
+              "font-semibold",
+              consentEnabled ? "text-emerald-600" : "text-slate-400",
+            )}
+          >
+            {consentStatusLabel}
+          </span>
+        </div>
+        {showSavedBadge ? (
+          <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
+            <Check className="h-3 w-3" aria-hidden="true" />
+            <span>{savedBadgeLabel}</span>
+          </span>
+        ) : null}
+      </div>
       <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_book_title', 'Original title (required)')}
+          {localize(
+            "project_profile_field_book_title",
+            "Original title (required)",
+          )}
           <input
             value={draft.bookTitleKo}
             onChange={handleFieldChange("bookTitleKo")}
@@ -378,8 +720,8 @@ export const ProjectProfileCard = ({
                 : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
             }`}
             placeholder={localize(
-              'project_profile_placeholder_book_title',
-              'e.g., Korean title',
+              "project_profile_placeholder_book_title",
+              "e.g., Korean title",
             )}
           />
           {fieldErrors.bookTitleKo ? (
@@ -389,8 +731,29 @@ export const ProjectProfileCard = ({
           ) : null}
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_author', 'Author (original)')}
-          {requireAuthor ? '*' : ''}
+          {localize("project_profile_field_book_title_en", "Translated title")}
+          <input
+            value={draft.bookTitleEn}
+            onChange={handleFieldChange("bookTitleEn")}
+            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+              fieldErrors.bookTitleEn
+                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+            }`}
+            placeholder={localize(
+              "project_profile_placeholder_book_title_en",
+              "e.g., English Title",
+            )}
+          />
+          {fieldErrors.bookTitleEn ? (
+            <span className="text-[11px] text-rose-500">
+              {fieldErrors.bookTitleEn}
+            </span>
+          ) : null}
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
+          {localize("project_profile_field_author", "Author (original)")}
+          {requireAuthor ? "*" : ""}
           <input
             value={draft.authorNameKo}
             onChange={handleFieldChange("authorNameKo")}
@@ -400,8 +763,8 @@ export const ProjectProfileCard = ({
                 : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
             }`}
             placeholder={localize(
-              'project_profile_placeholder_author',
-              'e.g., Hong Gildong',
+              "project_profile_placeholder_author",
+              "e.g., Hong Gildong",
             )}
           />
           {fieldErrors.authorNameKo ? (
@@ -411,52 +774,49 @@ export const ProjectProfileCard = ({
           ) : null}
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_book_title_en', 'Book title (English)')}
-          <input
-            value={draft.bookTitleEn}
-            onChange={handleFieldChange("bookTitleEn")}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-            placeholder={localize(
-              'project_profile_placeholder_book_title_en',
-              'e.g., English Title',
-            )}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_translator', 'Translator')}
+          {localize("project_profile_field_translator", "Translator")}
           <input
             value={draft.translatorName}
             onChange={handleFieldChange("translatorName")}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+              fieldErrors.translatorName
+                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+            }`}
             placeholder={localize(
-              'project_profile_placeholder_translator',
-              'e.g., Translator Name',
+              "project_profile_placeholder_translator",
+              "e.g., Translator Name",
             )}
           />
+          {fieldErrors.translatorName ? (
+            <span className="text-[11px] text-rose-500">
+              {fieldErrors.translatorName}
+            </span>
+          ) : null}
         </label>
       </div>
-      <div className="grid gap-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_author_notes', 'Author notes')}
+          {localize("project_profile_field_author_notes", "Author notes")}
           <textarea
             value={draft.originalAuthorNotes}
             onChange={handleFieldChange("originalAuthorNotes")}
             className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
-              'project_profile_placeholder_author_notes',
-              'Capture author intent, background, or notes for readers.',
+              "project_profile_placeholder_author_notes",
+              "Capture author intent, background, or notes for readers.",
             )}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize('project_profile_field_translator_notes', 'Translator notes')}
+          {localize("project_profile_field_translator_notes", "Translator notes")}
           <textarea
             value={draft.translatorNotes}
             onChange={handleFieldChange("translatorNotes")}
             className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
-              'project_profile_placeholder_translator_notes',
-              'Share context or reminders for the translation team.',
+              "project_profile_placeholder_translator_notes",
+              "Share context or reminders for the translation team.",
             )}
           />
         </label>
@@ -465,8 +825,8 @@ export const ProjectProfileCard = ({
         <p className="text-xs text-rose-500">
           {error ??
             localize(
-              'project_profile_error_generic',
-              'Unable to save the project information.',
+              "project_profile_error_generic",
+              "Unable to save the project information.",
             )}
         </p>
       )}

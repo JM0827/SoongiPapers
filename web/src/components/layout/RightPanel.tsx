@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, Loader2, CheckCircle2, Circle, RefreshCcw } from "lucide-react";
+import { Pencil, X, Loader2, CheckCircle2, Circle, RefreshCcw, AlertTriangle, Plus, Trash2 } from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -1610,11 +1610,14 @@ const TranslationNotesSection = ({
               />
               <button
                 type="button"
-                className="text-xs text-rose-500 transition hover:text-rose-600"
+                className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
                 onClick={() => handlePairRemove(collection, item.id)}
                 disabled={isSaving}
+                title={removeLabel}
+                aria-label={removeLabel}
               >
-                {removeLabel}
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">{removeLabel}</span>
               </button>
             </div>
           ))}
@@ -1643,14 +1646,6 @@ const TranslationNotesSection = ({
   const addLabel = localize(
     "rightpanel_translation_notes_add",
     "Add notes",
-  );
-  const editingLabel = localize(
-    "rightpanel_translation_notes_editing",
-    "Editing translation notes",
-  );
-  const clearAllLabel = localize(
-    "rightpanel_translation_notes_clear_all",
-    "Clear all",
   );
   const cancelLabel = localize(
     "rightpanel_translation_notes_cancel",
@@ -1809,11 +1804,6 @@ const TranslationNotesSection = ({
     "rightpanel_translation_notes_error_save",
     "Failed to save notes.",
   );
-  const clearErrorFallback = localize(
-    "rightpanel_translation_notes_error_clear",
-    "Failed to clear notes.",
-  );
-
   useEffect(() => {
     if (mode === "view") {
       setDraft(notesToDraft(notes));
@@ -1860,22 +1850,6 @@ const TranslationNotesSection = ({
     }
   };
 
-  const handleClear = async () => {
-    if (!onSave) return;
-    try {
-      await onSave(null);
-      setDraft(notesToDraft(null));
-      setMode("view");
-      setFormError(null);
-    } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : clearErrorFallback;
-      setFormError(message);
-    }
-  };
-
   const normalizeBilingualView = (
     items?:
       | Array<{ source: string; target: string | null }>
@@ -1915,6 +1889,12 @@ const TranslationNotesSection = ({
       (notes?.locations?.length ?? 0) > 0 ||
       hasPairs(notes?.measurementUnits) ||
       hasPairs(notes?.linguisticFeatures),
+  );
+
+  const notesStatusIcon = hasNotes ? (
+    <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+  ) : (
+    <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />
   );
 
   const renderBilingualList = (
@@ -1992,34 +1972,23 @@ const TranslationNotesSection = ({
 
   const editContent = (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-slate-800">{editingLabel}</p>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={handleClear}
-            disabled={isSaving}
-          >
-            {clearAllLabel}
-          </button>
-          <button
-            type="button"
-            className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={handleCancel}
-            disabled={isSaving}
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className="rounded bg-slate-800 px-3 py-1 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-60"
-            onClick={handleSave}
-            disabled={isSaving}
-          >
-            {isSaving ? savingLabel : saveLabel}
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+          onClick={handleCancel}
+          disabled={isSaving}
+        >
+          {cancelLabel}
+        </button>
+        <button
+          type="button"
+          className="rounded bg-slate-800 px-3 py-1 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-60"
+          onClick={handleSave}
+          disabled={isSaving}
+        >
+          {isSaving ? savingLabel : saveLabel}
+        </button>
       </div>
       <SectionCard
         title={localize('rightpanel_translation_notes_context', 'Narrative context')}
@@ -2028,7 +1997,6 @@ const TranslationNotesSection = ({
           'Summaries, measurement units, and linguistic cues that downstream translators must follow.',
         )}
       >
-      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
             {timePeriodLabel}
@@ -2045,49 +2013,6 @@ const TranslationNotesSection = ({
             placeholder={timePeriodPlaceholder}
           />
         </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {measurementUnitsLabel}
-            </p>
-            <button
-              type="button"
-              className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-              onClick={() => addPair('measurementUnits', 'unit')}
-              disabled={isSaving}
-            >
-              {addEntryLabel}
-            </button>
-          </div>
-          {renderPairList(
-            draft.measurementUnits,
-            'measurementUnits',
-            measurementUnitSourcePlaceholder,
-            measurementUnitTargetPlaceholder,
-          )}
-        </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {linguisticFeaturesLabel}
-            </p>
-            <button
-              type="button"
-              className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-              onClick={() => addPair('linguisticFeatures', 'feature')}
-              disabled={isSaving}
-            >
-              {addEntryLabel}
-            </button>
-          </div>
-          {renderPairList(
-            draft.linguisticFeatures,
-            'linguisticFeatures',
-            linguisticSourcePlaceholder,
-            linguisticTargetPlaceholder,
-          )}
-        </div>
-      </div>
       </SectionCard>
       <SectionCard
         title={charactersLabel}
@@ -2098,7 +2023,7 @@ const TranslationNotesSection = ({
         actions={
           <button
             type="button"
-            className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
             onClick={() =>
               setDraft((prev) => ({
                 ...prev,
@@ -2106,8 +2031,11 @@ const TranslationNotesSection = ({
               }))
             }
             disabled={isSaving}
+            title={addCharacterLabel}
+            aria-label={addCharacterLabel}
           >
-            {addCharacterLabel}
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">{addCharacterLabel}</span>
           </button>
         }
       >
@@ -2125,7 +2053,7 @@ const TranslationNotesSection = ({
                   </p>
                   <button
                     type="button"
-                    className="text-xs text-rose-500 transition hover:text-rose-600"
+                    className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
                     onClick={() =>
                       setDraft((prev) => ({
                         ...prev,
@@ -2135,8 +2063,11 @@ const TranslationNotesSection = ({
                       }))
                     }
                     disabled={isSaving}
+                    title={removeLabel}
+                    aria-label={removeLabel}
                   >
-                    {removeLabel}
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    <span className="sr-only">{removeLabel}</span>
                   </button>
                 </div>
                 <div className="mt-2.5 grid gap-2.5 md:grid-cols-2">
@@ -2294,11 +2225,14 @@ const TranslationNotesSection = ({
               </p>
               <button
                 type="button"
-                className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
                 onClick={() => setter([...items, create()])}
                 disabled={isSaving}
+                title={addEntryLabel}
+                aria-label={addEntryLabel}
               >
-                {addEntryLabel}
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">{addEntryLabel}</span>
               </button>
             </div>
             {items.length ? (
@@ -2362,11 +2296,14 @@ const TranslationNotesSection = ({
                     <div className="flex items-start justify-end">
                       <button
                         type="button"
-                        className="text-xs text-rose-500 transition hover:text-rose-600"
+                        className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
                         onClick={() => setter(items.filter((entry) => entry.id !== item.id))}
                         disabled={isSaving}
+                        title={removeLabel}
+                        aria-label={removeLabel}
                       >
-                        {removeLabel}
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        <span className="sr-only">{removeLabel}</span>
                       </button>
                     </div>
                   </div>
@@ -2379,13 +2316,59 @@ const TranslationNotesSection = ({
         ))}
       </div>
       </SectionCard>
+      <SectionCard
+        title={measurementUnitsLabel}
+        actions={
+          <button
+            type="button"
+            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+            onClick={() => addPair('measurementUnits', 'unit')}
+            disabled={isSaving}
+            title={addEntryLabel}
+            aria-label={addEntryLabel}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">{addEntryLabel}</span>
+          </button>
+        }
+      >
+        {renderPairList(
+          draft.measurementUnits,
+          'measurementUnits',
+          measurementUnitSourcePlaceholder,
+          measurementUnitTargetPlaceholder,
+        )}
+      </SectionCard>
+      <SectionCard
+        title={linguisticFeaturesLabel}
+        actions={
+          <button
+            type="button"
+            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+            onClick={() => addPair('linguisticFeatures', 'feature')}
+            disabled={isSaving}
+            title={addEntryLabel}
+            aria-label={addEntryLabel}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">{addEntryLabel}</span>
+          </button>
+        }
+      >
+        {renderPairList(
+          draft.linguisticFeatures,
+          'linguisticFeatures',
+          linguisticSourcePlaceholder,
+          linguisticTargetPlaceholder,
+        )}
+      </SectionCard>
     </div>
   );
 
   const viewContent = hasNotes ? (
     <div className="space-y-3 text-sm text-slate-700">
       {notes?.timePeriod ? (
-        <div className="flex items-baseline justify-between gap-3 text-sm text-slate-700">
+        <div className="flex items-baseline gap-2 text-sm text-slate-700">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             {timePeriodLabel}
           </p>
@@ -2509,6 +2492,7 @@ const TranslationNotesSection = ({
   return (
     <Collapsible
       title={titleLabel}
+      titleAdornment={notesStatusIcon}
       isOpen={mode === "edit" ? true : isOpen}
       onToggle={handleToggle}
       keepMounted
@@ -2560,6 +2544,7 @@ const ClosedBookIcon = () => (
 
 const Collapsible = ({
   title,
+  titleAdornment,
   caption,
   isOpen,
   onToggle,
@@ -2569,6 +2554,7 @@ const Collapsible = ({
   keepMounted = false,
 }: {
   title: string;
+  titleAdornment?: ReactNode;
   caption?: string;
   isOpen: boolean;
   onToggle: () => void;
@@ -2603,6 +2589,11 @@ const Collapsible = ({
           onKeyDown={handleHeaderKeyDown}
         >
           <div className="flex items-center gap-2">
+            {titleAdornment ? (
+              <span className="flex items-center" aria-hidden="true">
+                {titleAdornment}
+              </span>
+            ) : null}
             <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
             {action ? <span data-collapsible-ignore>{action}</span> : null}
           </div>
@@ -2712,6 +2703,28 @@ export const RightPanel = ({
     tokenAlerts: true,
     theme: "system" as "system" | "light" | "dark",
   });
+  const [profileStatus, setProfileStatus] = useState({
+    consent: false,
+    requiredFilled: false,
+    complete: false,
+  });
+
+  const handleProfileStatusChange = useCallback(
+    (status: { consent: boolean; requiredFilled: boolean; complete: boolean }) => {
+      setProfileStatus((prev) => {
+        if (
+          prev.consent === status.consent &&
+          prev.requiredFilled === status.requiredFilled &&
+          prev.complete === status.complete
+        ) {
+          return prev;
+        }
+        return status;
+      });
+    },
+    [],
+  );
+
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [isSavingTranslationNotes, setSavingTranslationNotes] = useState(false);
   const [translationNotesError, setTranslationNotesError] = useState<string | null>(
@@ -2726,6 +2739,10 @@ export const RightPanel = ({
   }, [activeProjectId]);
 
   useEffect(() => {
+    setProfileStatus({ consent: false, requiredFilled: false, complete: false });
+  }, [activeProjectId]);
+
+  useEffect(() => {
     setReanalyzingOrigin(false);
     setReanalyzeError(null);
   }, [activeProjectId]);
@@ -2736,6 +2753,69 @@ export const RightPanel = ({
       null,
     [projects, activeProjectId],
   );
+
+  const profileStatusIcon = useMemo(() => {
+    if (profileStatus.complete) {
+      return (
+        <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+      );
+    }
+    return <Circle className="h-4 w-4 text-rose-500" aria-hidden="true" />;
+  }, [profileStatus.complete]);
+
+  const profileNeedsAttention = !profileStatus.complete;
+  const profileAttentionLabel = localize(
+    'rightpanel_preview_profile_incomplete_badge',
+    'Fix',
+  );
+  const profileAttentionHint = localize(
+    'rightpanel_preview_profile_incomplete_hint',
+    'Complete the profile to proceed.',
+  );
+
+  const profileActionNode =
+    profileNeedsAttention || (profileControls && !profileControls.isEditing)
+      ? (
+          <div className="flex items-center gap-2">
+            {profileNeedsAttention ? (
+              <button
+                type="button"
+                onClick={() => setProfileOpen(true)}
+                className="flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100"
+                title={profileAttentionHint}
+                aria-label={profileAttentionHint}
+                data-collapsible-ignore
+              >
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{profileAttentionLabel}</span>
+              </button>
+            ) : null}
+            {profileControls && !profileControls.isEditing ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!profileOpen) {
+                    setProfileOpen(true);
+                  }
+                  profileControls.startEdit();
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+                aria-label={localize(
+                  'rightpanel_preview_profile_edit',
+                  'Edit profile',
+                )}
+                title={localize(
+                  'rightpanel_preview_profile_edit',
+                  'Edit profile',
+                )}
+                data-collapsible-ignore
+              >
+                <Pencil className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+        )
+      : undefined;
 
   const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
   const originPrepSnapshot = content?.originPrep ?? null;
@@ -3472,39 +3552,19 @@ export const RightPanel = ({
             <div className="flex h-full flex-col gap-4 p-4">
               <Collapsible
                 title={localize("rightpanel_preview_profile_title", "Profile")}
+                titleAdornment={profileStatusIcon}
                 isOpen={profileOpen}
                 onToggle={() => setProfileOpen((prev) => !prev)}
                 showDivider={false}
                 keepMounted
-                action={
-                  profileControls && !profileControls.isEditing ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!profileOpen) {
-                          setProfileOpen(true);
-                        }
-                        profileControls.startEdit();
-                      }}
-                      className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                      aria-label={localize(
-                        "rightpanel_preview_profile_edit",
-                        "Edit profile",
-                      )}
-                      title={localize(
-                        "rightpanel_preview_profile_edit",
-                        "Edit profile",
-                      )}
-                    >
-                      <Pencil className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  ) : null
-                }
+                action={profileActionNode}
               >
                 <ProjectProfileCard
                   content={content}
+                  projectSummary={projectSummary}
                   onUpdated={onProfileUpdated}
                   onActionReady={setProfileControls}
+                  onStatusChange={handleProfileStatusChange}
                 />
               </Collapsible>
               <div className="space-y-4">
