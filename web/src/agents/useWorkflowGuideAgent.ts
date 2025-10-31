@@ -45,6 +45,11 @@ interface WorkflowGuideAgentOptions {
   snapshot: ProjectContextSnapshot;
   content?: ProjectContent | null;
   queueTask: (task: WorkflowTask) => void;
+  historyReady?: boolean;
+  historyGuideState?: {
+    originSummaryShared?: boolean;
+    translationSummaryShared?: boolean;
+  };
 }
 
 interface GuideState {
@@ -58,6 +63,18 @@ interface GuideState {
   proofreadingReadyHandled: boolean;
   workflowCompleted: boolean;
 }
+
+const createGuideState = (projectId: string | null): GuideState => ({
+  projectId,
+  metadataPrompted: false,
+  originSummaryPendingNotified: false,
+  originSummaryShared: false,
+  translationPrompted: false,
+  translationReadyHandled: false,
+  translationSummaryShared: false,
+  proofreadingReadyHandled: false,
+  workflowCompleted: false,
+});
 
 const formatSummary = (
   profile: DocumentProfileSummary | null | undefined,
@@ -95,6 +112,8 @@ export const useWorkflowGuideAgent = ({
   snapshot,
   content,
   queueTask,
+  historyReady: historyReadyProp,
+  historyGuideState,
 }: WorkflowGuideAgentOptions) => {
   const { locale } = useUILocale();
   const localize = useCallback(
@@ -115,17 +134,16 @@ export const useWorkflowGuideAgent = ({
     (content?.documentProfiles?.translation as DocumentProfileSummary | null) ??
     null;
 
-  const guideStateRef = useRef<GuideState>({
-    projectId: null,
-    metadataPrompted: false,
-    originSummaryPendingNotified: false,
-    originSummaryShared: false,
-    translationPrompted: false,
-    translationReadyHandled: false,
-    translationSummaryShared: false,
-    proofreadingReadyHandled: false,
-    workflowCompleted: false,
-  });
+  const historyReady = historyReadyProp ?? true;
+  const historyOriginSummaryShared =
+    historyGuideState?.originSummaryShared ?? false;
+  const historyTranslationSummaryShared =
+    historyGuideState?.translationSummaryShared ?? false;
+
+  const guideStateCacheRef = useRef<Record<string, GuideState>>({});
+  const guideStateRef = useRef<GuideState>(
+    createGuideState(projectId ?? null),
+  );
 
   const originAvailableFromContent = Boolean(
     content?.content?.origin?.content?.trim(),
@@ -149,25 +167,41 @@ export const useWorkflowGuideAgent = ({
   const qualityStage =
     snapshot?.lifecycle?.quality?.stage?.toLowerCase() ?? "none";
 
-  const resetGuideState = useCallback(() => {
-    guideStateRef.current = {
-      projectId,
-      metadataPrompted: false,
-      originSummaryPendingNotified: false,
-      originSummaryShared: false,
-      translationPrompted: false,
-      translationReadyHandled: false,
-      translationSummaryShared: false,
-      proofreadingReadyHandled: false,
-      workflowCompleted: false,
-    };
+  useEffect(() => {
+    const current = guideStateRef.current;
+    if (current.projectId) {
+      guideStateCacheRef.current[current.projectId] = current;
+    }
+    if (!projectId) {
+      guideStateRef.current = createGuideState(null);
+      return;
+    }
+    const cached = guideStateCacheRef.current[projectId];
+    if (cached) {
+      guideStateRef.current = cached;
+    } else {
+      const nextState = createGuideState(projectId);
+      guideStateCacheRef.current[projectId] = nextState;
+      guideStateRef.current = nextState;
+    }
   }, [projectId]);
 
   useEffect(() => {
-    if (guideStateRef.current.projectId !== projectId) {
-      resetGuideState();
+    if (!historyReady) return;
+    if (!projectId) return;
+    if (historyOriginSummaryShared) {
+      guideStateRef.current.originSummaryShared = true;
+      guideStateRef.current.originSummaryPendingNotified = false;
     }
-  }, [projectId, resetGuideState]);
+    if (historyTranslationSummaryShared) {
+      guideStateRef.current.translationSummaryShared = true;
+    }
+  }, [
+    historyReady,
+    historyOriginSummaryShared,
+    historyTranslationSummaryShared,
+    projectId,
+  ]);
 
   const scheduleTask = useCallback(
     (task: WorkflowTask) => {
@@ -253,7 +287,13 @@ export const useWorkflowGuideAgent = ({
   ]);
 
   const maybeShareOriginSummary = useCallback(() => {
+    if (!historyReady) return;
     if (!projectId || !originAvailable) return;
+    if (historyOriginSummaryShared) {
+      guideStateRef.current.originSummaryShared = true;
+      guideStateRef.current.originSummaryPendingNotified = false;
+      return;
+    }
     if (!originProfile || guideStateRef.current.originSummaryShared) return;
     const summary = formatSummary(originProfile, "원작 요약입니다:");
     if (!summary) return;
@@ -275,6 +315,8 @@ export const useWorkflowGuideAgent = ({
     });
     scheduleTranslationPrompt();
   }, [
+    historyReady,
+    historyOriginSummaryShared,
     projectId,
     originAvailable,
     originProfile,
@@ -299,9 +341,14 @@ export const useWorkflowGuideAgent = ({
   }, [projectId, translationAvailable, translationStage, translationState.projectId]);
 
   const maybeShareTranslationSummary = useCallback(() => {
+    if (!historyReady) return;
     if (!projectId || !translationAvailable) return;
     if (translationState.projectId && translationState.projectId !== projectId)
       return;
+    if (historyTranslationSummaryShared) {
+      guideStateRef.current.translationSummaryShared = true;
+      return;
+    }
     if (guideStateRef.current.translationSummaryShared) return;
     const summary = formatSummary(translationProfile, "번역본 요약입니다:");
     if (!summary) return;
@@ -321,6 +368,8 @@ export const useWorkflowGuideAgent = ({
       stage: "translation",
     });
   }, [
+    historyReady,
+    historyTranslationSummaryShared,
     projectId,
     translationAvailable,
     translationProfile,
