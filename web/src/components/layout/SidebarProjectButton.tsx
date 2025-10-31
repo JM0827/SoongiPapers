@@ -324,7 +324,7 @@ const SidebarProjectButtonComponent = ({
                     item.tone === "danger" &&
                       (item.disabled
                         ? "text-red-300"
-                        : "text-red-600 hover:bg-red-50"),
+                        : "text-red-600 hover:bg-red-50 hover:text-red-700"),
                   )}
                   aria-disabled={item.disabled || undefined}
                 >

@@ -59,7 +59,6 @@ const SUPPORTED_ORIGIN_EXTENSIONS = [
   ".doc",
   ".docx",
   ".pdf",
-  ".epub",
   ".hwp",
   ".hwpx",
 ] as const;
@@ -2099,11 +2098,35 @@ export const ChatOrchestrator = ({
     [adaptActionsForOrigin, pushAssistant],
   );
 
+  const guideHistoryState = useMemo(() => {
+    if (!history?.length) {
+      return {
+        originSummaryShared: false,
+        translationSummaryShared: false,
+      };
+    }
+    const originSummaryShared = history.some(
+      (item) =>
+        item.role === "assistant" &&
+        typeof item.content === "string" &&
+        item.content.trim().startsWith("원작 요약입니다:"),
+    );
+    const translationSummaryShared = history.some(
+      (item) =>
+        item.role === "assistant" &&
+        typeof item.content === "string" &&
+        item.content.trim().startsWith("번역본 요약입니다:"),
+    );
+    return { originSummaryShared, translationSummaryShared };
+  }, [history]);
+
   useWorkflowGuideAgent({
     projectId,
     snapshot,
     content,
     queueTask: handleGuideTask,
+    historyReady: !projectId || historyLoaded,
+    historyGuideState: guideHistoryState,
   });
   const toPayload = useCallback(
     (msgs: Message[]): ChatMessagePayload[] =>
@@ -3353,7 +3376,7 @@ export const ChatOrchestrator = ({
                 <p className="font-medium text-slate-600">
                   {localize(
                     "chat_dropzone_title",
-                    "원작 파일을 드래그해 여기에 놓거나 원작 올리기 버튼을 눌러 원작 파일을 선택해 주세요.",
+                    "번역할 원작 파일을 업로드해 주세요.",
                   )}
                 </p>
                 <p className="text-slate-600">
@@ -3369,7 +3392,7 @@ export const ChatOrchestrator = ({
                   disabled={isUploading}
                   className="mt-3 inline-flex items-center rounded border border-indigo-300 px-3 py-1 text-xs font-medium text-indigo-600 transition hover:border-indigo-400 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {localize("chat_dropzone_select", "원작 올리기")}
+                  {localize("chat_dropzone_select", "원작 업로드")}
                 </button>
                 {(isUploading ||
                   translationVisual.overall.running ||

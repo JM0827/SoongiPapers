@@ -919,6 +919,7 @@ export const api = {
       target_lang?: string;
       description?: string;
       intention?: string;
+      translator_name?: string;
     },
   ): Promise<{ project: ProjectSummary }> {
     const res = await fetch(`${API_BASE}/api/projects`, {

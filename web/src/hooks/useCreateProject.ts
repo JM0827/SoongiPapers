@@ -30,6 +30,7 @@ interface CreateProjectOptions {
 
 export const useCreateProject = () => {
   const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
   const setActiveProject = useProjectStore((state) => state.setActiveProject);
   const setActiveProjectName = useProjectStore(
     (state) => state.setActiveProjectName,
@@ -45,10 +46,16 @@ export const useCreateProject = () => {
 
       setIsCreating(true);
       try {
+        const translatorName = user?.name?.trim();
+
         const payload = {
           title: options.title ?? buildDefaultTitle(),
           origin_lang: options.originLang ?? "Korean",
           target_lang: options.targetLang ?? "English",
+          translator_name:
+            translatorName && translatorName.length > 0
+              ? translatorName
+              : undefined,
         };
 
         const response = await api.createProject(token, payload);
@@ -61,7 +68,7 @@ export const useCreateProject = () => {
         setIsCreating(false);
       }
     },
-    [token, setActiveProject, setActiveProjectName, queryClient],
+    [token, user, setActiveProject, setActiveProjectName, queryClient],
   );
 
   return { createProject, isCreating };
