@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import clsx from "clsx";
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   ShieldCheck,
   Search,
   BookOpen,
+  Info,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -36,6 +38,7 @@ import {
   isOriginPrepReady,
 } from "../../lib/originPrep";
 import { useNavigate } from "react-router-dom";
+import { copyrightConsentContent } from "../../content/userConsent";
 
 const languageOptions = [
   { value: "Korean", labelKey: "language_korean", fallback: "Korean" },
@@ -75,6 +78,222 @@ const formatRecentTimestamp = (value?: string | null) => {
   }).format(date);
 };
 
+type ProjectModalProfile = {
+  bookTitleOriginal: string;
+  bookTitleEnglish: string;
+  authorName: string;
+  translatorName: string;
+  authorNotes: string;
+  translatorNotes: string;
+  copyrightConsent: boolean;
+  consentRecord: UserConsentRecord;
+};
+
+interface UserConsentRecord {
+  consented?: boolean;
+  status?: string;
+  statusKo?: string;
+  statusEn?: string;
+  consentedAt?: string | null;
+  userName?: string | null;
+  originTitle?: string | null;
+  translatedTitle?: string | null;
+  authorName?: string | null;
+  translatorName?: string | null;
+  version?: number;
+  [key: string]: unknown;
+}
+
+const coerceMetaString = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+const parseProjectMeta = (meta: ProjectSummary["meta"]): Record<string, unknown> => {
+  if (!meta) return {};
+  if (typeof meta === "string") {
+    try {
+      const parsed = JSON.parse(meta);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch (error) {
+      console.warn("[sidebar] failed to parse project meta", error);
+      return {};
+    }
+  }
+  return { ...meta };
+};
+
+const parseUserConsent = (
+  value: ProjectSummary["user_consent"],
+): UserConsentRecord => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch (error) {
+      console.warn("[sidebar] failed to parse project user_consent", error);
+      return {};
+    }
+  }
+  if (typeof value === "object") {
+    return { ...value };
+  }
+  return {};
+};
+
+const pickFirstText = (
+  ...values: Array<string | null | undefined | unknown>
+): string => {
+  for (const value of values) {
+    const text = coerceMetaString(value);
+    if (text.length) return text;
+  }
+  return "";
+};
+
+const deriveProjectModalProfile = (project: ProjectSummary): ProjectModalProfile => {
+  const meta = parseProjectMeta(project.meta);
+  const userConsent = parseUserConsent(project.user_consent);
+  return {
+    bookTitleOriginal: pickFirstText(project.book_title, project.title),
+    bookTitleEnglish: pickFirstText(meta.bookTitleEn, meta.book_title_en),
+    authorName: pickFirstText(project.author_name, meta.author),
+    translatorName: pickFirstText(project.translator_name, meta.translator),
+    authorNotes: pickFirstText(
+      meta.originalAuthorNotes,
+      meta.context,
+      project.description,
+      project.intention,
+    ),
+    translatorNotes: pickFirstText(meta.translatorNotes, meta.notes),
+    copyrightConsent: (() => {
+      if (
+        userConsent?.consented === true ||
+        userConsent?.copyrightConsent === true ||
+        userConsent?.copyright_consent === true
+      ) {
+        return true;
+      }
+      const statusRaw = (userConsent?.status ?? "")
+        .toString()
+        .trim()
+        .toLowerCase();
+      const statusEnRaw = (userConsent?.statusEn ?? userConsent?.statusKo ?? "")
+        .toString()
+        .trim()
+        .toLowerCase();
+      const normalized = statusRaw.replace(/\s+/g, "");
+      const normalizedEn = statusEnRaw.replace(/\s+/g, "");
+      const positiveTokens = new Set([
+        "동의",
+        "동의함",
+        "consented",
+        "consent",
+        "received",
+        "granted",
+        "yes",
+      ]);
+      if (positiveTokens.has(normalized) || positiveTokens.has(normalizedEn)) {
+        return true;
+      }
+      return false;
+    })(),
+    consentRecord: userConsent,
+  };
+};
+
+const sanitizeModalProfile = (profile: ProjectModalProfile): ProjectModalProfile => ({
+  bookTitleOriginal: profile.bookTitleOriginal.trim(),
+  bookTitleEnglish: profile.bookTitleEnglish.trim(),
+  authorName: profile.authorName.trim(),
+  translatorName: profile.translatorName.trim(),
+  authorNotes: profile.authorNotes.trim(),
+  translatorNotes: profile.translatorNotes.trim(),
+  copyrightConsent: Boolean(profile.copyrightConsent),
+  consentRecord: profile.consentRecord ?? {},
+});
+
+const buildUpdatedProjectMeta = (
+  baseMeta: Record<string, unknown>,
+  profile: ProjectModalProfile,
+) => {
+  const next = { ...baseMeta };
+  next.author = profile.authorName || null;
+  next.translator = profile.translatorName || null;
+  next.bookTitleEn = profile.bookTitleEnglish || null;
+  next.book_title_en = profile.bookTitleEnglish || null;
+  next.originalAuthorNotes = profile.authorNotes || null;
+  next.translatorNotes = profile.translatorNotes || null;
+  next.context = profile.authorNotes || null;
+  next.notes = profile.translatorNotes || null;
+  return next;
+};
+
+const buildUserConsentRecord = (params: {
+  consented: boolean;
+  profile: ProjectModalProfile;
+  userName: string | null;
+  previous: UserConsentRecord;
+}): UserConsentRecord => {
+  const { consented, profile, userName, previous } = params;
+
+  const historical = {
+    ...(previous ?? {}),
+    ...(profile.consentRecord ?? {}),
+  } as UserConsentRecord;
+
+  const version =
+    typeof historical.version === "number" && Number.isFinite(historical.version)
+      ? historical.version
+      : 1;
+
+  const base: UserConsentRecord = {
+    version,
+    userName:
+      userName ??
+      (typeof historical.userName === "string" ? historical.userName : null),
+    originTitle:
+      profile.bookTitleOriginal ||
+      (typeof historical.originTitle === "string" ? historical.originTitle : null),
+    translatedTitle:
+      profile.bookTitleEnglish ||
+      (typeof historical.translatedTitle === "string"
+        ? historical.translatedTitle
+        : null),
+    authorName:
+      profile.authorName ||
+      (typeof historical.authorName === "string" ? historical.authorName : null),
+    translatorName:
+      profile.translatorName ||
+      (typeof historical.translatorName === "string"
+        ? historical.translatorName
+        : null),
+  };
+
+  if (consented) {
+    const existingConsentTimestamp =
+      (historical.consented === true && typeof historical.consentedAt === "string"
+        ? historical.consentedAt
+        : null) ?? null;
+    return {
+      ...base,
+      consented: true,
+      status: "동의",
+      statusKo: "동의",
+      statusEn: "received",
+      consentedAt: existingConsentTimestamp ?? new Date().toISOString(),
+    };
+  }
+
+  return {
+    ...base,
+    consented: false,
+    status: "동의 안함",
+    statusKo: "동의 안함",
+    statusEn: "not_received",
+    consentedAt: null,
+  };
+};
+
 export const LeftSidebar = () => {
   const navigate = useNavigate();
   const { data: projects } = useProjectList();
@@ -88,6 +307,7 @@ export const LeftSidebar = () => {
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
   const { createProject, isCreating } = useCreateProject();
   const token = useAuthStore((state) => state.token);
+  const currentUser = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const { locale } = useUILocale();
   const localize = useCallback(
@@ -113,6 +333,8 @@ export const LeftSidebar = () => {
         project: ProjectSummary;
         value: string;
         submitting: boolean;
+        profile: ProjectModalProfile;
+        initialProfile: ProjectModalProfile;
       }
     | { type: "delete"; project: ProjectSummary; submitting: boolean }
     | null
@@ -120,6 +342,7 @@ export const LeftSidebar = () => {
   const [toast, setToast] = useState<{ id: number; message: string } | null>(
     null,
   );
+  const [showConsentInfo, setShowConsentInfo] = useState(false);
 
   const newProjectLabel = localize('sidebar_new_project', 'New project');
   const newProjectTooltip = localize(
@@ -143,6 +366,34 @@ export const LeftSidebar = () => {
     'sidebar_section_completed',
     'Completed projects',
   );
+  const consentLabel = localize(
+    'project_consent_label',
+    'Original copyright consent',
+  );
+  const consentStatusEnabled = localize(
+    'project_consent_received',
+    'Received',
+  );
+  const consentStatusDisabled = localize(
+    'project_consent_not_received',
+    'Not received',
+  );
+  const consentInfoShow = localize(
+    'project_consent_info_show',
+    'Show consent guidance',
+  );
+  const consentInfoHide = localize(
+    'project_consent_info_hide',
+    'Hide consent guidance',
+  );
+  const consentContent =
+    copyrightConsentContent[locale] ?? copyrightConsentContent.ko;
+  const consentInfoToggleLabel = showConsentInfo ? consentInfoHide : consentInfoShow;
+  const consentEnabled =
+    modalState?.type === "rename" && modalState.profile.copyrightConsent;
+  const consentStatusLabel = consentEnabled
+    ? consentStatusEnabled
+    : consentStatusDisabled;
 
   const translationAgentState = useWorkflowStore((state) => state.translation);
   const proofreadingAgentState = useWorkflowStore((state) => state.proofreading);
@@ -187,11 +438,17 @@ export const LeftSidebar = () => {
   }, []);
 
   const openRenameModal = useCallback((project: ProjectSummary) => {
+    const derivedProfile = sanitizeModalProfile(
+      deriveProjectModalProfile(project),
+    );
+    setShowConsentInfo(false);
     setModalState({
       type: "rename",
       project,
       value: project.title ?? "",
       submitting: false,
+      profile: { ...derivedProfile },
+      initialProfile: { ...derivedProfile },
     });
   }, []);
 
@@ -200,8 +457,26 @@ export const LeftSidebar = () => {
   }, []);
 
   const closeModal = useCallback(() => {
+    setShowConsentInfo(false);
     setModalState(null);
   }, []);
+
+  const setProfileField = useCallback(
+    <K extends keyof ProjectModalProfile>(
+      field: K,
+      value: ProjectModalProfile[K],
+    ) => {
+      setModalState((prev) =>
+        prev && prev.type === "rename"
+          ? {
+              ...prev,
+              profile: { ...prev.profile, [field]: value },
+            }
+          : prev,
+      );
+    },
+    [],
+  );
 
   const submitRename = useCallback(async () => {
     if (!modalState || modalState.type !== "rename") return;
@@ -216,6 +491,13 @@ export const LeftSidebar = () => {
     }
 
     const trimmed = modalState.value.trim();
+    const sanitizedProfile = sanitizeModalProfile(modalState.profile);
+    const originalProfile = sanitizeModalProfile(modalState.initialProfile);
+    const previousUserConsent = parseUserConsent(modalState.project.user_consent);
+    const nameChanged = trimmed !== (modalState.project.title ?? "");
+    const profileChanged =
+      JSON.stringify(sanitizedProfile) !== JSON.stringify(originalProfile);
+
     if (!trimmed) {
       window.alert(
         localize(
@@ -225,23 +507,56 @@ export const LeftSidebar = () => {
       );
       return;
     }
-    if (trimmed === (modalState.project.title ?? "")) {
+    if (!nameChanged && !profileChanged) {
       closeModal();
       return;
     }
 
-    setModalState({ ...modalState, submitting: true });
+    const currentUserName = (() => {
+      const userName = currentUser?.name ?? "";
+      const trimmedName = userName.trim();
+      if (trimmedName.length > 0) return trimmedName;
+      if (sanitizedProfile.translatorName.length > 0)
+        return sanitizedProfile.translatorName;
+      return null;
+    })();
+
+    const nextUserConsent = buildUserConsentRecord({
+      consented: sanitizedProfile.copyrightConsent,
+      profile: sanitizedProfile,
+      userName: currentUserName,
+      previous: previousUserConsent,
+    });
+
+    setModalState({
+      ...modalState,
+      submitting: true,
+      profile: { ...sanitizedProfile, consentRecord: nextUserConsent },
+    });
     try {
+      const baseMeta = parseProjectMeta(modalState.project.meta);
+      const updatedMeta = buildUpdatedProjectMeta(baseMeta, sanitizedProfile);
       await api.updateProject(token, modalState.project.project_id, {
         title: trimmed,
+        book_title: sanitizedProfile.bookTitleOriginal || undefined,
+        author_name: sanitizedProfile.authorName || undefined,
+        translator_name: sanitizedProfile.translatorName || undefined,
+        description: sanitizedProfile.authorNotes || undefined,
+        intention: undefined,
+        memo: sanitizedProfile.translatorNotes || undefined,
+        meta: updatedMeta,
+        user_consent: nextUserConsent,
       });
-      if (modalState.project.project_id === activeProjectId) {
+      if (modalState.project.project_id === activeProjectId && nameChanged) {
         setActiveProjectName(trimmed);
       }
       await invalidateProjects();
       await invalidateProjectContent(modalState.project.project_id);
       showToast(
-        localize("sidebar_toast_project_renamed", "Project name updated."),
+        localize(
+          "sidebar_toast_project_updated",
+          "Project details updated.",
+        ),
       );
       closeModal();
     } catch (error) {
@@ -253,7 +568,9 @@ export const LeftSidebar = () => {
         ),
       );
       setModalState((prev) =>
-        prev && prev.type === "rename" ? { ...prev, submitting: false } : prev,
+        prev && prev.type === "rename"
+          ? { ...prev, submitting: false, profile: sanitizedProfile }
+          : prev,
       );
     }
   }, [
@@ -265,6 +582,8 @@ export const LeftSidebar = () => {
     invalidateProjectContent,
     closeModal,
     showToast,
+    localize,
+    currentUser,
   ]);
 
   const submitDelete = useCallback(async () => {
@@ -434,9 +753,6 @@ export const LeftSidebar = () => {
     return map;
   }, [orderedProjects]);
 
-  const activeProjectSummary = activeProjectId
-    ? projectMap.get(activeProjectId) ?? null
-    : null;
   const projectScopeKey = activeProjectId ?? "global";
   const sectionState = {
     ...DEFAULT_SIDEBAR_SECTIONS,
@@ -563,9 +879,15 @@ export const LeftSidebar = () => {
     return lines;
   }, [localize, snapshot]);
 
-  const originReady = snapshot.origin.hasContent;
   const originPrepSnapshot = snapshot.originPrep ?? null;
-  const translationPrepReady = originReady && isOriginPrepReady(originPrepSnapshot);
+  const hasOriginContent = snapshot.origin.hasContent;
+  const originPrepReady = originPrepSnapshot
+    ? isOriginPrepReady(originPrepSnapshot)
+    : false;
+  const originAnalysisRunning =
+    originPrepSnapshot?.analysis.status === "running";
+  const originReady = hasOriginContent && originPrepReady;
+  const translationPrepReady = hasOriginContent && originPrepReady;
   const translationRunning =
     translationAgentState.status === "running" ||
     translationAgentState.status === "queued";
@@ -574,7 +896,7 @@ export const LeftSidebar = () => {
   const translationFailed = translationAgentState.status === "failed";
   const hasTranslation = snapshot.translation.hasContent;
   const translationGuardReason = (() => {
-    if (!originReady) {
+    if (!hasOriginContent) {
       return localize(
         'sidebar_quick_translation_tooltip_no_origin',
         'Upload the manuscript to start translation.',
@@ -614,7 +936,12 @@ export const LeftSidebar = () => {
       key: "upload-origin",
       label: originReady
         ? localize('sidebar_quick_upload_label_done', 'Origin ready')
-        : localize('sidebar_quick_upload_label', 'Upload origin'),
+        : originAnalysisRunning
+          ? localize(
+              'sidebar_quick_upload_label_processing',
+              'Analyzing origin…',
+            )
+          : localize('sidebar_quick_upload_label', 'Upload origin'),
       icon: <UploadCloud size={18} />,
       tooltip: !chatExecutorReady
         ? assistantPendingTooltip
@@ -623,23 +950,40 @@ export const LeftSidebar = () => {
               'sidebar_quick_upload_tooltip_done',
               'The manuscript is already uploaded.',
             )
-          : translationRunning
+          : originAnalysisRunning
             ? localize(
-                'sidebar_quick_upload_tooltip_running',
-                'You cannot change the manuscript while translation is running.',
+                'sidebar_quick_upload_tooltip_processing',
+                'Origin analysis is in progress.',
               )
-            : localize(
-                'sidebar_quick_upload_tooltip_default',
-                'Upload the manuscript file.',
-              ),
-      disabled: !chatExecutorReady || originReady || translationRunning,
-      status: translationRunning
+            : translationRunning
+              ? localize(
+                  'sidebar_quick_upload_tooltip_running',
+                  'You cannot change the manuscript while translation is running.',
+                )
+              : localize(
+                  'sidebar_quick_upload_tooltip_default',
+                  'Upload the manuscript file.',
+                ),
+      disabled:
+        !chatExecutorReady ||
+        originReady ||
+        originAnalysisRunning ||
+        translationRunning,
+      status: originAnalysisRunning
         ? "running"
-        : originReady
-          ? "done"
-          : "default",
+        : translationRunning
+          ? "running"
+          : originReady
+            ? "done"
+            : "default",
       onClick: async () => {
-        if (!chatExecutorReady || originReady || translationRunning) return;
+        if (
+          !chatExecutorReady ||
+          originReady ||
+          originAnalysisRunning ||
+          translationRunning
+        )
+          return;
         await chatActionExecute({
           type: "startUploadFile",
           reason: "sidebar-quick-action",
@@ -1006,7 +1350,7 @@ export const LeftSidebar = () => {
               )}
           </div>
 
-          {activeProjectSummary && (
+          {snapshot.projectId && (
             <div className="mt-3 space-y-3 border-t border-slate-100 pt-2">
               <SidebarQuickActions
                 isOpen={quickActionsOpen}
@@ -1032,10 +1376,6 @@ export const LeftSidebar = () => {
       {modalState?.type === "rename" && (
         <Modal
           title={localize('sidebar_project_modal_title', 'Project properties')}
-          description={localize(
-            'sidebar_project_modal_description',
-            'Review and update project details.',
-          )}
           onClose={() => {
             if (modalState.submitting) return;
             closeModal();
@@ -1049,44 +1389,242 @@ export const LeftSidebar = () => {
               void submitRename();
             }}
           >
-            <label
-              className="text-xs font-semibold tracking-wide text-slate-500"
-              htmlFor="project-name-input"
-            >
-              {localize('sidebar_project_modal_field_name', 'Name')}
-            </label>
-            <input
-              id="project-name-input"
-              value={modalState.value}
-              onChange={(event) =>
-                setModalState((prev) =>
-                  prev && prev.type === "rename"
-                    ? { ...prev, value: event.target.value }
-                    : prev,
-                )
-              }
-              autoFocus
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none"
-            />
-            <div className="grid grid-cols-2 gap-4 text-sm text-slate-500">
-              <div>
-                <p className="text-xs font-semibold tracking-wide text-slate-500">
-                  {localize('sidebar_project_modal_origin_lang', 'Origin language')}
-                </p>
-                <p className="mt-1 text-slate-700">
-                  {modalState.project.origin_lang}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold tracking-wide text-slate-500">
-                  {localize('sidebar_project_modal_target_lang', 'Target language')}
-                </p>
-                <p className="mt-1 text-slate-700">
-                  {modalState.project.target_lang}
-                </p>
+            <div className="flex flex-wrap items-center gap-3 text-xs font-semibold tracking-wide text-slate-500">
+              <label htmlFor="project-name-input" className="whitespace-nowrap">
+                {localize(
+                  'sidebar_project_modal_field_name',
+                  'Translation project name',
+                )}
+              </label>
+              <input
+                id="project-name-input"
+                value={modalState.value}
+                onChange={(event) =>
+                  setModalState((prev) =>
+                    prev && prev.type === "rename"
+                      ? { ...prev, value: event.target.value }
+                      : prev,
+                  )
+                }
+                autoFocus
+                className="w-60 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none"
+              />
+              <div className="relative ml-auto flex items-center gap-2 text-xs font-semibold text-slate-500">
+                <span>{consentLabel}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setProfileField('copyrightConsent', !consentEnabled)
+                  }
+                  className={clsx(
+                    'relative h-5 w-9 rounded-full border transition-colors duration-150',
+                    consentEnabled
+                      ? 'border-emerald-500 bg-emerald-500'
+                      : 'border-slate-300 bg-slate-200',
+                  )}
+                  aria-pressed={consentEnabled}
+                  aria-label={consentLabel}
+                >
+                  <span
+                    className={clsx(
+                      'absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-white transition-transform duration-150',
+                      consentEnabled ? 'translate-x-4' : 'translate-x-0',
+                    )}
+                  />
+                </button>
+                <span
+                  className={clsx(
+                    'font-semibold',
+                    consentEnabled
+                      ? 'text-emerald-600'
+                      : 'text-slate-400',
+                  )}
+                >
+                  {consentStatusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowConsentInfo((prev) => !prev)}
+                  className="text-slate-400 transition hover:text-slate-600"
+                  aria-expanded={showConsentInfo}
+                  aria-label={consentInfoToggleLabel}
+                  title={consentInfoToggleLabel}
+                >
+                  <Info size={14} />
+                </button>
+                {showConsentInfo ? (
+                  <div
+                    className="absolute right-0 top-7 z-30 w-[22rem] rounded-md border border-slate-200 bg-white px-4 py-3 text-xs text-slate-700 shadow-lg"
+                    role="dialog"
+                    aria-label={consentInfoToggleLabel}
+                  >
+                    <p className="font-medium text-slate-600">{consentContent.intro}</p>
+                    <div className="mt-3 space-y-2">
+                      <div>
+                        <p className="font-semibold text-slate-600">
+                          {consentContent.needsConsentHeading}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-1 pl-4 text-slate-600">
+                          {consentContent.needsConsentItems.map((item, index) => (
+                            <li key={`consent-need-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-600">
+                          {consentContent.exceptionsHeading}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-1 pl-4 text-slate-600">
+                          {consentContent.exceptionsItems.map((item, index) => (
+                            <li key={`consent-exception-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <div className="flex flex-wrap items-center gap-4 text-xs font-semibold tracking-wide text-slate-500">
+              <span className="flex items-center gap-1">
+                <span>{localize('sidebar_project_modal_origin_lang', 'Origin language')}</span>
+                <span className="font-normal text-slate-700">
+                  {modalState.project.origin_lang}
+                </span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span>{localize('sidebar_project_modal_target_lang', 'Target language')}</span>
+                <span className="font-normal text-slate-700">
+                  {modalState.project.target_lang}
+                </span>
+              </span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-4">
+                <label
+                  className="flex items-center gap-3 text-xs font-semibold tracking-wide text-slate-500"
+                  htmlFor="project-book-title-original"
+                >
+                  <span className="whitespace-nowrap">
+                    {localize(
+                      'project_profile_field_book_title',
+                      'Original title',
+                    )}
+                  </span>
+                  <input
+                    id="project-book-title-original"
+                    value={modalState.profile.bookTitleOriginal}
+                    onChange={(event) =>
+                      setProfileField('bookTitleOriginal', event.target.value)
+                    }
+                    className="w-64 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_book_title',
+                      'e.g., Korean title',
+                    )}
+                  />
+                </label>
+                <label
+                  className="flex items-center gap-3 text-xs font-semibold tracking-wide text-slate-500"
+                  htmlFor="project-author-original"
+                >
+                  <span className="whitespace-nowrap">
+                    {localize('project_profile_field_author', 'Author (original)')}
+                  </span>
+                  <input
+                    id="project-author-original"
+                    value={modalState.profile.authorName}
+                    onChange={(event) =>
+                      setProfileField('authorName', event.target.value)
+                    }
+                    className="w-64 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_author',
+                      'e.g., Hong Gildong',
+                    )}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
+                  {localize('project_profile_field_author_notes', 'Author notes')}
+                  <textarea
+                    value={modalState.profile.authorNotes}
+                    onChange={(event) =>
+                      setProfileField('authorNotes', event.target.value)
+                    }
+                    rows={4}
+                    className="w-72 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_author_notes',
+                      'Capture author intent, background, or notes for readers.',
+                    )}
+                  />
+                </label>
+              </div>
+              <div className="space-y-4">
+                <label
+                  className="flex items-center gap-3 text-xs font-semibold tracking-wide text-slate-500"
+                  htmlFor="project-book-title-english"
+                >
+                  <span className="whitespace-nowrap">
+                    {localize(
+                      'project_profile_field_book_title_en',
+                      'Translated title*',
+                    )}
+                  </span>
+                  <input
+                    id="project-book-title-english"
+                    value={modalState.profile.bookTitleEnglish}
+                    onChange={(event) =>
+                      setProfileField('bookTitleEnglish', event.target.value)
+                    }
+                    className="w-64 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_book_title_en',
+                      'e.g., English Title',
+                    )}
+                  />
+                </label>
+                <label
+                  className="flex items-center gap-3 text-xs font-semibold tracking-wide text-slate-500"
+                  htmlFor="project-translator-name"
+                >
+                  <span className="whitespace-nowrap">
+                    {localize('project_profile_field_translator', 'Translator')}
+                  </span>
+                  <input
+                    id="project-translator-name"
+                    value={modalState.profile.translatorName}
+                    onChange={(event) =>
+                      setProfileField('translatorName', event.target.value)
+                    }
+                    className="w-64 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_translator',
+                      'e.g., Translator name',
+                    )}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
+                  {localize(
+                    'project_profile_field_translator_notes',
+                    'Translator notes',
+                  )}
+                  <textarea
+                    value={modalState.profile.translatorNotes}
+                    onChange={(event) =>
+                      setProfileField('translatorNotes', event.target.value)
+                    }
+                    rows={4}
+                    className="w-72 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder={localize(
+                      'project_profile_placeholder_translator_notes',
+                      'Share context or reminders for the translation team.',
+                    )}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="space-y-1 text-xs text-slate-600">
               <p>
                 <span className="font-semibold text-slate-700">
                   {localize('sidebar_project_modal_project_id', 'Project ID:')}
@@ -1095,25 +1633,23 @@ export const LeftSidebar = () => {
                   {modalState.project.project_id}
                 </span>
               </p>
-              <p className="mt-1">
+              <p>
                 <span className="font-semibold text-slate-700">
                   {localize('sidebar_project_modal_created', 'Created:')}
                 </span>{" "}
                 {formatDateTime(modalState.project.created_at)}
               </p>
             </div>
-            <div className="rounded-md border border-slate-200 bg-white px-3 py-3 text-xs">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <div className="space-y-1 text-xs text-slate-600">
+              <p className="font-semibold text-slate-700">
                 {localize('sidebar_project_modal_usage_title', 'Token usage')}
               </p>
               {isUsageLoading && (
-                <p className="mt-2 text-slate-500">
-                  {localize('common_loading', 'Loading…')}
-                </p>
+                <p>{localize('common_loading', 'Loading…')}</p>
               )}
               {!isUsageLoading && modalUsageData && (
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
-                  <li>
+                <div className="space-y-1">
+                  <p>
                     {localize(
                       'sidebar_project_modal_usage_total',
                       'Total tokens: {{total}} (input {{input}}, output {{output}})',
@@ -1130,7 +1666,7 @@ export const LeftSidebar = () => {
                         ),
                       },
                     )}
-                  </li>
+                  </p>
                   {modalUsageData.eventsByType.map((event) => {
                     const total = event.inputTokens + event.outputTokens;
                     const labelMeta = usageEventLabelMessages[event.eventType];
@@ -1138,7 +1674,7 @@ export const LeftSidebar = () => {
                       ? localize(labelMeta.key, labelMeta.fallback)
                       : event.eventType;
                     return (
-                      <li key={event.eventType}>
+                      <p key={event.eventType}>
                         {localize(
                           'sidebar_project_modal_usage_event',
                           '{{label}}: {{total}} (input {{input}}, output {{output}})',
@@ -1149,13 +1685,13 @@ export const LeftSidebar = () => {
                             output: formatNumber(event.outputTokens),
                           },
                         )}
-                      </li>
+                      </p>
                     );
                   })}
-                </ul>
+                </div>
               )}
               {!isUsageLoading && !modalUsageData && (
-                <p className="mt-2 text-slate-500">
+                <p>
                   {localize(
                     'sidebar_project_modal_usage_empty',
                     'No usage data available.',

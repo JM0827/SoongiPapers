@@ -40,12 +40,12 @@ const toneClass = (tone: "info" | "success" | "danger") => {
 
 const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProps) => (
   <div className="rounded border border-slate-200 bg-white p-2">
-    <ul className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+    <ul className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
       {stages.map((stage, index) => {
         const handleClick = onStageClick ? () => onStageClick(stage.key) : undefined;
         const content = (
-          <div className="flex flex-col gap-1 text-left">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-0.5 text-left">
+            <div className="flex items-center gap-1.5">
               <span className="font-semibold text-slate-800">{stage.label}</span>
               {stage.status && (
                 stage.status.tone === "success" ? (
@@ -78,20 +78,20 @@ const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProp
         );
 
         return (
-          <li key={stage.key} className="flex items-start gap-2">
+          <li key={stage.key} className="flex items-start gap-1.5">
             {handleClick ? (
               <button
                 type="button"
                 onClick={handleClick}
-                className="flex items-start gap-2 rounded-lg border border-transparent px-2 py-1 transition hover:border-indigo-200 hover:bg-indigo-50"
+                className="flex items-start gap-1.5 rounded-lg border border-transparent px-1.5 py-1 transition hover:border-indigo-200 hover:bg-indigo-50"
               >
                 {content}
               </button>
             ) : (
-              <span className="flex items-start gap-2">{content}</span>
+              <span className="flex items-start gap-1.5">{content}</span>
             )}
             {index < stages.length - 1 && (
-              <span className="pt-2 text-slate-300">→</span>
+              <span className="pt-1.5 text-slate-300">→</span>
             )}
           </li>
         );

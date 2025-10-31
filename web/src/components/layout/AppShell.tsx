@@ -133,7 +133,11 @@ export const AppShell = ({
         onMouseDown={handleLeftResizeStart}
       />
       <div className="flex h-full flex-1 overflow-hidden bg-white text-slate-900">
-        <main className="flex-1 overflow-y-auto bg-white">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-white">
+          <div className="mx-auto flex h-full w-full max-w-[1200px] flex-col">
+            {children}
+          </div>
+        </main>
         <div
           className="h-full w-1 cursor-col-resize bg-slate-200/70 hover:bg-slate-400/70"
           onMouseDown={handleResizeStart}

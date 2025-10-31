@@ -1373,6 +1373,7 @@ export const api = {
       origin_lang?: string;
       target_lang?: string;
       meta?: Record<string, unknown>;
+      user_consent?: Record<string, unknown> | null;
     },
   ) {
     const res = await fetch(`${API_BASE}/api/projects/${projectId}`, {

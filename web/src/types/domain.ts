@@ -26,6 +26,7 @@ export interface ProjectSummary {
   created_at?: string;
   updated_at?: string;
   meta?: ProjectMeta | null;
+  user_consent?: Record<string, unknown> | null;
 }
 
 export interface JobSummary {

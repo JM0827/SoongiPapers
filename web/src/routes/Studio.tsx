@@ -61,7 +61,7 @@ export const Studio = () => {
         />
       }
     >
-      <div className="flex h-full flex-col gap-4 p-6">
+      <div className="flex h-full flex-col gap-4 px-0 py-6">
         <div className="grid flex-1 grid-rows-[1fr_auto]">
           <ChatOrchestrator
             content={projectContent}
