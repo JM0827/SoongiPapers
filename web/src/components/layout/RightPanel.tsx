@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, CheckCircle2, Circle, BookOpen, AlertTriangle } from "lucide-react";
+import { Pencil, X, Loader2, CheckCircle2, Circle, BookOpen, AlertTriangle } from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -987,26 +987,32 @@ export const RightPanel = ({
   const [isNotesModalOpen, setNotesModalOpen] = useState(false);
   const [isOriginModalOpen, setOriginModalOpen] = useState(false);
   const [isTranslationModalOpen, setTranslationModalOpen] = useState(false);
-  const [profileStatus, setProfileStatus] = useState({
-    consent: false,
-    requiredFilled: false,
-    complete: false,
-  });
+  const [profileStatus, setProfileStatus] = useState<
+    { consent: boolean; requiredFilled: boolean; complete: boolean } | null
+  >(null);
+  const profileStatusCacheRef = useRef<
+    Record<string, { consent: boolean; requiredFilled: boolean; complete: boolean }>
+  >({});
 
   const handleProfileStatusChange = useCallback(
     (status: { consent: boolean; requiredFilled: boolean; complete: boolean }) => {
-      setProfileStatus((prev) => {
-        if (
-          prev.consent === status.consent &&
-          prev.requiredFilled === status.requiredFilled &&
-          prev.complete === status.complete
-        ) {
-          return prev;
-        }
-        return status;
-      });
+      if (!activeProjectId) {
+        setProfileStatus(status);
+        return;
+      }
+      const previous = profileStatusCacheRef.current[activeProjectId] ?? null;
+      if (
+        previous &&
+        previous.consent === status.consent &&
+        previous.requiredFilled === status.requiredFilled &&
+        previous.complete === status.complete
+      ) {
+        return;
+      }
+      profileStatusCacheRef.current[activeProjectId] = status;
+      setProfileStatus(status);
     },
-    [],
+    [activeProjectId],
   );
 
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
@@ -1038,10 +1044,6 @@ export const RightPanel = ({
   }, [activeProjectId]);
 
   useEffect(() => {
-    setProfileStatus({ consent: false, requiredFilled: false, complete: false });
-  }, [activeProjectId]);
-
-  useEffect(() => {
     setReanalyzingOrigin(false);
     setReanalyzeError(null);
   }, [activeProjectId]);
@@ -1049,6 +1051,15 @@ export const RightPanel = ({
   useEffect(() => {
     setOriginModalOpen(false);
     setTranslationModalOpen(false);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      setProfileStatus(null);
+      return;
+    }
+    const cached = profileStatusCacheRef.current[activeProjectId];
+    setProfileStatus(cached ?? null);
   }, [activeProjectId]);
 
   const projectSummary = useMemo(
@@ -1059,15 +1070,18 @@ export const RightPanel = ({
   );
 
   const profileStatusIcon = useMemo(() => {
+    if (!profileStatus) {
+      return <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden="true" />;
+    }
     if (profileStatus.complete) {
       return (
         <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
       );
     }
     return <Circle className="h-4 w-4 text-rose-500" aria-hidden="true" />;
-  }, [profileStatus.complete]);
+  }, [profileStatus]);
 
-  const profileNeedsAttention = !profileStatus.complete;
+  const profileNeedsAttention = profileStatus ? !profileStatus.complete : false;
   const profileAttentionLabel = localize(
     'rightpanel_preview_profile_incomplete_badge',
     'Fix',
