@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import clsx from "clsx";
 import { MoreVertical } from "lucide-react";
 import { FolderIcon, OpenFolderIcon } from "../icons/ProjectIcons";
@@ -8,6 +8,8 @@ import type {
   ProjectSummary,
   QualityAssessmentResultPayload,
 } from "../../types/domain";
+import { useUILocale } from "../../hooks/useUILocale";
+import { translate } from "../../lib/locale";
 
 interface SidebarProjectButtonProps {
   project: ProjectSummary;
@@ -75,6 +77,18 @@ const SidebarProjectButtonComponent = ({
   });
 
   const normalizedStatus = (project.status ?? "").trim().toLowerCase();
+  const { locale } = useUILocale();
+  const localize = useCallback(
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
+      const resolved = translate(key, locale, params);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
   const originCompleted = Boolean(content?.content?.origin?.content);
   const translationCompleted = Boolean(content?.content?.translation?.content);
   const proofStage =
@@ -159,6 +173,51 @@ const SidebarProjectButtonComponent = ({
     }
   };
 
+  const menuItems = useMemo(
+    () => {
+      const items: Array<
+        | { type: "item"; key: string; label: string; action: string; tone?: "danger"; disabled?: boolean }
+        | { type: "separator"; key: string }
+      > = [
+        {
+          type: "item",
+          key: "properties",
+          label: localize(
+            'sidebar_project_menu_properties',
+            'Properties',
+          ),
+          action: "rename",
+        },
+        {
+          type: "item",
+          key: "share",
+          label: localize('sidebar_project_menu_share', 'Share'),
+          action: "export",
+          disabled: true,
+        },
+        {
+          type: "item",
+          key: "complete",
+          label:
+            normalizedStatus === "completed" || normalizedStatus === "complete"
+              ? localize('sidebar_project_menu_reopen', 'Reopen project')
+              : localize('sidebar_project_menu_complete', 'Mark complete'),
+          action: "complete",
+        },
+        { type: "separator", key: "separator-delete" },
+        {
+          type: "item",
+          key: "delete",
+          label: localize('sidebar_project_menu_delete', 'Delete'),
+          action: "delete",
+          tone: "danger",
+        },
+      ];
+      return items;
+    },
+    [localize, normalizedStatus],
+  );
+
   return (
     <div
       className={clsx(
@@ -236,34 +295,43 @@ const SidebarProjectButtonComponent = ({
           <MoreVertical className="h-4 w-4" />
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-9 z-20 w-48 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-            {[
-              { label: "Properties", action: "rename" },
-              { label: "Share", action: "export" },
-              {
-                label:
-                  normalizedStatus === "completed" ||
-                  normalizedStatus === "complete"
-                    ? "Active back"
-                    : "Complete",
-                action: "complete",
-              },
-              { label: "Delete", action: "delete", tone: "danger" },
-            ].map((item) => (
-              <button
-                key={item.action}
-                type="button"
-                onClick={() => {
-                  void handleMenuAction(item.action);
-                }}
-                className={clsx(
-                  "flex w-full items-center justify-start px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100",
-                  item.tone === "danger" && "text-red-500 hover:bg-red-50",
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="absolute right-0 top-9 z-20 w-40 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+            {menuItems.map((item) => {
+              if (item.type === "separator") {
+                return (
+                  <div
+                    key={item.key}
+                    className="my-1 border-t border-slate-200"
+                    role="separator"
+                  />
+                );
+              }
+
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={() => {
+                    if (item.disabled) return;
+                    void handleMenuAction(item.action);
+                  }}
+                  className={clsx(
+                    "flex w-full items-center justify-start px-3 py-1.5 text-left text-sm transition",
+                    item.disabled
+                      ? "cursor-not-allowed text-slate-300"
+                      : "text-slate-700 hover:bg-slate-100",
+                    item.tone === "danger" &&
+                      (item.disabled
+                        ? "text-red-300"
+                        : "text-red-600 hover:bg-red-50"),
+                  )}
+                  aria-disabled={item.disabled || undefined}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

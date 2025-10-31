@@ -1,55 +1,43 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
 import { useAuthStore } from "../../store/auth.store";
 import { useProjectStore } from "../../store/project.store";
 import type {
-  EbookResponse,
-  ProjectContent,
   CoverInfo,
   EbookDetails,
-  CoverStatus,
-  CoverAssetRole,
+  EbookResponse,
+  ProjectContent,
   ProjectTranslationOption,
 } from "../../types/domain";
 import { projectKeys } from "../../hooks/useProjectData";
+import { useUILocale } from "../../hooks/useUILocale";
+import { translate } from "../../lib/locale";
+import { trackEvent } from "../../lib/telemetry";
+import { evaluateReadiness } from "../../lib/ebook/readiness";
+import {
+  type BuildState,
+  type EssentialsSnapshot,
+  type GenerationFormat,
+  type GenerationProgressChip,
+  type MetadataDraft,
+  type TranslationSummary,
+  getGenerateQueue,
+} from "./ebookTypes";
+import { ExportEssentialsCard } from "./ExportEssentialsCard";
+import { PromotionPanel } from "./PromotionPanel";
+
+const fallbackCover =
+  "https://dummyimage.com/320x480/ede9fe/4338ca.png&text=Project-T1";
 
 interface ExportPanelProps {
   content?: ProjectContent | null;
 }
 
-type EbookFormat = "pdf" | "epub";
-
-const formatLabels: Record<EbookFormat, string> = {
-  pdf: "PDF (print friendly)",
-  epub: "EPUB (ebook readers)",
-};
-
-const formatOptions: EbookFormat[] = ["pdf", "epub"];
-
-const fallbackCover =
-  "https://dummyimage.com/320x480/ede9fe/4338ca.png&text=Project-T1";
-
-const coverStatusLabel: Record<CoverStatus, string> = {
-  queued: "대기 중",
-  generating: "생성 중",
-  ready: "완료",
-  failed: "실패",
-};
-
-const assetOrder: CoverAssetRole[] = ["wrap", "front", "spine", "back"];
-
-const coverAssetLabels: Record<CoverAssetRole, string> = {
-  front: "앞표지",
-  back: "뒷표지",
-  spine: "책등",
-  wrap: "전체",
-};
-
 const formatDateTime = (value?: string | null) => {
-  if (!value) return "기록 없음";
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "기록 없음";
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 };
 
@@ -62,8 +50,16 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     [projects, projectId],
   );
   const queryClient = useQueryClient();
+  const { locale } = useUILocale();
+  const t = useCallback(
+    (key: string, params?: Record<string, string | number>) =>
+      translate(key, locale, params),
+    [locale],
+  );
 
-  const [format, setFormat] = useState<EbookFormat>("pdf");
+  const [formats, setFormats] = useState<{ pdf: boolean; epub: boolean }>(
+    () => ({ pdf: true, epub: false }),
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<EbookResponse | null>(null);
@@ -73,9 +69,6 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
   const [isRegeneratingCover, setIsRegeneratingCover] = useState(false);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
   const [coverPreviewLoading, setCoverPreviewLoading] = useState(false);
-  const [coverAssetUrls, setCoverAssetUrls] = useState<Record<string, string>>(
-    {},
-  );
   const [coverSetIndex, setCoverSetIndex] = useState(0);
   const [ebookDetails, setEbookDetails] = useState<EbookDetails | null>(null);
   const [ebookLoading, setEbookLoading] = useState(false);
@@ -92,12 +85,39 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
   >(null);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [rightsAccepted, setRightsAccepted] = useState(false);
+  const [metadataDraft, setMetadataDraft] = useState<MetadataDraft>({
+    title: "",
+    writer: "",
+    translator: "",
+    writerNote: null,
+    translatorNote: null,
+    language: null,
+    identifier: null,
+    modifiedISO: null,
+  });
+  const [generationProgress, setGenerationProgress] = useState<
+    GenerationProgressChip[]
+  >([]);
+  const [uploadedCoverUrl, setUploadedCoverUrl] = useState<string | null>(
+    null,
+  );
+  const uploadedCoverObjectUrlRef = useRef<string | null>(null);
+  const [isTranslationDialogOpen, setIsTranslationDialogOpen] = useState(false);
+
+  const selectedTranslation = useMemo(() => {
+    return (
+      translationOptions.find(
+        (option) => option.translationFileId === selectedTranslationId,
+      ) ?? null
+    );
+  }, [translationOptions, selectedTranslationId]);
 
   const fetchCoverInfo = useCallback(async () => {
     if (!token || !projectId) {
       setCoverInfo(null);
       setCoverLoading(false);
-      setCoverPreviewUrl(null);
+      if (!uploadedCoverUrl) setCoverPreviewUrl(null);
       return;
     }
     try {
@@ -108,12 +128,12 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     } catch (err) {
       setCoverInfo(null);
       setCoverError(
-        err instanceof Error ? err.message : "표지 정보를 불러오지 못했습니다.",
+        err instanceof Error ? err.message : t("export.cover.error.fetch"),
       );
     } finally {
       setCoverLoading(false);
     }
-  }, [token, projectId]);
+  }, [projectId, t, token, uploadedCoverUrl]);
 
   const fetchEbookDetailsInfo = useCallback(async () => {
     if (!token || !projectId) {
@@ -131,12 +151,12 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       setEbookError(
         err instanceof Error
           ? err.message
-          : "전자책 정보를 불러오지 못했습니다.",
+          : t("export.summary.error.fetch"),
       );
     } finally {
       setEbookLoading(false);
     }
-  }, [token, projectId]);
+  }, [projectId, t, token]);
 
   const loadTranslationOptions = useCallback(
     async (preferredId?: string | null) => {
@@ -171,13 +191,13 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
         setTranslationsError(
           err instanceof Error
             ? err.message
-            : "번역본 목록을 불러오지 못했습니다.",
+            : t("export.translation.dialog.error"),
         );
       } finally {
         setTranslationsLoading(false);
       }
     },
-    [projectId, selectedTranslationId, token],
+    [projectId, selectedTranslationId, t, token],
   );
 
   const projectTitle =
@@ -187,16 +207,11 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
   const profileMeta =
     (content?.projectProfile?.meta as Record<string, unknown> | undefined) ??
     undefined;
-  const originLangMeta =
-    typeof profileMeta?.originLang === "string"
-      ? (profileMeta.originLang as string)
-      : undefined;
   const targetLangMeta =
     typeof profileMeta?.targetLang === "string"
       ? (profileMeta.targetLang as string)
       : undefined;
-  const originLang = currentProject?.origin_lang || originLangMeta || "Unknown";
-  const targetLang = currentProject?.target_lang || targetLangMeta || "Unknown";
+  const targetLang = currentProject?.target_lang || targetLangMeta || "";
   const projectMeta =
     (currentProject as unknown as { meta?: Record<string, unknown> })?.meta ??
     {};
@@ -208,9 +223,10 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     projectMeta.translator ??
     profileMeta?.translator ??
     null) as string | null;
-  const awardTitle = (projectMeta.awardTitle ??
-    profileMeta?.awardTitle ??
-    null) as string | null;
+  const targetLangTitle =
+    (profileMeta?.bookTitleEn as string | undefined) ??
+    (projectMeta.bookTitleEn as string | undefined) ??
+    undefined;
 
   useEffect(() => {
     void fetchCoverInfo();
@@ -226,34 +242,19 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       setSelectedTranslationId(null);
       return;
     }
-    void loadTranslationOptions(
-      result?.recommendation?.translationFileId ?? null,
-    );
+    void loadTranslationOptions(result?.recommendation?.translationFileId ?? null);
   }, [
-    token,
-    projectId,
     loadTranslationOptions,
+    projectId,
     result?.recommendation?.translationFileId,
+    token,
   ]);
-
-  useEffect(() => {
-    const hasPending = (coverInfo?.coverSets ?? []).some(
-      (set) => set.status === "queued" || set.status === "generating",
-    );
-    if (!hasPending) return;
-
-    const interval = window.setInterval(() => {
-      void fetchCoverInfo();
-    }, 5000);
-
-    return () => window.clearInterval(interval);
-  }, [coverInfo?.coverSets, fetchCoverInfo]);
 
   useEffect(() => {
     const sets = coverInfo?.coverSets ?? [];
     if (!sets.length) {
       setCoverSetIndex(0);
-      setCoverPreviewUrl(coverInfo?.fallbackUrl ?? null);
+      if (!uploadedCoverUrl) setCoverPreviewUrl(coverInfo?.fallbackUrl ?? null);
       setCoverError(null);
       return;
     }
@@ -261,28 +262,21 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     const currentIndex = sets.findIndex((set) => set.isCurrent);
     const indexToUse = currentIndex >= 0 ? currentIndex : 0;
     setCoverSetIndex(indexToUse);
+    if (!uploadedCoverUrl) setCoverPreviewUrl(null);
     setCoverError(null);
-  }, [coverInfo?.coverSets, coverInfo?.fallbackUrl]);
+  }, [coverInfo?.coverSets, coverInfo?.fallbackUrl, uploadedCoverUrl]);
 
   useEffect(() => {
-    if (!translationOptions.length) return;
-    if (
-      selectedTranslationId &&
-      translationOptions.some(
-        (opt) => opt.translationFileId === selectedTranslationId,
-      )
-    ) {
+    if (uploadedCoverUrl) {
+      setCoverPreviewLoading(false);
       return;
     }
-    setSelectedTranslationId(translationOptions[0].translationFileId);
-  }, [translationOptions, selectedTranslationId]);
 
-  useEffect(() => {
-    const currentSet = coverInfo?.coverSets?.[coverSetIndex] ?? null;
+    const sets = coverInfo?.coverSets ?? [];
+    const currentSet = sets[coverSetIndex] ?? null;
     const assets = currentSet?.assets ?? [];
 
     if (!token || !projectId || !assets.length) {
-      setCoverAssetUrls({});
       setCoverPreviewUrl(coverInfo?.fallbackUrl ?? null);
       setCoverPreviewLoading(false);
       return;
@@ -317,29 +311,21 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
 
         if (cancelled) return;
 
-        const urlMap: Record<string, string> = {};
-        downloads.forEach((entry) => {
-          if (entry) {
-            urlMap[entry.assetId] = entry.url;
-          }
-        });
-        setCoverAssetUrls(urlMap);
-
         const wrapAsset = assets.find((asset) => asset.role === "wrap");
         const primaryAsset = wrapAsset ?? assets[0];
         const primaryUrl = primaryAsset
-          ? urlMap[primaryAsset.assetId]
+          ? downloads.find((entry) => entry?.assetId === primaryAsset.assetId)
+              ?.url
           : undefined;
         setCoverPreviewUrl(primaryUrl ?? coverInfo?.fallbackUrl ?? null);
         setCoverError(null);
       } catch (error) {
         if (!cancelled) {
-          setCoverAssetUrls({});
           setCoverPreviewUrl(coverInfo?.fallbackUrl ?? null);
           setCoverError(
             error instanceof Error
               ? error.message
-              : "표지 이미지를 불러오지 못했습니다.",
+              : t("export.cover.error.load"),
           );
         }
       } finally {
@@ -356,31 +342,25 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [
-    token,
-    projectId,
     coverInfo?.coverSets,
     coverInfo?.fallbackUrl,
     coverSetIndex,
+    projectId,
+    t,
+    token,
+    uploadedCoverUrl,
   ]);
 
+  useEffect(() => {
+    return () => {
+      if (uploadedCoverObjectUrlRef.current) {
+        URL.revokeObjectURL(uploadedCoverObjectUrlRef.current);
+      }
+    };
+  }, []);
+
   const currentEbook = result?.ebook;
-  const recommendation = result?.recommendation;
   const coverSets = coverInfo?.coverSets ?? [];
-  const currentCoverSet = coverSets[coverSetIndex] ?? null;
-  const secondaryAssets = currentCoverSet
-    ? currentCoverSet.assets
-        .filter((asset) => asset.role !== "wrap")
-        .sort((a, b) => assetOrder.indexOf(a.role) - assetOrder.indexOf(b.role))
-    : [];
-  const coverStatusText = currentCoverSet
-    ? coverStatusLabel[currentCoverSet.status]
-    : coverSets.length
-      ? coverStatusLabel[coverSets[0].status]
-      : "미생성";
-  const generatedLabel = currentCoverSet
-    ? new Date(currentCoverSet.generatedAt).toLocaleString()
-    : null;
-  const currentFailureReason = currentCoverSet?.failureReason ?? null;
   const hasPendingCoverJob =
     coverSets.some(
       (set) => set.status === "queued" || set.status === "generating",
@@ -388,7 +368,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     isRegeneratingCover ||
     coverLoading;
   const coverImageSrc =
-    coverPreviewUrl || coverInfo?.fallbackUrl || fallbackCover;
+    uploadedCoverUrl || coverPreviewUrl || coverInfo?.fallbackUrl || fallbackCover;
   const latestVersion = ebookDetails?.latestVersion ?? null;
   const latestAsset = latestVersion?.asset ?? null;
   const metadata = ebookDetails?.metadata ?? {
@@ -396,20 +376,170 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     translatorNote: null,
     isbn: null,
   };
+
+  useEffect(() => {
+    setMetadataDraft((prev) => {
+      let changed = false;
+      const next: MetadataDraft = { ...prev };
+      if (!prev.title) {
+        const fallbackTitle = targetLangTitle ?? projectTitle;
+        if (fallbackTitle) {
+          next.title = fallbackTitle;
+          changed = true;
+        }
+      }
+      if (!prev.language && targetLang) {
+        next.language = targetLang;
+        changed = true;
+      }
+      if (!prev.writer && authorName) {
+        next.writer = authorName;
+        changed = true;
+      }
+      if (!prev.translator && translatorName) {
+        next.translator = translatorName;
+        changed = true;
+      }
+      if (prev.writerNote == null && metadata.writerNote != null) {
+        next.writerNote = metadata.writerNote;
+        changed = true;
+      }
+      if (prev.translatorNote == null && metadata.translatorNote != null) {
+        next.translatorNote = metadata.translatorNote;
+        changed = true;
+      }
+      if (!prev.identifier) {
+        const identifier =
+          ebookDetails?.ebook?.ebookId ?? projectId ?? null;
+        if (identifier) {
+          next.identifier = identifier;
+          changed = true;
+        }
+      }
+      if (!prev.modifiedISO) {
+        const modified =
+          ebookDetails?.ebook?.updatedAt ?? new Date().toISOString();
+        next.modifiedISO = modified;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [
+    authorName,
+    ebookDetails?.ebook?.ebookId,
+    ebookDetails?.ebook?.updatedAt,
+    metadata.translatorNote,
+    metadata.writerNote,
+    projectId,
+    projectTitle,
+    targetLang,
+    targetLangTitle,
+    translatorName,
+  ]);
+
   const downloadUrl =
     latestAsset?.publicUrl ?? currentEbook?.storageRef ?? null;
   const downloadFilename =
     latestAsset?.fileName ?? currentEbook?.filename ?? "ebook";
   const downloadAssetId = latestAsset?.assetId ?? currentEbook?.assetId ?? null;
+  const latestVersionLabel = latestVersion
+    ? `v${latestVersion.versionNumber} · ${latestVersion.format.toUpperCase()}`
+    : null;
 
-  const handleGenerate = async () => {
-    if (!token || !projectId) {
-      setError("로그인 상태를 다시 확인해 주세요.");
-      return;
+  const translationSummary: TranslationSummary = useMemo(
+    () => ({
+      exists: Boolean(selectedTranslationId),
+      id: selectedTranslationId ?? undefined,
+      qaScore: selectedTranslation?.qualityScore ?? null,
+      targetLang: targetLang || "",
+    }),
+    [selectedTranslation?.qualityScore, selectedTranslationId, targetLang],
+  );
+
+  const essentialsSnapshot: EssentialsSnapshot = useMemo(
+    () => ({
+      translation: translationSummary,
+      meta: { ...metadataDraft },
+      wantPDF: formats.pdf,
+      wantEPUB: formats.epub,
+      accepted: rightsAccepted,
+    }),
+    [formats.epub, formats.pdf, metadataDraft, rightsAccepted, translationSummary],
+  );
+
+  const readiness = useMemo(
+    () =>
+      evaluateReadiness({
+        core: {
+          title: metadataDraft.title,
+          writer: metadataDraft.writer,
+          translator: metadataDraft.translator,
+          language: metadataDraft.language ?? targetLang ?? undefined,
+          rightsAccepted,
+          identifier: metadataDraft.identifier ?? undefined,
+          modifiedISO: metadataDraft.modifiedISO ?? undefined,
+        },
+        translationExists: Boolean(selectedTranslationId),
+        wantPDF: formats.pdf,
+        wantEPUB: formats.epub,
+        accepted: rightsAccepted,
+      }),
+    [
+      formats.epub,
+      formats.pdf,
+      metadataDraft.identifier,
+      metadataDraft.language,
+      metadataDraft.modifiedISO,
+      metadataDraft.title,
+      metadataDraft.translator,
+      metadataDraft.writer,
+      rightsAccepted,
+      selectedTranslationId,
+      targetLang,
+    ],
+  );
+
+  const generationQueue = useMemo(
+    () => getGenerateQueue(formats.pdf, formats.epub),
+    [formats.pdf, formats.epub],
+  );
+
+  const generationDisabled =
+    isLoading ||
+    !generationQueue.length ||
+    (formats.pdf && !readiness.pdf.ok) ||
+    (formats.epub && !readiness.epub.ok);
+
+  const buildState: BuildState = isLoading
+    ? "running"
+    : error
+      ? "error"
+      : currentEbook
+        ? "done"
+        : "idle";
+
+  const buildPercent = useMemo(() => {
+    if (!generationProgress.length) return 0;
+    const total = generationProgress.length;
+    const completed = generationProgress.filter(
+      (chip) => chip.status === "done",
+    ).length;
+    const errored = generationProgress.some((chip) => chip.status === "error");
+    const running = generationProgress.some((chip) => chip.status === "running");
+    if (errored) {
+      return (completed / total) * 100;
     }
-    setIsLoading(true);
-    setError(null);
-    try {
+    if (running) {
+      return ((completed + 0.5) / total) * 100;
+    }
+    return (completed / total) * 100;
+  }, [generationProgress]);
+
+  const runGenerateForFormat = useCallback(
+    async (format: GenerationFormat) => {
+      if (!token || !projectId) {
+        throw new Error("missing_auth");
+      }
       const response = await api.recommendOrCreateEbook(token, {
         projectId,
         format,
@@ -430,19 +560,81 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
           response.recommendation?.translationFileId ?? null,
         );
       }
+    },
+    [
+      fetchEbookDetailsInfo,
+      loadTranslationOptions,
+      projectId,
+      queryClient,
+      selectedTranslationId,
+      token,
+    ],
+  );
+
+  const handleGenerateSelected = useCallback(async () => {
+    if (!token || !projectId) {
+      setError(t("export.errors.auth"));
+      return;
+    }
+
+    if (!generationQueue.length) {
+      setError(t("export.errors.format"));
+      return;
+    }
+
+    setError(null);
+    setIsLoading(true);
+    setGenerationProgress(
+      generationQueue.map((format, index) => ({
+        format,
+        status: index === 0 ? "running" : "pending",
+      })),
+    );
+    trackEvent("ebook_generate_clicked", {
+      projectId,
+      formats: generationQueue,
+    });
+
+    try {
+      for (let index = 0; index < generationQueue.length; index += 1) {
+        const format = generationQueue[index];
+        try {
+          await runGenerateForFormat(format);
+          setGenerationProgress((chips) =>
+            chips.map((chip, chipIndex) => {
+              if (chip.format === format) {
+                return { ...chip, status: "done" };
+              }
+              if (chip.status === "pending" && chipIndex === index + 1) {
+                return { ...chip, status: "running" };
+              }
+              return chip;
+            }),
+          );
+        } catch (err) {
+          setGenerationProgress((chips) =>
+            chips.map((chip) =>
+              chip.format === format
+                ? { ...chip, status: "error" }
+                : chip,
+            ),
+          );
+          throw err;
+        }
+      }
     } catch (err) {
       setResult(null);
       setError(
-        err instanceof Error ? err.message : "전자책 생성에 실패했습니다.",
+        err instanceof Error ? err.message : t("export.errors.generate"),
       );
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [generationQueue, projectId, runGenerateForFormat, t, token]);
 
   const handleRegenerateCover = async () => {
     if (!token || !projectId) {
-      setCoverError("로그인 상태를 다시 확인해 주세요.");
+      setCoverError(t("export.cover.error.auth"));
       return;
     }
     setIsRegeneratingCover(true);
@@ -452,16 +644,68 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       await fetchCoverInfo();
     } catch (err) {
       setCoverError(
-        err instanceof Error ? err.message : "표지 재생성에 실패했습니다.",
+        err instanceof Error ? err.message : t("export.cover.error.regenerate"),
       );
     } finally {
       setIsRegeneratingCover(false);
     }
   };
 
+  const handleCoverUpload = useCallback(
+    (file: File) => {
+      if (uploadedCoverObjectUrlRef.current) {
+        URL.revokeObjectURL(uploadedCoverObjectUrlRef.current);
+      }
+      const objectUrl = URL.createObjectURL(file);
+      uploadedCoverObjectUrlRef.current = objectUrl;
+      setUploadedCoverUrl(objectUrl);
+      trackEvent("cover_upload_clicked", {
+        projectId,
+        size: file.size,
+        type: file.type,
+      });
+    },
+    [projectId],
+  );
+
+  const handleRemoveUploadedCover = useCallback(() => {
+    if (uploadedCoverObjectUrlRef.current) {
+      URL.revokeObjectURL(uploadedCoverObjectUrlRef.current);
+      uploadedCoverObjectUrlRef.current = null;
+    }
+    setUploadedCoverUrl(null);
+  }, []);
+
+  const handleToggleFormat = useCallback(
+    (format: GenerationFormat, value: boolean) => {
+      setFormats((prev) => ({ ...prev, [format]: value }));
+    },
+    [],
+  );
+
+  const handleSnapshotChange = useCallback(
+    (draft: EssentialsSnapshot) => {
+      setFormats({ pdf: draft.wantPDF, epub: draft.wantEPUB });
+      setRightsAccepted(draft.accepted);
+      setMetadataDraft((prev) => ({
+        ...prev,
+        ...draft.meta,
+      }));
+    },
+    [],
+  );
+
+  const openTranslationPicker = useCallback(() => {
+    setIsTranslationDialogOpen(true);
+  }, []);
+
+  const closeTranslationPicker = useCallback(() => {
+    setIsTranslationDialogOpen(false);
+  }, []);
+
   const handleDownload = useCallback(async () => {
     if (!token || !projectId) {
-      setDownloadError("로그인 상태를 다시 확인해 주세요.");
+      setDownloadError(t("export.errors.auth"));
       return;
     }
 
@@ -471,11 +715,11 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
         if (typeof window !== "undefined") {
           window.open(downloadUrl, "_blank", "noopener,noreferrer");
         } else {
-          setDownloadError("브라우저 환경에서만 다운로드할 수 있습니다.");
+          setDownloadError(t("export.download.browserOnly"));
         }
         return;
       }
-      setDownloadError("다운로드 가능한 전자책 파일이 없습니다.");
+      setDownloadError(t("export.download.unavailable"));
       return;
     }
 
@@ -485,7 +729,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       setDownloadError(null);
       const blob = await api.downloadEbook(token, projectId, downloadAssetId);
       if (typeof document === "undefined") {
-        setDownloadError("브라우저 환경에서만 다운로드할 수 있습니다.");
+        setDownloadError(t("export.download.browserOnly"));
         return;
       }
       objectUrl = URL.createObjectURL(blob);
@@ -497,7 +741,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       anchor.remove();
     } catch (err) {
       setDownloadError(
-        err instanceof Error ? err.message : "전자책 다운로드에 실패했습니다.",
+        err instanceof Error ? err.message : t("export.download.error"),
       );
     } finally {
       if (objectUrl) {
@@ -505,468 +749,236 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       }
       setDownloadLoading(false);
     }
-  }, [downloadAssetId, downloadFilename, downloadUrl, projectId, token]);
+  }, [
+    downloadAssetId,
+    downloadFilename,
+    downloadUrl,
+    projectId,
+    t,
+    token,
+  ]);
+
+  const downloadAvailable = downloadAssetId !== null || Boolean(downloadUrl);
+  const downloadLabel = downloadLoading
+    ? t("export.download.loading")
+    : downloadFilename
+      ? t("export.download.labelWithName", { name: downloadFilename })
+      : t("export.download.label");
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-700">Export eBook</h2>
-          <p className="text-xs text-slate-500">
-            번역본을 전자책으로 내보내고 메타데이터를 검토하세요.
+    <div className="flex h-full flex-col gap-4 overflow-auto p-4">
+      <ExportEssentialsCard
+        t={t}
+        snap={essentialsSnapshot}
+        setSnap={handleSnapshotChange}
+        readiness={readiness}
+        buildState={buildState}
+        buildPercent={buildPercent}
+        progress={generationProgress}
+        translation={translationSummary}
+        onOpenTranslation={openTranslationPicker}
+        onToggleFormat={handleToggleFormat}
+        onGenerate={handleGenerateSelected}
+        generationDisabled={generationDisabled}
+        errorMessage={error}
+        onDownload={downloadAvailable ? handleDownload : undefined}
+        downloadDisabled={downloadLoading || !downloadAvailable}
+        downloadLabel={downloadLabel}
+        downloadLoading={downloadLoading}
+        downloadError={downloadError}
+      />
+
+      <PromotionPanel
+        t={t}
+        coverProps={{
+          coverUrl: coverImageSrc,
+          isGenerating: coverPreviewLoading,
+          isRegenerating: hasPendingCoverJob,
+          onUpload: handleCoverUpload,
+          onRemove: handleRemoveUploadedCover,
+          onGenerate: handleRegenerateCover,
+          onRegenerate: handleRegenerateCover,
+        }}
+      />
+
+      {coverError && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-600">
+          {coverError}
+        </div>
+      )}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-semibold text-slate-700">
+          {t("export.summary.title")}
+        </h3>
+        {ebookLoading ? (
+          <p className="mt-2 text-xs text-slate-500">
+            {t("export.summary.loading")}
           </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span>Project</span>
-          <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-700">
-            {projectTitle}
-          </span>
-        </div>
-      </header>
-
-      <section className="flex-1 space-y-4 overflow-auto">
-        <div className="flex flex-col items-center gap-6 rounded border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="w-full">
-            <h3 className="text-xs font-semibold uppercase text-slate-500">
-              표지 미리보기
-            </h3>
-            <div className="mt-4 flex justify-center">
-              <img
-                src={coverImageSrc}
-                alt="ebook cover preview"
-                className="h-[320px] w-full max-w-4xl rounded border border-slate-200 bg-slate-100 object-contain shadow"
-              />
+        ) : ebookDetails?.ebook ? (
+          <dl className="mt-3 space-y-2 text-xs text-slate-600">
+            <div className="flex justify-between">
+              <dt>{t("export.summary.status")}</dt>
+              <dd className="font-semibold text-slate-800">
+                {ebookDetails.status}
+              </dd>
             </div>
-            <p className="mt-2 text-center text-[11px] font-medium text-slate-500">
-              전체 (앞·책등·뒤 연속)
-            </p>
-            <div className="mt-2 text-center text-[11px] text-slate-500">
-              {coverPreviewLoading
-                ? "표지 이미지를 불러오는 중…"
-                : coverStatusText}
-              {generatedLabel && !coverPreviewLoading && (
-                <span className="block text-[10px] text-slate-400">
-                  {generatedLabel}
-                </span>
-              )}
-            </div>
-            {coverSets.length > 1 && (
-              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCoverSetIndex((prev) => (prev > 0 ? prev - 1 : prev));
-                  }}
-                  disabled={coverSetIndex === 0}
-                  className="rounded border border-slate-200 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  이전 커버
-                </button>
-                <span>
-                  {coverSetIndex + 1} / {coverSets.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCoverSetIndex((prev) =>
-                      prev < coverSets.length - 1 ? prev + 1 : prev,
-                    );
-                  }}
-                  disabled={coverSetIndex >= coverSets.length - 1}
-                  className="rounded border border-slate-200 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  다음 커버
-                </button>
-              </div>
-            )}
-            {secondaryAssets.length > 0 && (
-              <div className="mt-4 grid w-full gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {secondaryAssets.map((asset) => {
-                  const url =
-                    coverAssetUrls[asset.assetId] ??
-                    coverInfo?.fallbackUrl ??
-                    coverPreviewUrl ??
-                    fallbackCover;
-                  return (
-                    <div
-                      key={asset.assetId}
-                      className="flex flex-col items-center gap-2"
-                    >
-                      <img
-                        src={url}
-                        alt={`${coverAssetLabels[asset.role]} preview`}
-                        className="h-56 w-full max-w-xs rounded border border-slate-200 bg-slate-100 object-contain shadow"
-                      />
-                      <span className="text-[11px] font-medium text-slate-500">
-                        {coverAssetLabels[asset.role]}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <div className="mt-3 space-y-2 text-xs text-slate-600">
-              <div className="flex items-center justify-between">
-                <span>표지 상태</span>
-                <span className="font-medium text-slate-700">
-                  {coverStatusText}
-                  {(coverLoading ||
-                    isRegeneratingCover ||
-                    coverPreviewLoading) &&
-                    " · 업데이트 중…"}
-                </span>
-              </div>
-              {currentCoverSet?.status === "queued" && (
-                <p className="rounded border border-slate-200 bg-slate-100 p-2 text-slate-600">
-                  새 표지 작업이 대기 중입니다. 잠시 후 자동으로 생성됩니다.
-                </p>
-              )}
-              {currentCoverSet?.status === "failed" && (
-                <p className="rounded border border-rose-200 bg-rose-50 p-2 text-rose-600">
-                  자동 표지 생성에 실패했습니다. 다시 시도해 주세요.
-                </p>
-              )}
-              {currentFailureReason && (
-                <p className="rounded border border-rose-100 bg-rose-50 p-2 text-[11px] text-rose-500">
-                  사유: {currentFailureReason}
-                </p>
-              )}
-              {coverError && <p className="text-rose-600">{coverError}</p>}
-              <button
-                type="button"
-                onClick={handleRegenerateCover}
-                disabled={hasPendingCoverJob || !token || !projectId}
-                className={`w-full rounded border px-3 py-1 font-semibold transition ${
-                  hasPendingCoverJob
-                    ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                    : "border-indigo-200 bg-indigo-50 text-indigo-700 hover:border-indigo-300 hover:bg-indigo-100"
-                }`}
-              >
-                {isRegeneratingCover || coverLoading
-                  ? "표지 재생성 중…"
-                  : "표지 재생성"}
-              </button>
-              {!coverSets.length && !hasPendingCoverJob && (
-                <p className="text-xs text-slate-500">
-                  표지를 아직 생성하지 않았습니다. ‘표지 재생성’을 눌러 새
-                  표지를 만들어 보세요.
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="w-full text-xs text-slate-600">
-            <h3 className="text-xs font-semibold uppercase text-slate-500">
-              메타데이터
-            </h3>
-            <dl className="mt-2 space-y-1">
+            {metadataDraft.writer && (
               <div className="flex justify-between">
-                <dt className="text-slate-500">Origin language</dt>
-                <dd className="font-medium text-slate-800">{originLang}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Target language</dt>
-                <dd className="font-medium text-slate-800">{targetLang}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Author</dt>
-                <dd className="font-medium text-slate-800">
-                  {authorName ?? "미등록"}
+                <dt>{t("export.summary.sourceAuthor")}</dt>
+                <dd className="font-semibold text-slate-800">
+                  {metadataDraft.writer}
                 </dd>
               </div>
+            )}
+            {metadataDraft.translator && (
               <div className="flex justify-between">
-                <dt className="text-slate-500">Translated by</dt>
-                <dd className="font-medium text-slate-800">
-                  {translatorName ?? "미등록"}
+                <dt>{t("export.summary.translator")}</dt>
+                <dd className="font-semibold text-slate-800">
+                  {metadataDraft.translator}
                 </dd>
               </div>
-              {currentEbook?.qualityScore !== null &&
-                currentEbook?.qualityScore !== undefined && (
-                  <div className="flex justify-between">
-                    <dt className="text-slate-500">Quality score</dt>
-                    <dd className="font-medium text-slate-800">
-                      {currentEbook.qualityScore}
-                    </dd>
-                  </div>
-                )}
-              {awardTitle && (
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">Award</dt>
-                  <dd className="font-medium text-slate-800">{awardTitle}</dd>
-                </div>
-              )}
-              {metadata.isbn && (
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">ISBN</dt>
-                  <dd className="font-medium text-slate-800">
-                    {metadata.isbn}
-                  </dd>
-                </div>
-              )}
-            </dl>
-            {metadata.writerNote && (
-              <div className="mt-3">
-                <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-                  Writer&apos;s note
-                </h4>
-                <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
-                  {metadata.writerNote}
-                </p>
+            )}
+            {latestVersionLabel && (
+              <div className="flex justify-between">
+                <dt>{t("export.summary.latest")}</dt>
+                <dd className="font-semibold text-slate-800">
+                  {latestVersionLabel}
+                </dd>
               </div>
             )}
-            {metadata.translatorNote && (
-              <div className="mt-3">
-                <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-                  Translator&apos;s note
-                </h4>
-                <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
-                  {metadata.translatorNote}
-                </p>
+            {latestVersion && latestVersion.wordCount !== null && (
+              <div className="flex justify-between">
+                <dt>{t("export.summary.words")}</dt>
+                <dd className="font-semibold text-slate-800">
+                  {latestVersion.wordCount.toLocaleString()}
+                </dd>
               </div>
             )}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="text-xs font-semibold uppercase text-slate-500">
-              출력 포맷
-            </h3>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {formatOptions.map((option) => (
-                <label
-                  key={option}
-                  className={`flex cursor-pointer items-start gap-3 rounded border px-3 py-2 text-sm transition ${
-                    format === option
-                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                      : "border-slate-200 bg-white text-slate-700"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="ebook-format"
-                    className="mt-1"
-                    checked={format === option}
-                    onChange={() => setFormat(option)}
-                  />
-                  <div>
-                    <p className="font-semibold">{formatLabels[option]}</p>
-                    <p className="text-xs text-slate-500">
-                      {option === "pdf"
-                        ? "인쇄 및 검수용 고정 레이아웃."
-                        : "전자책 리더 호환 유동 레이아웃."}
-                    </p>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="mt-4 inline-flex items-center justify-center rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
-              onClick={handleGenerate}
-              disabled={isLoading || !token || !projectId}
-            >
-              {isLoading ? "생성 중..." : "전자책 생성"}
-            </button>
-            {(downloadAssetId || downloadUrl) && (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  disabled={downloadLoading}
-                  className="inline-flex items-center rounded border border-indigo-200 bg-indigo-50 px-3 py-1 text-sm font-medium text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {downloadLoading
-                    ? "다운로드 준비 중…"
-                    : `${downloadFilename} 다운로드`}
-                </button>
+            {metadataDraft.language && (
+              <div className="flex justify-between">
+                <dt>{t("export.summary.language")}</dt>
+                <dd className="font-semibold text-slate-800">
+                  {metadataDraft.language}
+                </dd>
               </div>
             )}
-            {downloadError && (
-              <p className="mt-2 text-xs text-rose-600">{downloadError}</p>
-            )}
-            {error && <p className="mt-3 text-xs text-rose-600">{error}</p>}
-          </section>
-
-          <section className="rounded border border-slate-200 bg-white p-4 text-sm shadow-sm">
-            <h3 className="text-xs font-semibold uppercase text-slate-500">
-              생성 결과
-            </h3>
-            {ebookLoading && (
-              <p className="mt-2 text-xs text-slate-500">
-                전자책 정보를 불러오는 중입니다…
-              </p>
-            )}
-            {ebookError && (
-              <p className="mt-2 text-xs text-rose-600">{ebookError}</p>
-            )}
-            {!ebookDetails?.ebook && !ebookLoading && (
-              <p className="mt-2 text-xs text-slate-500">
-                전자책을 생성하면 결과가 여기에 표시됩니다.
-              </p>
-            )}
-            {!translationOptions.length && !translationsLoading && (
-              <button
-                type="button"
-                onClick={() =>
-                  loadTranslationOptions(
-                    result?.recommendation?.translationFileId ?? null,
-                  )
-                }
-                className="mt-3 inline-flex items-center justify-center rounded border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
-              >
-                번역본 목록 불러오기
-              </button>
-            )}
-            {ebookDetails?.ebook && (
-              <div className="mt-3 space-y-2 text-xs text-slate-600">
-                <p>
-                  상태:{" "}
-                  <span className="font-semibold text-slate-800">
-                    {ebookDetails.status}
-                  </span>
-                </p>
-                {result?.requiresConfirmation && (
-                  <div className="space-y-1 rounded border border-amber-200 bg-amber-50 p-3 text-amber-700">
-                    <p className="font-semibold">
-                      전자책 생성 전에 확인이 필요합니다.
-                    </p>
-                    <ul className="list-disc pl-4 text-xs">
-                      <li>
-                        사용할 번역본을 선택해 주세요. 아래 추천 번역본을
-                        확인하거나 수동으로 지정할 수 있습니다.
-                      </li>
-                    </ul>
-                  </div>
-                )}
-                {(translationsLoading ||
-                  translationOptions.length > 0 ||
-                  translationsError) && (
-                  <div className="space-y-3 rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-semibold uppercase text-slate-500">
-                        번역본 선택
-                      </h4>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          loadTranslationOptions(selectedTranslationId)
-                        }
-                        className="rounded border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
-                      >
-                        목록 새로고침
-                      </button>
-                    </div>
-                    {translationsLoading ? (
-                      <p className="text-xs">
-                        번역본 목록을 불러오는 중입니다…
-                      </p>
-                    ) : translationOptions.length ? (
-                      <div className="space-y-2">
-                        {translationOptions.map((option, index) => {
-                          const isSelected =
-                            selectedTranslationId === option.translationFileId;
-                          const isRecommended =
-                            result?.recommendation?.translationFileId ===
-                            option.translationFileId;
-                          const timestamp =
-                            option.completedAt ??
-                            option.updatedAt ??
-                            option.createdAt;
-                          return (
-                            <label
-                              key={option.translationFileId}
-                              className={`flex cursor-pointer flex-col gap-1 rounded border px-3 py-2 text-xs transition ${
-                                isSelected
-                                  ? "border-indigo-500 bg-white shadow-sm"
-                                  : "border-slate-200 bg-white hover:border-indigo-300"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="radio"
-                                    name="translation-choice"
-                                    checked={isSelected}
-                                    onChange={() =>
-                                      setSelectedTranslationId(
-                                        option.translationFileId,
-                                      )
-                                    }
-                                  />
-                                  <span className="font-semibold text-slate-700">
-                                    번역본 {index + 1}
-                                  </span>
-                                </div>
-                                <span className="text-[11px] text-slate-500">
-                                  {formatDateTime(timestamp)}
-                                </span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                                <span>
-                                  {option.filename
-                                    ? option.filename
-                                    : `ID ${option.translationFileId.slice(0, 6)}…`}
-                                </span>
-                                {option.qualityScore !== null && (
-                                  <span className="rounded bg-indigo-50 px-2 py-0.5 text-indigo-600">
-                                    품질 {option.qualityScore.toFixed(1)}점
-                                  </span>
-                                )}
-                                {isRecommended && (
-                                  <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">
-                                    추천
-                                  </span>
-                                )}
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-500">
-                        사용 가능한 번역본이 없습니다. 번역을 먼저 완료해
-                        주세요.
-                      </p>
-                    )}
-                    {translationsError && (
-                      <p className="text-xs text-rose-600">
-                        {translationsError}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {latestVersion && (
-                  <div className="space-y-1">
-                    <p>
-                      최신 버전:{" "}
-                      <span className="font-semibold text-slate-800">
-                        v{latestVersion.versionNumber}
-                      </span>{" "}
-                      · {latestVersion.format.toUpperCase()}
-                    </p>
-                    {latestVersion.wordCount !== null && (
-                      <p>
-                        단어 수: {latestVersion.wordCount?.toLocaleString()}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {recommendation && (
-                  <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3">
-                    <p className="font-semibold text-slate-700">추천 번역본</p>
-                    <p className="text-xs text-slate-500">
-                      번역 파일 ID: {recommendation.translationFileId}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      품질 점수: {recommendation.qualityScore}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        </div>
+          </dl>
+        ) : (
+          <p className="mt-2 text-xs text-slate-500">
+            {t("export.summary.empty")}
+          </p>
+        )}
+        {ebookError && (
+          <p className="mt-2 text-xs text-rose-600">{ebookError}</p>
+        )}
       </section>
+
+      {isTranslationDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 py-8">
+          <div className="max-h-full w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+              <h3 className="text-sm font-semibold text-slate-800">
+                {t("export.translation.dialog.title")}
+              </h3>
+              <button
+                type="button"
+                className="text-xs text-slate-500 hover:text-slate-700"
+                onClick={closeTranslationPicker}
+              >
+                {t("export.translation.dialog.close")}
+              </button>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
+              <span>{t("export.translation.dialog.subtitle")}</span>
+              <button
+                type="button"
+                onClick={() => loadTranslationOptions(selectedTranslationId)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+              >
+                {t("export.translation.dialog.refresh")}
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-auto px-4 py-3 space-y-2">
+              {translationsLoading ? (
+                <p className="text-xs text-slate-500">
+                  {t("export.translation.dialog.loading")}
+                </p>
+              ) : translationOptions.length ? (
+                translationOptions.map((option, index) => {
+                  const isSelected =
+                    selectedTranslationId === option.translationFileId;
+                  const isRecommended =
+                    result?.recommendation?.translationFileId ===
+                    option.translationFileId;
+                  const timestamp =
+                    option.completedAt ??
+                    option.updatedAt ??
+                    option.createdAt;
+                  return (
+                    <label
+                      key={option.translationFileId}
+                      className={`flex cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2 text-xs transition ${
+                        isSelected
+                          ? "border-indigo-500 bg-white shadow-sm"
+                          : "border-slate-200 bg-white hover:border-indigo-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="translation-choice"
+                            checked={isSelected}
+                            onChange={() => {
+                              setSelectedTranslationId(option.translationFileId);
+                              closeTranslationPicker();
+                            }}
+                          />
+                          <span className="font-semibold text-slate-700">
+                            {t("export.translation.dialog.option", {
+                              index: index + 1,
+                            })}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500">
+                          {formatDateTime(timestamp)}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                        <span>
+                          {option.filename
+                            ? option.filename
+                            : `ID ${option.translationFileId.slice(0, 6)}…`}
+                        </span>
+                        {option.qualityScore !== null && (
+                          <span className="rounded bg-indigo-50 px-2 py-0.5 text-indigo-600">
+                            {t("export.translation.dialog.score", {
+                              score: option.qualityScore.toFixed(1),
+                            })}
+                          </span>
+                        )}
+                        {isRecommended && (
+                          <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">
+                            {t("export.translation.dialog.recommended")}
+                          </span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })
+              ) : (
+                <p className="text-xs text-slate-500">
+                  {t("export.translation.dialog.empty")}
+                </p>
+              )}
+              {translationsError && (
+                <p className="text-xs text-rose-600">{translationsError}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

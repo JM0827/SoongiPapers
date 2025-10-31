@@ -893,6 +893,23 @@ function mapProjectRow(row: any) {
     meta.translator = row.translator_name;
   }
 
+  let userConsent: Record<string, any> | null = null;
+  if (row.user_consent) {
+    if (typeof row.user_consent === "object") {
+      userConsent = row.user_consent as Record<string, any>;
+    } else if (typeof row.user_consent === "string") {
+      try {
+        const parsed = JSON.parse(row.user_consent) as Record<string, any>;
+        userConsent = parsed;
+      } catch (error) {
+        app.log?.warn?.(
+          { error, userConsent: row.user_consent },
+          "[PROJECT] Failed to parse project user_consent field",
+        );
+      }
+    }
+  }
+
   return {
     project_id: row.project_id,
     user_id: row.user_id,
@@ -904,6 +921,7 @@ function mapProjectRow(row: any) {
     intention: row.intention,
     memo: row.memo,
     meta,
+    user_consent: userConsent,
     status: row.status,
     origin_lang: row.origin_lang,
     target_lang: row.target_lang,
@@ -916,6 +934,21 @@ const trimOrNull = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+};
+
+const serializeUserConsent = (value: any): string => {
+  if (value === null || value === undefined) {
+    return JSON.stringify({});
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    app.log?.warn?.({ error, value }, "[PROJECT] Failed to serialize user_consent");
+    return JSON.stringify({});
+  }
 };
 
 async function getUserDisplayName(userId: string): Promise<string | null> {
@@ -1039,7 +1072,7 @@ app.get("/api/projects", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE user_id = $1
        ORDER BY updated_at DESC NULLS LAST, created_at DESC`,
@@ -1105,7 +1138,7 @@ app.get("/api/projects/latest", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE user_id = $1
        ORDER BY updated_at DESC NULLS LAST, created_at DESC
@@ -1129,7 +1162,7 @@ app.get("/api/projects/:projectId", async (req, reply) => {
 
   try {
     const { rows } = await query(
-      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE project_id = $1 AND user_id = $2
        LIMIT 1`,
@@ -1161,6 +1194,7 @@ app.post("/api/projects", async (req, reply) => {
     translator_name: string;
     memo: string;
     meta: any;
+    user_consent: any;
     status: string;
     origin_lang: string;
     target_lang: string;
@@ -1184,9 +1218,9 @@ app.post("/api/projects", async (req, reply) => {
     }
 
     const { rows } = await query(
-      `INSERT INTO translationprojects (user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
-       RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
+      `INSERT INTO translationprojects (user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
+       RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at`,
       [
         userId,
         requestedTitle,
@@ -1197,6 +1231,7 @@ app.post("/api/projects", async (req, reply) => {
         translatorName,
         body.memo ?? "",
         JSON.stringify(body.meta ?? {}),
+        serializeUserConsent(body.user_consent),
         body.status ?? "active",
         body.origin_lang ?? "Korean",
         body.target_lang ?? "English",
@@ -1230,6 +1265,7 @@ app.put("/api/projects/:projectId", async (req, reply) => {
     translator_name: string;
     memo: string;
     meta: any;
+    user_consent: any;
     status: string;
     origin_lang: string;
     target_lang: string;
@@ -1237,7 +1273,7 @@ app.put("/api/projects/:projectId", async (req, reply) => {
 
   try {
     const existing = await query(
-      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at
+      `SELECT project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at
        FROM translationprojects
        WHERE project_id = $1 AND user_id = $2
        LIMIT 1`,
@@ -1255,6 +1291,17 @@ app.put("/api/projects/:projectId", async (req, reply) => {
         return current.meta as Record<string, any>;
       try {
         return JSON.parse(current.meta as string);
+      } catch (err) {
+        return {} as Record<string, any>;
+      }
+    })();
+
+    const currentUserConsent = (() => {
+      if (!current.user_consent) return {} as Record<string, any>;
+      if (typeof current.user_consent === "object")
+        return current.user_consent as Record<string, any>;
+      try {
+        return JSON.parse(current.user_consent as string);
       } catch (err) {
         return {} as Record<string, any>;
       }
@@ -1297,12 +1344,13 @@ app.put("/api/projects/:projectId", async (req, reply) => {
              translator_name = $6,
              memo = $7,
              meta = $8::jsonb,
-             status = $9,
-             origin_lang = $10,
-             target_lang = $11,
+             user_consent = $9,
+             status = $10,
+             origin_lang = $11,
+             target_lang = $12,
              updated_at = NOW()
-     WHERE project_id = $12 AND user_id = $13
-     RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, status, origin_lang, target_lang, created_at, updated_at`,
+     WHERE project_id = $13 AND user_id = $14
+     RETURNING project_id, user_id, title, description, intention, book_title, author_name, translator_name, memo, meta, user_consent, status, origin_lang, target_lang, created_at, updated_at`,
       [
         nextTitle,
         nextDescription,
@@ -1312,6 +1360,7 @@ app.put("/api/projects/:projectId", async (req, reply) => {
         nextTranslatorName,
         body.memo ?? current.memo,
         JSON.stringify(body.meta ?? currentMeta ?? {}),
+        serializeUserConsent(body.user_consent ?? currentUserConsent ?? {}),
         body.status ?? current.status,
         body.origin_lang ?? current.origin_lang,
         body.target_lang ?? current.target_lang,

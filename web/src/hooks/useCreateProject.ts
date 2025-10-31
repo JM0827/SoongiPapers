@@ -19,7 +19,7 @@ const buildDefaultTitle = () => {
     .replace(/\./g, "")
     .replace(/\s+/g, "")
     .replace(/:/g, "");
-  return `새 프로젝트 ${formatted}`;
+  return `번역 ${formatted}`;
 };
 
 interface CreateProjectOptions {

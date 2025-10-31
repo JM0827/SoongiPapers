@@ -44,7 +44,6 @@ import { useChatActionStore } from "../../store/chatAction.store";
 import type { EditingSelectionPayload } from "../../types/domain";
 import { translate } from "../../lib/locale";
 import { useUILocale } from "../../hooks/useUILocale";
-import { Upload } from "lucide-react";
 import {
   getOriginPrepGuardMessage,
   isOriginPrepReady,
@@ -236,6 +235,10 @@ export const ChatOrchestrator = ({
   const setTab = useUIStore((state) => state.setRightPanelTab);
   const triggerQualityDialog = useUIStore((state) => state.openQualityDialog);
   const setPreviewExpanded = useUIStore((state) => state.setPreviewExpanded);
+  const isSidebarCollapsed = useUIStore((state) => state.isSidebarCollapsed);
+  const leftPanelWidth = useUIStore((state) => state.leftPanelWidth);
+  const rightPanelWidth = useUIStore((state) => state.rightPanelWidth);
+  const [titleMaxWidth, setTitleMaxWidth] = useState(480);
   const { createProject, isCreating } = useCreateProject();
   const { currentModel: selectedModel } = useModelSelection();
 
@@ -448,25 +451,7 @@ export const ChatOrchestrator = ({
     [updateChatMessage],
   );
 
-  const handleQuickUpload = useCallback(() => {
-    setShowUploader(true);
-    openFileDialog();
-    setQuickReplies([]);
-  }, [openFileDialog, setShowUploader]);
-
-  const buildQuickReplies = useCallback((): QuickReplyItem[] => {
-    if (!hasOrigin) {
-      return [
-        {
-          id: "quick-upload",
-          label: localize("chat_quick_upload", "Upload origin"),
-          icon: <Upload className="h-3 w-3" aria-hidden="true" />,
-          onSelect: handleQuickUpload,
-        },
-      ];
-    }
-    return [];
-  }, [handleQuickUpload, hasOrigin, localize]);
+  const buildQuickReplies = useCallback((): QuickReplyItem[] => [], []);
 
   useEffect(() => {
     const shouldShow = historyLength === 0 && !isHistoryLoading;
@@ -3255,6 +3240,23 @@ export const ChatOrchestrator = ({
     }
   }, [composerHeight, isAtBottom, scrollMessagesToBottom]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const COLLAPSED_WIDTH = 72;
+    const computeWidth = () => {
+      const leftWidth = isSidebarCollapsed
+        ? COLLAPSED_WIDTH
+        : Math.max(0, leftPanelWidth);
+      const rightWidth = Math.max(0, rightPanelWidth);
+      const padding = 200;
+      const available = window.innerWidth - leftWidth - rightWidth - padding;
+      setTitleMaxWidth(Math.max(160, available));
+    };
+    computeWidth();
+    window.addEventListener("resize", computeWidth);
+    return () => window.removeEventListener("resize", computeWidth);
+  }, [isSidebarCollapsed, leftPanelWidth, rightPanelWidth]);
+
   const handleJumpToLatest = useCallback(() => {
     setShowScrollToLatest(false);
     setIsAtBottom(true);
@@ -3298,26 +3300,33 @@ export const ChatOrchestrator = ({
       />
       <header className="sticky top-0 z-10 bg-white px-2 py-2 text-slate-900 shadow-sm">
         <div className="space-y-2">
-          <div className="rounded border border-slate-200 bg-white px-1 py-1">
-            <div className="space-y-1 bg-transparent">
-              <h2 className="text-lg font-semibold text-slate-800">
-                {currentProject?.title ||
-                  localize(
-                    "chat_header_default_title",
-                    "Start translation project",
-                  )}
-              </h2>
-              {currentProject && (
-                <p className="text-xs text-slate-500">
-                  {currentProject.origin_lang ??
-                    localize("chat_lang_unknown", "unknown")}
-                  {" "}→{" "}
-                  {currentProject.target_lang ??
-                    localize("chat_lang_unknown", "unknown")}
-                </p>
-              )}
-            </div>
-          </div>
+          <h2 className="text-lg font-semibold text-slate-800">
+            <span
+              className="block truncate"
+              style={{ maxWidth: `${titleMaxWidth}px` }}
+              title={
+                currentProject?.title ??
+                localize(
+                  "chat_header_default_title",
+                  "Start translation project",
+                )
+              }
+            >
+              {currentProject?.title ??
+                localize(
+                  "chat_header_default_title",
+                  "Start translation project",
+                )}
+            </span>
+          </h2>
+          {currentProject && (
+            <p className="mt-1 text-xs text-slate-500">
+              {currentProject.origin_lang ?? localize("chat_lang_unknown", "unknown")}
+              {" "}→{" "}
+              {currentProject.target_lang ?? localize("chat_lang_unknown", "unknown")}
+            </p>
+          )}
+
           <WorkflowTimeline
             stages={timelineStages}
             onStageClick={scrollToStage}
@@ -3352,12 +3361,6 @@ export const ChatOrchestrator = ({
                     "chat_dropzone_formats",
                     `(지원 형식: ${SUPPORTED_ORIGIN_HINT})`,
                     { formats: SUPPORTED_ORIGIN_HINT },
-                  )}
-                </p>
-                <p className="mt-1 text-slate-500">
-                  {localize(
-                    "chat_dropzone_guidance",
-                    "번역 과정을 도와드리겠습니다.",
                   )}
                 </p>
                 <button

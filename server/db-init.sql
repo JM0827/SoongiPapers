@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS translationprojects (
   translator_name TEXT,
   memo TEXT,
   meta JSONB DEFAULT '{}'::jsonb,
+  user_consent TEXT,
   status TEXT,
   origin_lang TEXT DEFAULT 'ko',
   target_lang TEXT DEFAULT 'en',

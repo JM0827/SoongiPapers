@@ -111,7 +111,7 @@ export const SidebarQuickActions = ({
       isOpen={isOpen}
       onToggle={onToggle}
     >
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-1.5">
         {actions.map((action) => {
           const busy = isBusy(action.key);
           const effectiveStatus = busy ? "running" : action.status ?? "default";
