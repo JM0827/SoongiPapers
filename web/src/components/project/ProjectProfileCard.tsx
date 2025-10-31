@@ -706,114 +706,140 @@ export const ProjectProfileCard = ({
         ) : null}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize(
-            "project_profile_field_book_title",
-            "Original title (required)",
-          )}
-          <input
-            value={draft.bookTitleKo}
-            onChange={handleFieldChange("bookTitleKo")}
-            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
-              fieldErrors.bookTitleKo
-                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
-            }`}
-            placeholder={localize(
-              "project_profile_placeholder_book_title",
-              "e.g., Korean title",
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize(
+              "project_profile_field_book_title",
+              "Original title (required)",
             )}
-          />
-          {fieldErrors.bookTitleKo ? (
-            <span className="text-[11px] text-rose-500">
-              {fieldErrors.bookTitleKo}
-            </span>
-          ) : null}
+          </span>
+          <div className="flex flex-col gap-1">
+            <input
+              value={draft.bookTitleKo}
+              onChange={handleFieldChange("bookTitleKo")}
+              className={`w-full rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+                fieldErrors.bookTitleKo
+                  ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                  : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+              }`}
+              placeholder={localize(
+                "project_profile_placeholder_book_title",
+                "e.g., Korean title",
+              )}
+            />
+            {fieldErrors.bookTitleKo ? (
+              <span className="text-[11px] text-rose-500">
+                {fieldErrors.bookTitleKo}
+              </span>
+            ) : null}
+          </div>
         </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize("project_profile_field_book_title_en", "Translated title")}
-          <input
-            value={draft.bookTitleEn}
-            onChange={handleFieldChange("bookTitleEn")}
-            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
-              fieldErrors.bookTitleEn
-                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
-            }`}
-            placeholder={localize(
-              "project_profile_placeholder_book_title_en",
-              "e.g., English Title",
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize(
+              "project_profile_field_book_title_en",
+              "Translated title",
             )}
-          />
-          {fieldErrors.bookTitleEn ? (
-            <span className="text-[11px] text-rose-500">
-              {fieldErrors.bookTitleEn}
-            </span>
-          ) : null}
+          </span>
+          <div className="flex flex-col gap-1">
+            <input
+              value={draft.bookTitleEn}
+              onChange={handleFieldChange("bookTitleEn")}
+              className={`w-full rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+                fieldErrors.bookTitleEn
+                  ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                  : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+              }`}
+              placeholder={localize(
+                "project_profile_placeholder_book_title_en",
+                "e.g., English Title",
+              )}
+            />
+            {fieldErrors.bookTitleEn ? (
+              <span className="text-[11px] text-rose-500">
+                {fieldErrors.bookTitleEn}
+              </span>
+            ) : null}
+          </div>
         </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize("project_profile_field_author", "Author (original)")}
-          {requireAuthor ? "*" : ""}
-          <input
-            value={draft.authorNameKo}
-            onChange={handleFieldChange("authorNameKo")}
-            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
-              fieldErrors.authorNameKo
-                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
-            }`}
-            placeholder={localize(
-              "project_profile_placeholder_author",
-              "e.g., Hong Gildong",
-            )}
-          />
-          {fieldErrors.authorNameKo ? (
-            <span className="text-[11px] text-rose-500">
-              {fieldErrors.authorNameKo}
-            </span>
-          ) : null}
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize("project_profile_field_author", "Author (original)")}
+            {requireAuthor ? "*" : ""}
+          </span>
+          <div className="flex flex-col gap-1">
+            <input
+              value={draft.authorNameKo}
+              onChange={handleFieldChange("authorNameKo")}
+              className={`w-full rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+                fieldErrors.authorNameKo
+                  ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                  : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+              }`}
+              placeholder={localize(
+                "project_profile_placeholder_author",
+                "e.g., Hong Gildong",
+              )}
+            />
+            {fieldErrors.authorNameKo ? (
+              <span className="text-[11px] text-rose-500">
+                {fieldErrors.authorNameKo}
+              </span>
+            ) : null}
+          </div>
         </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize("project_profile_field_translator", "Translator")}
-          <input
-            value={draft.translatorName}
-            onChange={handleFieldChange("translatorName")}
-            className={`rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
-              fieldErrors.translatorName
-                ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
-            }`}
-            placeholder={localize(
-              "project_profile_placeholder_translator",
-              "e.g., Translator Name",
-            )}
-          />
-          {fieldErrors.translatorName ? (
-            <span className="text-[11px] text-rose-500">
-              {fieldErrors.translatorName}
-            </span>
-          ) : null}
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize("project_profile_field_translator", "Translator")}
+          </span>
+          <div className="flex flex-col gap-1">
+            <input
+              value={draft.translatorName}
+              onChange={handleFieldChange("translatorName")}
+              className={`w-full rounded border px-3 py-1.5 text-sm text-slate-800 focus:outline-none focus:ring-2 ${
+                fieldErrors.translatorName
+                  ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                  : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+              }`}
+              placeholder={localize(
+                "project_profile_placeholder_translator",
+                "e.g., Translator Name",
+              )}
+            />
+            {fieldErrors.translatorName ? (
+              <span className="text-[11px] text-rose-500">
+                {fieldErrors.translatorName}
+              </span>
+            ) : null}
+          </div>
         </label>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize("project_profile_field_author_notes", "Author notes")}
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize("project_profile_field_author_notes", "Author notes")}
+          </span>
           <textarea
             value={draft.originalAuthorNotes}
             onChange={handleFieldChange("originalAuthorNotes")}
-            className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
               "project_profile_placeholder_author_notes",
               "Capture author intent, background, or notes for readers.",
             )}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500">
-          {localize("project_profile_field_translator_notes", "Translator notes")}
+        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
+          <span className="pt-1">
+            {localize(
+              "project_profile_field_translator_notes",
+              "Translator notes",
+            )}
+          </span>
           <textarea
             value={draft.translatorNotes}
             onChange={handleFieldChange("translatorNotes")}
-            className="min-h-[88px] rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
               "project_profile_placeholder_translator_notes",
               "Share context or reminders for the translation team.",

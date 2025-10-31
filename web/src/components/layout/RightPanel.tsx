@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, Loader2, CheckCircle2, Circle, RefreshCcw, AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { Pencil, X, CheckCircle2, Circle, BookOpen, AlertTriangle } from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -32,10 +32,15 @@ import { ExportPanel } from "../export/ExportPanel";
 import { useUILocale } from "../../hooks/useUILocale";
 import { translate } from "../../lib/locale";
 import { ProjectProfileCard } from "../project/ProjectProfileCard";
+import { Modal } from "../common/Modal";
+import {
+  Collapsible,
+  handleKeyboardToggle,
+  isEventFromInteractive,
+} from "../common/Collapsible";
 import { QualityAssessmentDialog } from "../quality/QualityAssessmentDialog";
 import type {
   DocumentProfileSummary,
-  DocumentSummaryFallback,
   JobSummary,
   JobSequentialSummary,
   ProjectContent,
@@ -43,6 +48,12 @@ import type {
 import { api } from "../../services/api";
 import { useWorkflowStore } from "../../store/workflow.store";
 import { projectKeys } from "../../hooks/useProjectData";
+import {
+  DocumentSummarySection,
+  type SummaryStatus,
+} from "../translation/DocumentSummarySection";
+import { TranslationNotesEditor } from "../translation/TranslationNotesSection";
+import type { LocalizeFn } from "../../types/localize";
 
 const LEGACY_PIPELINE_STAGE_ORDER = [
   "literal",
@@ -62,12 +73,6 @@ type StageStatusKey =
   | "inProgress"
   | "completed"
   | "failed";
-
-type LocalizeFn = (
-  key: string,
-  fallback: string,
-  params?: Record<string, string | number>,
-) => string;
 
 const TRANSLATION_STAGE_LABEL_META: Record<
   StageKey,
@@ -375,23 +380,6 @@ interface RightPanelProps {
   onRefreshContent?: () => Promise<void> | void;
 }
 
-const INTERACTIVE_SELECTOR =
-  "button, a, input, textarea, select, label, [data-collapsible-ignore]";
-
-const isEventFromInteractive = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  Boolean(target.closest(INTERACTIVE_SELECTOR));
-
-const handleKeyboardToggle = <T extends HTMLElement>(
-  event: ReactKeyboardEvent<T>,
-  toggle: () => void,
-) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggle();
-  }
-};
-
 const USER_MENU_ITEMS: Array<{ key: RightPanelExtraTab; label: string }> = [
   { key: "profile", label: "My profile" },
   { key: "settings", label: "My settings" },
@@ -399,6 +387,40 @@ const USER_MENU_ITEMS: Array<{ key: RightPanelExtraTab; label: string }> = [
   { key: "terms", label: "Terms" },
   { key: "privacy", label: "Privacy" },
 ];
+
+const iconClass = "h-5 w-5";
+
+const OpenBookIcon = () => (
+  <svg
+    className={iconClass}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 5c-1.8-1.2-4.1-1.7-7-1.7v13.4c2.9 0 5.2.5 7 1.7 1.8-1.2 4.1-1.7 7-1.7V3.3C16.1 3.3 13.8 3.8 12 5Z" />
+    <path d="M12 5v13.4" />
+  </svg>
+);
+
+const ClosedBookIcon = () => (
+  <svg
+    className={iconClass}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6.5 4h9.5a2 2 0 0 1 2 2v12h-8.5a2 2 0 0 0-2 2V6a2 2 0 0 1 1-1.732" />
+    <path d="M7.5 4.5a2 2 0 0 0-2 2V22" />
+  </svg>
+);
 
 const SummaryCard = ({
   title,
@@ -895,1747 +917,6 @@ const TranslationSummaryCard = ({
   );
 };
 
-type SummaryStatus = "pending" | "running" | "done";
-
-const DocumentSummaryCard = ({
-  title,
-  profile,
-  localize,
-  isLoading = false,
-  defaultOpen = true,
-  status = "pending",
-  fallbackSummary,
-  fallbackMetrics,
-  fallbackTimestamp,
-  fallbackLanguage,
-  fallbackVersion,
-}: {
-  title: string;
-  profile: DocumentProfileSummary | null;
-  localize: LocalizeFn;
-  isLoading?: boolean;
-  defaultOpen?: boolean;
-  status?: SummaryStatus;
-  fallbackSummary?: {
-    story?: string | null;
-    intention?: string | null;
-    readerPoints?: string[];
-  } | null;
-  fallbackMetrics?: {
-    wordCount?: number | null;
-    charCount?: number | null;
-    paragraphCount?: number | null;
-    readingTimeMinutes?: number | null;
-    readingTimeLabel?: string | null;
-  } | null;
-  fallbackTimestamp?: string | null;
-  fallbackLanguage?: string | null;
-  fallbackVersion?: number | null;
-}) => {
-  const effectiveTimestamp =
-    profile?.updatedAt ?? profile?.createdAt ?? fallbackTimestamp ?? null;
-  const timestampLabel = effectiveTimestamp
-    ? new Date(effectiveTimestamp).toLocaleString()
-    : null;
-  const summary =
-    profile?.summary ??
-    (fallbackSummary
-      ? {
-          story: fallbackSummary.story ?? "",
-          intention: fallbackSummary.intention ?? "",
-          readerPoints: fallbackSummary.readerPoints ?? [],
-        }
-      : null);
-  const metrics = profile?.metrics ?? fallbackMetrics ?? null;
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-  const hasFallback = Boolean(fallbackSummary);
-  const isToggleDisabled = !profile && !hasFallback && !isLoading;
-
-  const formatMinutes = (value: number | undefined) => {
-    if (value === undefined || Number.isNaN(value)) return null;
-    return Math.max(1, Math.round(value)).toString();
-  };
-
-  const wordsLabel =
-    metrics?.wordCount !== undefined && metrics?.wordCount !== null
-      ? Number(metrics.wordCount).toLocaleString()
-      : null;
-  const charsLabel =
-    metrics?.charCount !== undefined && metrics?.charCount !== null
-      ? Number(metrics.charCount).toLocaleString()
-      : null;
-  const minutesLabel = formatMinutes(metrics?.readingTimeMinutes ?? undefined);
-
-  const toggle = () => {
-    if (!profile && !isLoading) return;
-    setIsOpen((prev) => !prev);
-  };
-
-  const handleHeaderClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isToggleDisabled || isEventFromInteractive(event.target)) {
-      return;
-    }
-    toggle();
-  };
-
-  const handleHeaderKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (isToggleDisabled || isEventFromInteractive(event.target)) {
-      return;
-    }
-    handleKeyboardToggle(event, toggle);
-  };
-
-  const headerClass = isToggleDisabled
-    ? "flex flex-1 cursor-default flex-col gap-1 focus:outline-none"
-    : "flex flex-1 cursor-pointer flex-col gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white";
-
-  const renderFooter = () => {
-    const parts = [
-      wordsLabel
-        ? localize(
-            "rightpanel_summary_metric_words",
-            `${wordsLabel} words`,
-            { count: wordsLabel },
-          )
-        : null,
-      charsLabel
-        ? localize(
-            "rightpanel_summary_metric_characters",
-            `${charsLabel} characters`,
-            { count: charsLabel },
-          )
-        : null,
-      minutesLabel
-        ? localize(
-            "rightpanel_summary_metric_minutes",
-            `${minutesLabel} mins`,
-            { count: minutesLabel },
-          )
-        : null,
-      timestampLabel
-        ? localize(
-            "rightpanel_summary_metric_updated",
-            `update: ${timestampLabel}`,
-            { timestamp: timestampLabel },
-          )
-        : null,
-    ].filter(Boolean);
-    if (!parts.length) return null;
-    return <p className="mt-4 text-[11px] text-slate-400">{parts.join(" ")}</p>;
-  };
-
-  const statusIcon = () => {
-    if (status === "running") {
-      return (
-        <Loader2
-          className="h-4 w-4 animate-spin text-indigo-500"
-          aria-hidden="true"
-        />
-      );
-    }
-    if (status === "done") {
-      return (
-        <CheckCircle2
-          className="h-4 w-4 text-emerald-500"
-          aria-hidden="true"
-        />
-      );
-    }
-    return <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />;
-  };
-
-  const statusDescription = (() => {
-    if (profile) {
-      const languageSuffix = profile.language ? `.${profile.language}` : "";
-      return (
-        <p className="text-xs text-slate-500">
-          {localize(
-            "rightpanel_summary_status_version",
-            `Version v${profile.version}${languageSuffix}`,
-            {
-              version: profile.version ?? "",
-              languageSuffix,
-            },
-          )}
-        </p>
-      );
-    }
-    if (fallbackSummary) {
-      const versionLabel = fallbackVersion ? ` · v${fallbackVersion}` : "";
-      const languageLabel = fallbackLanguage ? `.${fallbackLanguage}` : "";
-      return (
-        <p className="text-xs text-slate-500">
-          {localize(
-            "rightpanel_summary_status_fallback",
-            `Temporary summary${versionLabel}${languageLabel}`,
-            {
-              versionLabel,
-              languageLabel,
-            },
-          )}
-        </p>
-      );
-    }
-    if (status === "running" || isLoading) {
-      return (
-        <p className="text-xs text-slate-500">
-          {localize(
-            "rightpanel_summary_status_loading",
-            "Fetching analysis…",
-          )}
-        </p>
-      );
-    }
-    return (
-      <p className="text-xs text-slate-400">
-        {localize(
-          "rightpanel_summary_status_empty",
-          "Summary has not been generated yet.",
-        )}
-      </p>
-    );
-  })();
-
-  return (
-    <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
-      <header className="flex items-start justify-between gap-3">
-        <div
-          className={headerClass}
-          role="button"
-          tabIndex={isToggleDisabled ? -1 : 0}
-          aria-expanded={isOpen}
-          aria-disabled={isToggleDisabled}
-          onClick={handleHeaderClick}
-          onKeyDown={handleHeaderKeyDown}
-        >
-          <div className="flex items-center gap-2">
-            {statusIcon()}
-            <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-          </div>
-          {statusDescription}
-        </div>
-        <button
-          type="button"
-          className="ml-auto flex h-6 w-6 items-center justify-center rounded text-xs text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
-          onClick={toggle}
-          aria-label={
-            isOpen
-              ? localize("rightpanel_summary_action_collapse", `Collapse ${title}`, {
-                  title,
-                })
-              : localize("rightpanel_summary_action_expand", `Expand ${title}`, {
-                  title,
-                })
-          }
-          title={
-            isOpen
-              ? localize("rightpanel_summary_action_collapse", `Collapse ${title}`, {
-                  title,
-                })
-              : localize("rightpanel_summary_action_expand", `Expand ${title}`, {
-                  title,
-                })
-          }
-          disabled={isToggleDisabled}
-          data-collapsible-ignore
-        >
-          {isOpen ? "˄" : "˅"}
-        </button>
-      </header>
-      {isOpen &&
-        (summary ? (
-          <>
-            {summary.intention && (
-              <div className="mt-4 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">
-                  {localize(
-                    "rightpanel_summary_intention_label",
-                    "Intention:",
-                  )}
-                </span>{" "}
-                <span className="whitespace-pre-wrap text-slate-600">
-                  {summary.intention}
-                </span>
-              </div>
-            )}
-            {summary.story && (
-              <div className="mt-3 text-sm text-slate-700">
-                <span className="font-medium text-slate-800">
-                  {localize("rightpanel_summary_story_label", "Story:")}
-                </span>{" "}
-                <span className="whitespace-pre-wrap text-slate-600">
-                  {summary.story}
-                </span>
-              </div>
-            )}
-            {summary.readerPoints?.length ? (
-              <div className="mt-4 space-y-1 text-sm text-slate-700">
-                <p className="font-medium text-slate-800">
-                  {localize(
-                    "rightpanel_summary_reader_points_label",
-                    "Reader points",
-                  )}
-                </p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
-                  {summary.readerPoints.map((point, index) => (
-                    <li key={`${profile?.id ?? "fallback"}-point-${index}`}>
-                      {point}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {renderFooter()}
-          </>
-        ) : status === "running" || isLoading ? (
-          <p className="mt-4 text-sm text-slate-500">
-            {localize(
-              "rightpanel_summary_loading",
-              "Fetching analysis…",
-            )}
-          </p>
-        ) : (
-          <p className="mt-4 text-sm text-slate-500">
-            {localize(
-              "rightpanel_summary_generation_hint",
-              "A summary will be generated once the text is saved.",
-            )}
-          </p>
-        ))}
-    </section>
-  );
-};
-const DocumentSummarySection = ({
-  origin,
-  translation,
-  localize,
-  isLoading = false,
-  onSaveTranslationNotes,
-  translationNotesEditable = false,
-  translationNotesSaving = false,
-  translationNotesError = null,
-  onReanalyze,
-  isReanalyzing = false,
-  canReanalyze = true,
-  reanalysisError = null,
-  originStatus = "pending",
-  translationStatus = "pending",
-  translationFallback = null,
-  originFallback = null,
-}: {
-  origin: DocumentProfileSummary | null;
-  translation: DocumentProfileSummary | null;
-  localize: LocalizeFn;
-  isLoading?: boolean;
-  onSaveTranslationNotes?: (
-    notes: DocumentProfileSummary["translationNotes"] | null,
-  ) => Promise<void>;
-  translationNotesEditable?: boolean;
-  translationNotesSaving?: boolean;
-  translationNotesError?: string | null;
-  onReanalyze?: () => void;
-  isReanalyzing?: boolean;
-  canReanalyze?: boolean;
-  reanalysisError?: string | null;
-  originStatus?: SummaryStatus;
-  translationStatus?: SummaryStatus;
-  translationFallback?: DocumentSummaryFallback | null;
-  originFallback?: DocumentSummaryFallback | null;
-}) => (
-  <div className="space-y-4">
-    <DocumentSummaryCard
-      title={localize(
-        "rightpanel_origin_summary_title",
-        "Summary of manuscript",
-      )}
-      localize={localize}
-      profile={origin}
-      isLoading={isLoading && !origin}
-      status={originStatus}
-      fallbackSummary={originFallback?.summary}
-      fallbackMetrics={originFallback?.metrics}
-      fallbackTimestamp={originFallback?.timestamp ?? null}
-      fallbackLanguage={originFallback?.language ?? null}
-      fallbackVersion={originFallback ? 0 : null}
-    />
-    <TranslationNotesSection
-      notes={origin?.translationNotes ?? null}
-      localize={localize}
-      editable={translationNotesEditable}
-      onSave={onSaveTranslationNotes}
-      isSaving={translationNotesSaving}
-      error={translationNotesError}
-      onRefresh={onReanalyze}
-      isRefreshing={isReanalyzing}
-      canRefresh={canReanalyze}
-      refreshError={reanalysisError}
-    />
-    <DocumentSummaryCard
-      title={localize(
-        "rightpanel_translation_summary_title",
-        "Summary of translation",
-      )}
-      localize={localize}
-      profile={translation}
-      isLoading={isLoading && !translation}
-      status={translationStatus}
-      fallbackSummary={translationFallback?.summary}
-      fallbackMetrics={translationFallback?.metrics}
-      fallbackTimestamp={translationFallback?.timestamp ?? null}
-      fallbackLanguage={translationFallback?.language ?? null}
-      fallbackVersion={translationFallback ? 0 : null}
-    />
-  </div>
-);
-
-// Translation notes editor/display component definitions inserted here (see below).
-type NotesCharacterDraft = {
-  id: string;
-  name: string;
-  targetName: string;
-  age: string;
-  gender: string;
-  traits: string;
-};
-
-type NotesEntityDraft = {
-  id: string;
-  name: string;
-  targetName: string;
-  frequency: string;
-};
-
-type NotesPairDraft = {
-  id: string;
-  source: string;
-  target: string;
-};
-
-type BilingualViewItem = {
-  source: string;
-  target: string | null;
-};
-
-type TranslationNotesDraft = {
-  timePeriod: string;
-  characters: NotesCharacterDraft[];
-  namedEntities: NotesEntityDraft[];
-  locations: NotesEntityDraft[];
-  measurementUnits: NotesPairDraft[];
-  linguisticFeatures: NotesPairDraft[];
-};
-
-const createCharacterDraft = (): NotesCharacterDraft => ({
-  id: `character-${Math.random().toString(36).slice(2, 10)}`,
-  name: "",
-  targetName: "",
-  age: "",
-  gender: "",
-  traits: "",
-});
-
-const createEntityDraft = (prefix: string): NotesEntityDraft => ({
-  id: `${prefix}-${Math.random().toString(36).slice(2, 10)}`,
-  name: "",
-  targetName: "",
-  frequency: "",
-});
-
-const createPairDraft = (prefix: string): NotesPairDraft => ({
-  id: `${prefix}-${Math.random().toString(36).slice(2, 10)}`,
-  source: "",
-  target: "",
-});
-
-const notesToDraft = (
-  notes: DocumentProfileSummary["translationNotes"] | null,
-): TranslationNotesDraft => ({
-  timePeriod: notes?.timePeriod ?? "",
-  characters: (notes?.characters ?? []).map((character) => ({
-    id: `character-${character.name}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`,
-    name: character.name,
-    targetName: character.targetName ?? "",
-    age: character.age ?? "",
-    gender: character.gender ?? "",
-    traits: (character.traits ?? []).join(", "),
-  })),
-  namedEntities: (notes?.namedEntities ?? []).map((entity) => ({
-    id: `entity-${entity.name}-${Math.random().toString(36).slice(2, 8)}`,
-    name: entity.name,
-    targetName: entity.targetName ?? "",
-    frequency: String(
-      Number.isFinite(entity.frequency) ? entity.frequency : "",
-    ),
-  })),
-  locations: (notes?.locations ?? []).map((location) => ({
-    id: `location-${location.name}-${Math.random().toString(36).slice(2, 8)}`,
-    name: location.name,
-    targetName: location.targetName ?? "",
-    frequency: String(
-      Number.isFinite(location.frequency) ? location.frequency : "",
-    ),
-  })),
-  measurementUnits: (notes?.measurementUnits ?? []).map((unit, index) => ({
-    id: `unit-${index}-${Math.random().toString(36).slice(2, 8)}`,
-    source: typeof unit === "string" ? unit : unit.source,
-    target:
-      typeof unit === "string"
-        ? ""
-        : unit.target !== null && unit.target !== undefined
-          ? unit.target ?? ""
-          : "",
-  })),
-  linguisticFeatures: (notes?.linguisticFeatures ?? []).map(
-    (feature, index) => ({
-      id: `feature-${index}-${Math.random().toString(36).slice(2, 8)}`,
-      source: typeof feature === "string" ? feature : feature.source,
-      target:
-        typeof feature === "string"
-          ? ""
-          : feature.target !== null && feature.target !== undefined
-            ? feature.target ?? ""
-            : "",
-    }),
-  ),
-});
-
-const draftToNotes = (
-  draft: TranslationNotesDraft,
-): DocumentProfileSummary["translationNotes"] | null => {
-  const parseTraits = (value: string) =>
-    value
-      .split(/[,;]+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-
-  const characters = draft.characters
-    .map((character) => {
-      const name = character.name.trim();
-      if (!name) return null;
-      return {
-        name,
-        targetName: character.targetName.trim() || null,
-        age: character.age.trim() || null,
-        gender: character.gender.trim() || null,
-        traits: parseTraits(character.traits),
-      };
-    })
-    .filter((character): character is NonNullable<typeof character> =>
-      Boolean(character),
-    );
-
-  const parseEntities = (entities: NotesEntityDraft[]) =>
-    entities
-      .map((entity) => {
-        const name = entity.name.trim();
-        if (!name) return null;
-        const parsedFrequency = Number.parseInt(entity.frequency.trim(), 10);
-        return {
-          name,
-          targetName: entity.targetName.trim() || null,
-          frequency: Number.isFinite(parsedFrequency)
-            ? Math.max(0, parsedFrequency)
-            : 0,
-        };
-      })
-      .filter((entity): entity is NonNullable<typeof entity> => Boolean(entity));
-
-  const namedEntities = parseEntities(draft.namedEntities);
-  const locations = parseEntities(draft.locations);
-  const parsePairs = (pairs: NotesPairDraft[]) =>
-    pairs
-      .map((pair) => {
-        const source = pair.source.trim();
-        if (!source) return null;
-        const target = pair.target.trim();
-        return {
-          source,
-          target: target.length ? target : null,
-        };
-      })
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-
-  const measurementUnits = parsePairs(draft.measurementUnits);
-  const linguisticFeatures = parsePairs(draft.linguisticFeatures);
-  const timePeriod = draft.timePeriod.trim() || null;
-
-  if (
-    !characters.length &&
-    !namedEntities.length &&
-    !locations.length &&
-    !measurementUnits.length &&
-    !linguisticFeatures.length &&
-    !timePeriod
-  ) {
-    return null;
-  }
-
-  return {
-    characters,
-    namedEntities,
-    locations,
-    measurementUnits,
-    linguisticFeatures,
-    timePeriod,
-  };
-};
-
-const TranslationNotesSection = ({
-  notes,
-  localize,
-  editable = false,
-  onSave,
-  isSaving = false,
-  error,
-  onRefresh,
-  isRefreshing = false,
-  canRefresh = true,
-  refreshError,
-}: {
-  notes: DocumentProfileSummary["translationNotes"] | null;
-  localize: LocalizeFn;
-  editable?: boolean;
-  onSave?: (
-    next: DocumentProfileSummary["translationNotes"] | null,
-  ) => Promise<void>;
-  isSaving?: boolean;
-  error?: string | null;
-  onRefresh?: () => void;
-  isRefreshing?: boolean;
-  canRefresh?: boolean;
-  refreshError?: string | null;
-}) => {
-  const SectionCard = ({
-    title,
-    description,
-    actions,
-    children,
-  }: {
-    title: string;
-    description?: string;
-    actions?: ReactNode;
-    children: ReactNode;
-  }) => (
-    <section className="rounded-lg border border-slate-200 bg-white/70 p-3 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold text-slate-800">{title}</p>
-          {description ? (
-            <p className="text-xs text-slate-500">{description}</p>
-          ) : null}
-        </div>
-        {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
-      </div>
-      <div className="mt-3 space-y-2">{children}</div>
-    </section>
-  );
-
-  const addPair = (
-    collection: 'measurementUnits' | 'linguisticFeatures',
-    prefix: string,
-  ) => {
-    setDraft((prev) => ({
-      ...prev,
-      [collection]: [...prev[collection], createPairDraft(prefix)],
-    }));
-  };
-
-  const handlePairChange = (
-    collection: 'measurementUnits' | 'linguisticFeatures',
-    id: string,
-    field: 'source' | 'target',
-    value: string,
-  ) => {
-    setDraft((prev) => ({
-      ...prev,
-      [collection]: prev[collection].map((entry) =>
-        entry.id === id ? { ...entry, [field]: value } : entry,
-      ),
-    }));
-  };
-
-  const handlePairRemove = (
-    collection: 'measurementUnits' | 'linguisticFeatures',
-    id: string,
-  ) => {
-    setDraft((prev) => ({
-      ...prev,
-      [collection]: prev[collection].filter((entry) => entry.id !== id),
-    }));
-  };
-
-  const renderPairList = (
-    items: NotesPairDraft[],
-    collection: 'measurementUnits' | 'linguisticFeatures',
-    sourcePlaceholder: string,
-    targetPlaceholder: string,
-  ) => (
-    <div className="space-y-2">
-      {items.length ? (
-        <div className="space-y-2">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="grid gap-2 rounded border border-slate-200 bg-slate-50/70 p-2 md:grid-cols-[1fr,1fr,auto]"
-            >
-              <input
-                value={item.source}
-                onChange={(event) =>
-                  handlePairChange(
-                    collection,
-                    item.id,
-                    'source',
-                    event.target.value,
-                  )
-                }
-                className="flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                placeholder={sourcePlaceholder}
-                aria-label={bilingualSourceLabel}
-              />
-              <input
-                value={item.target}
-                onChange={(event) =>
-                  handlePairChange(
-                    collection,
-                    item.id,
-                    'target',
-                    event.target.value,
-                  )
-                }
-                className="flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                placeholder={targetPlaceholder}
-                aria-label={bilingualTargetLabel}
-              />
-              <button
-                type="button"
-                className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
-                onClick={() => handlePairRemove(collection, item.id)}
-                disabled={isSaving}
-                title={removeLabel}
-                aria-label={removeLabel}
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                <span className="sr-only">{removeLabel}</span>
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-slate-500">{noEntriesLabel}</p>
-      )}
-    </div>
-  );
-
-  const [mode, setMode] = useState<"view" | "edit">("view");
-  const [draft, setDraft] = useState<TranslationNotesDraft>(() =>
-    notesToDraft(notes),
-  );
-  const [formError, setFormError] = useState<string | null>(null);
-  const [isOpen, setIsOpen] = useState(true);
-
-  const titleLabel = localize(
-    "rightpanel_translation_notes_title",
-    "Translation notes",
-  );
-  const editLabel = localize(
-    "rightpanel_translation_notes_edit",
-    "Edit notes",
-  );
-  const addLabel = localize(
-    "rightpanel_translation_notes_add",
-    "Add notes",
-  );
-  const cancelLabel = localize(
-    "rightpanel_translation_notes_cancel",
-    "Cancel",
-  );
-  const saveLabel = localize(
-    "rightpanel_translation_notes_save",
-    "Save",
-  );
-  const savingLabel = localize(
-    "rightpanel_translation_notes_saving",
-    "Saving…",
-  );
-  const refreshTooltip = localize(
-    "rightpanel_translation_notes_refresh_tooltip",
-    "Refresh analysis",
-  );
-  const timePeriodLabel = localize(
-    "rightpanel_translation_notes_time_period",
-    "Time period",
-  );
-  const timePeriodPlaceholder = localize(
-    "rightpanel_translation_notes_time_period_placeholder",
-    "e.g., Late Joseon Dynasty",
-  );
-  const measurementUnitsLabel = localize(
-    "rightpanel_translation_notes_measurement_units",
-    "Measurement units",
-  );
-  const linguisticFeaturesLabel = localize(
-    "rightpanel_translation_notes_linguistic_features",
-    "Linguistic features / slang",
-  );
-  const charactersLabel = localize(
-    "rightpanel_translation_notes_characters",
-    "Characters",
-  );
-  const addCharacterLabel = localize(
-    "rightpanel_translation_notes_add_character",
-    "Add character",
-  );
-  const removeLabel = localize(
-    "rightpanel_translation_notes_remove",
-    "Remove",
-  );
-  const nameLabel = localize(
-    "rightpanel_translation_notes_name",
-    "Name",
-  );
-  const targetNameLabel = localize(
-    "rightpanel_translation_notes_target_name",
-    "Translated name",
-  );
-  const characterNamePlaceholder = localize(
-    "rightpanel_translation_notes_character_name_placeholder",
-    "Character name",
-  );
-  const characterTargetPlaceholder = localize(
-    "rightpanel_translation_notes_target_placeholder",
-    "e.g., translated name",
-  );
-  const ageLabel = localize(
-    "rightpanel_translation_notes_age",
-    "Age",
-  );
-  const agePlaceholder = localize(
-    "rightpanel_translation_notes_age_placeholder",
-    "Age or descriptor",
-  );
-  const genderLabel = localize(
-    "rightpanel_translation_notes_gender",
-    "Gender",
-  );
-  const genderPlaceholder = localize(
-    "rightpanel_translation_notes_gender_placeholder",
-    "Gender or pronouns",
-  );
-  const traitsLabel = localize(
-    "rightpanel_translation_notes_traits",
-    "Traits (comma-separated)",
-  );
-  const traitsPlaceholder = localize(
-    "rightpanel_translation_notes_traits_placeholder",
-    "e.g., stubborn, loyal",
-  );
-  const noCharactersLabel = localize(
-    "rightpanel_translation_notes_no_characters",
-    "No characters added yet.",
-  );
-  const namedEntitiesLabel = localize(
-    "rightpanel_translation_notes_named_entities",
-    "Named entities",
-  );
-  const locationsLabel = localize(
-    "rightpanel_translation_notes_locations",
-    "Locations",
-  );
-  const addEntryLabel = localize(
-    "rightpanel_translation_notes_add_entry",
-    "Add",
-  );
-  const entryNamePlaceholder = localize(
-    "rightpanel_translation_notes_entry_name_placeholder",
-    "Name",
-  );
-  const entryTargetPlaceholder = localize(
-    "rightpanel_translation_notes_entry_target_placeholder",
-    "Translated name",
-  );
-  const entryFrequencyPlaceholder = localize(
-    "rightpanel_translation_notes_entry_frequency_placeholder",
-    "Freq",
-  );
-  const noEntriesLabel = localize(
-    "rightpanel_translation_notes_no_entries",
-    "No entries yet.",
-  );
-  const measurementUnitsViewLabel = localize(
-    "rightpanel_translation_notes_measurement_units_view",
-    "Measurement units",
-  );
-  const linguisticFeaturesViewLabel = localize(
-    "rightpanel_translation_notes_linguistic_features_view",
-    "Linguistic features",
-  );
-  const bilingualSourceLabel = localize(
-    "rightpanel_translation_notes_source_label",
-    "Source",
-  );
-  const bilingualTargetLabel = localize(
-    "rightpanel_translation_notes_target_label",
-    "Translation",
-  );
-  const measurementUnitSourcePlaceholder = localize(
-    "rightpanel_translation_notes_measurement_units_source_placeholder",
-    "e.g., baek seok",
-  );
-  const measurementUnitTargetPlaceholder = localize(
-    "rightpanel_translation_notes_measurement_units_target_placeholder",
-    "e.g., pecks",
-  );
-  const linguisticSourcePlaceholder = localize(
-    "rightpanel_translation_notes_linguistic_source_placeholder",
-    "Source expression",
-  );
-  const linguisticTargetPlaceholder = localize(
-    "rightpanel_translation_notes_linguistic_target_placeholder",
-    "Translated expression",
-  );
-  const emptyStateMessage = localize(
-    "rightpanel_translation_notes_empty",
-    `Translation notes have not been documented yet. Click "${addLabel}" to capture key characters, entities, and terminology before synthesis.`,
-    { action: addLabel },
-  );
-  const saveErrorFallback = localize(
-    "rightpanel_translation_notes_error_save",
-    "Failed to save notes.",
-  );
-  useEffect(() => {
-    if (mode === "view") {
-      setDraft(notesToDraft(notes));
-      setFormError(null);
-    }
-  }, [notes, mode]);
-
-  useEffect(() => {
-    if (!editable) {
-      setMode("view");
-      setFormError(null);
-    }
-  }, [editable]);
-
-  const handleEdit = () => {
-    setDraft(notesToDraft(notes));
-    setFormError(null);
-    setIsOpen(true);
-    setMode("edit");
-  };
-
-  const handleCancel = () => {
-    setDraft(notesToDraft(notes));
-    setFormError(null);
-    setMode("view");
-  };
-
-  const handleSave = async () => {
-    const payload = draftToNotes(draft);
-    if (!onSave) {
-      setMode("view");
-      return;
-    }
-    try {
-      await onSave(payload);
-      setMode("view");
-      setFormError(null);
-    } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : saveErrorFallback;
-      setFormError(message);
-    }
-  };
-
-  const normalizeBilingualView = (
-    items?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ): BilingualViewItem[] => {
-    if (!Array.isArray(items)) return [];
-    return items
-      .map((entry) => {
-        if (typeof entry === "string") {
-          const source = entry.trim();
-          if (!source) return null;
-          return { source, target: null } satisfies BilingualViewItem;
-        }
-        const source = entry?.source?.trim();
-        if (!source) return null;
-        const target = entry?.target ?? null;
-        return {
-          source,
-          target: target && target.trim().length ? target.trim() : null,
-        } satisfies BilingualViewItem;
-      })
-      .filter((entry): entry is BilingualViewItem => Boolean(entry));
-  };
-
-  const hasPairs = (
-    items?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ) => normalizeBilingualView(items).length > 0;
-
-  const hasNotes = Boolean(
-    notes?.timePeriod ||
-      (notes?.characters?.length ?? 0) > 0 ||
-      (notes?.namedEntities?.length ?? 0) > 0 ||
-      (notes?.locations?.length ?? 0) > 0 ||
-      hasPairs(notes?.measurementUnits) ||
-      hasPairs(notes?.linguisticFeatures),
-  );
-
-  const notesStatusIcon = hasNotes ? (
-    <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-  ) : (
-    <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />
-  );
-
-  const renderBilingualList = (
-    rawItems?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ) => {
-    const normalized = normalizeBilingualView(rawItems);
-    if (!normalized.length) return null;
-    return (
-      <ul className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-        {normalized.map((item, index) => (
-          <li
-            key={`${item.source}-${index}`}
-            className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700"
-          >
-            <span>{item.source}</span>
-            {item.target ? (
-              <span className="text-indigo-600"> → {item.target}</span>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    );
-  };
-
-  if (!editable && !hasNotes && mode === "view") {
-    return null;
-  }
-
-  const handleToggle = () => {
-    if (mode === "edit") return;
-    setIsOpen((prev) => !prev);
-  };
-
-  const refreshButton =
-    onRefresh && mode === "view"
-      ? (
-          <button
-            type="button"
-            className="flex h-7 w-7 items-center justify-center rounded border border-slate-200 text-slate-500 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={onRefresh}
-            disabled={!canRefresh || isRefreshing}
-            title={refreshTooltip}
-            aria-label={refreshTooltip}
-            data-collapsible-ignore
-          >
-            {isRefreshing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-          </button>
-        )
-      : null;
-
-  const actionNode =
-    refreshButton || (editable && mode === "view")
-      ? (
-          <div className="flex items-center gap-2" data-collapsible-ignore>
-            {refreshButton}
-            {editable && mode === "view" ? (
-              <button
-                type="button"
-                className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
-                onClick={handleEdit}
-              >
-                {hasNotes ? editLabel : addLabel}
-              </button>
-            ) : null}
-          </div>
-        )
-      : undefined;
-
-  const editContent = (
-    <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
-        <button
-          type="button"
-          className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-          onClick={handleCancel}
-          disabled={isSaving}
-        >
-          {cancelLabel}
-        </button>
-        <button
-          type="button"
-          className="rounded bg-slate-800 px-3 py-1 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-60"
-          onClick={handleSave}
-          disabled={isSaving}
-        >
-          {isSaving ? savingLabel : saveLabel}
-        </button>
-      </div>
-      <SectionCard
-        title={localize('rightpanel_translation_notes_context', 'Narrative context')}
-        description={localize(
-          'rightpanel_translation_notes_context_hint',
-          'Summaries, measurement units, and linguistic cues that downstream translators must follow.',
-        )}
-      >
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {timePeriodLabel}
-          </label>
-          <input
-            value={draft.timePeriod}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                timePeriod: event.target.value,
-              }))
-            }
-            className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder={timePeriodPlaceholder}
-          />
-        </div>
-      </SectionCard>
-      <SectionCard
-        title={charactersLabel}
-        description={localize(
-          'rightpanel_translation_notes_characters_hint',
-          'Capture key characters with both source and translated references.',
-        )}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() =>
-              setDraft((prev) => ({
-                ...prev,
-                characters: [...prev.characters, createCharacterDraft()],
-              }))
-            }
-            disabled={isSaving}
-            title={addCharacterLabel}
-            aria-label={addCharacterLabel}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addCharacterLabel}</span>
-          </button>
-        }
-      >
-        {draft.characters.length ? (
-          <div className="space-y-2.5">
-            {draft.characters.map((character, index) => (
-              <div key={character.id} className="rounded border border-slate-200 p-2.5">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-slate-600">
-                    {localize(
-                      "rightpanel_translation_notes_character_label",
-                      `Character #${index + 1}`,
-                      { index: index + 1 },
-                    )}
-                  </p>
-                  <button
-                    type="button"
-                    className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
-                    onClick={() =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        characters: prev.characters.filter(
-                          (entry) => entry.id !== character.id,
-                        ),
-                      }))
-                    }
-                    disabled={isSaving}
-                    title={removeLabel}
-                    aria-label={removeLabel}
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    <span className="sr-only">{removeLabel}</span>
-                  </button>
-                </div>
-                <div className="mt-2.5 grid gap-2.5 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {nameLabel}
-                    </label>
-                    <input
-                      value={character.name}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? {
-                                  ...entry,
-                                  name: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={characterNamePlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {targetNameLabel}
-                    </label>
-                    <input
-                      value={character.targetName}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? {
-                                  ...entry,
-                                  targetName: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={characterTargetPlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {ageLabel}
-                    </label>
-                    <input
-                      value={character.age}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? {
-                                  ...entry,
-                                  age: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={agePlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {genderLabel}
-                    </label>
-                    <input
-                      value={character.gender}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? {
-                                  ...entry,
-                                  gender: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={genderPlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {traitsLabel}
-                    </label>
-                    <input
-                      value={character.traits}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? {
-                                  ...entry,
-                                  traits: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={traitsPlaceholder}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">{noCharactersLabel}</p>
-        )}
-      </SectionCard>
-      <SectionCard
-        title={localize('rightpanel_translation_notes_entities_title', 'Named entities & locations')}
-        description={localize(
-          'rightpanel_translation_notes_entities_hint',
-          'List proper nouns and geography with the spellings that should appear in translation.',
-        )}
-      >
-      <div className="grid gap-4 md:grid-cols-2">
-        {[
-          {
-            label: namedEntitiesLabel,
-            items: draft.namedEntities,
-            setter: (next: NotesEntityDraft[]) =>
-              setDraft((prev) => ({ ...prev, namedEntities: next })),
-            create: () => createEntityDraft("entity"),
-          },
-          {
-            label: locationsLabel,
-            items: draft.locations,
-            setter: (next: NotesEntityDraft[]) =>
-              setDraft((prev) => ({ ...prev, locations: next })),
-            create: () => createEntityDraft("location"),
-          },
-        ].map(({ label, items, setter, create }) => (
-          <div key={label} className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {label}
-              </p>
-              <button
-                type="button"
-                className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-                onClick={() => setter([...items, create()])}
-                disabled={isSaving}
-                title={addEntryLabel}
-                aria-label={addEntryLabel}
-              >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                <span className="sr-only">{addEntryLabel}</span>
-              </button>
-            </div>
-            {items.length ? (
-              <div className="space-y-3">
-                {items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="grid gap-2 rounded border border-slate-200 p-2 md:grid-cols-[1fr,1fr,110px,auto]"
-                  >
-                    <input
-                      value={item.name}
-                      onChange={(event) =>
-                        setter(
-                          items.map((entry) =>
-                            entry.id === item.id
-                              ? {
-                                  ...entry,
-                                  name: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        )
-                      }
-                      className="flex-1 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={entryNamePlaceholder}
-                    />
-                    <input
-                      value={item.targetName}
-                      onChange={(event) =>
-                        setter(
-                          items.map((entry) =>
-                            entry.id === item.id
-                              ? {
-                                  ...entry,
-                                  targetName: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        )
-                      }
-                      className="flex-1 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={entryTargetPlaceholder}
-                    />
-                    <input
-                      value={item.frequency}
-                      onChange={(event) =>
-                        setter(
-                          items.map((entry) =>
-                            entry.id === item.id
-                              ? {
-                                  ...entry,
-                                  frequency: event.target.value,
-                                }
-                              : entry,
-                          ),
-                        )
-                      }
-                      className="w-24 rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                    placeholder={entryFrequencyPlaceholder}
-                    />
-                    <div className="flex items-start justify-end">
-                      <button
-                        type="button"
-                        className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
-                        onClick={() => setter(items.filter((entry) => entry.id !== item.id))}
-                        disabled={isSaving}
-                        title={removeLabel}
-                        aria-label={removeLabel}
-                      >
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        <span className="sr-only">{removeLabel}</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500">{noEntriesLabel}</p>
-            )}
-          </div>
-        ))}
-      </div>
-      </SectionCard>
-      <SectionCard
-        title={measurementUnitsLabel}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() => addPair('measurementUnits', 'unit')}
-            disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
-          </button>
-        }
-      >
-        {renderPairList(
-          draft.measurementUnits,
-          'measurementUnits',
-          measurementUnitSourcePlaceholder,
-          measurementUnitTargetPlaceholder,
-        )}
-      </SectionCard>
-      <SectionCard
-        title={linguisticFeaturesLabel}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() => addPair('linguisticFeatures', 'feature')}
-            disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
-          </button>
-        }
-      >
-        {renderPairList(
-          draft.linguisticFeatures,
-          'linguisticFeatures',
-          linguisticSourcePlaceholder,
-          linguisticTargetPlaceholder,
-        )}
-      </SectionCard>
-    </div>
-  );
-
-  const viewContent = hasNotes ? (
-    <div className="space-y-3 text-sm text-slate-700">
-      {notes?.timePeriod ? (
-        <div className="flex items-baseline gap-2 text-sm text-slate-700">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {timePeriodLabel}
-          </p>
-          <p className="font-medium text-slate-800">{notes.timePeriod}</p>
-        </div>
-      ) : null}
-      {notes?.characters?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {charactersLabel}
-          </p>
-          <ul className="mt-2 space-y-2 text-slate-700">
-            {notes.characters.map((character) => {
-              const details: string[] = [];
-              if (character.age) details.push(character.age);
-              if (character.gender) details.push(character.gender);
-              if (character.traits?.length)
-                details.push(character.traits.join(", "));
-              return (
-                <li key={character.name}>
-                  <span className="font-medium text-slate-800">
-                    {character.name}
-                  </span>
-                  {character.targetName ? (
-                    <span className="text-indigo-600">
-                      {" "}→ {character.targetName}
-                    </span>
-                  ) : null}
-                  {details.length ? (
-                    <span className="text-slate-600">
-                      {" "}— {details.join(" · ")}
-                    </span>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
-      {notes?.namedEntities?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {namedEntitiesLabel}
-          </p>
-          <ul className="mt-2 grid gap-1 text-slate-700 sm:grid-cols-2">
-            {notes.namedEntities.map((entity) => (
-              <li key={`${entity.name}-${entity.frequency}`}>
-                <span className="font-medium text-slate-800">
-                  {entity.name}
-                </span>
-                {entity.targetName ? (
-                  <span className="text-indigo-600">
-                    {" "}→ {entity.targetName}
-                  </span>
-                ) : null}
-                {Number.isFinite(entity.frequency) && entity.frequency > 0 ? (
-                  <span className="ml-2 text-[11px] uppercase tracking-wide text-slate-500">
-                    {localize(
-                      "rightpanel_translation_notes_frequency_label",
-                      `freq ${entity.frequency}`,
-                      { count: entity.frequency },
-                    )}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {notes?.locations?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {locationsLabel}
-          </p>
-          <ul className="mt-2 grid gap-1 text-slate-700 sm:grid-cols-2">
-            {notes.locations.map((location) => (
-              <li key={`${location.name}-${location.frequency}`}>
-                <span className="font-medium text-slate-800">
-                  {location.name}
-                </span>
-                {location.targetName ? (
-                  <span className="text-indigo-600">
-                    {" "}→ {location.targetName}
-                  </span>
-                ) : null}
-                {Number.isFinite(location.frequency) && location.frequency > 0 ? (
-                  <span className="ml-2 text-[11px] uppercase tracking-wide text-slate-500">
-                    {localize(
-                      "rightpanel_translation_notes_frequency_label",
-                      `freq ${location.frequency}`,
-                      { count: location.frequency },
-                    )}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {notes?.measurementUnits?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {measurementUnitsViewLabel}
-          </p>
-          {renderBilingualList(notes.measurementUnits)}
-        </div>
-      ) : null}
-      {notes?.linguisticFeatures?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            {linguisticFeaturesViewLabel}
-          </p>
-          {renderBilingualList(notes.linguisticFeatures)}
-        </div>
-      ) : null}
-    </div>
-  ) : editable ? (
-    <p className="text-xs text-slate-500">{emptyStateMessage}</p>
-  ) : null;
-
-  return (
-    <Collapsible
-      title={titleLabel}
-      titleAdornment={notesStatusIcon}
-      isOpen={mode === "edit" ? true : isOpen}
-      onToggle={handleToggle}
-      keepMounted
-      action={actionNode}
-    >
-      {mode === "edit" ? editContent : viewContent}
-      {(formError || error || refreshError) && (
-        <p className="text-xs text-rose-500">
-          {formError || error || refreshError || ""}
-        </p>
-      )}
-    </Collapsible>
-  );
-};
-
-const iconClass = "h-5 w-5";
-
-const OpenBookIcon = () => (
-  <svg
-    className={iconClass}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M12 5c-1.8-1.2-4.1-1.7-7-1.7v13.4c2.9 0 5.2.5 7 1.7 1.8-1.2 4.1-1.7 7-1.7V3.3C16.1 3.3 13.8 3.8 12 5Z" />
-    <path d="M12 5v13.4" />
-  </svg>
-);
-
-const ClosedBookIcon = () => (
-  <svg
-    className={iconClass}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M6.5 4h9.5a2 2 0 0 1 2 2v12h-8.5a2 2 0 0 0-2 2V6a2 2 0 0 1 1-1.732" />
-    <path d="M7.5 4.5a2 2 0 0 0-2 2V22" />
-  </svg>
-);
-
-const Collapsible = ({
-  title,
-  titleAdornment,
-  caption,
-  isOpen,
-  onToggle,
-  children,
-  action,
-  showDivider = true,
-  keepMounted = false,
-}: {
-  title: string;
-  titleAdornment?: ReactNode;
-  caption?: string;
-  isOpen: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-  action?: ReactNode;
-  showDivider?: boolean;
-  keepMounted?: boolean;
-}) => {
-  const handleHeaderClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isEventFromInteractive(event.target)) {
-      return;
-    }
-    onToggle();
-  };
-
-  const handleHeaderKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (isEventFromInteractive(event.target)) {
-      return;
-    }
-    handleKeyboardToggle(event, onToggle);
-  };
-
-  return (
-    <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
-      <header className="flex items-start justify-between gap-3">
-        <div
-          className="flex flex-1 cursor-pointer flex-col gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-          role="button"
-          tabIndex={0}
-          aria-expanded={isOpen}
-          onClick={handleHeaderClick}
-          onKeyDown={handleHeaderKeyDown}
-        >
-          <div className="flex items-center gap-2">
-            {titleAdornment ? (
-              <span className="flex items-center" aria-hidden="true">
-                {titleAdornment}
-              </span>
-            ) : null}
-            <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
-            {action ? <span data-collapsible-ignore>{action}</span> : null}
-          </div>
-          {caption && <p className="text-xs text-slate-500">{caption}</p>}
-        </div>
-        <button
-          type="button"
-          className="flex h-6 w-6 items-center justify-center rounded text-xs text-slate-500 transition hover:bg-slate-100"
-          onClick={onToggle}
-          aria-label={isOpen ? `${title} 접기` : `${title} 펼치기`}
-          data-collapsible-ignore
-        >
-          {isOpen ? "˄" : "˅"}
-        </button>
-      </header>
-      {keepMounted ? (
-        <div
-          className={
-            isOpen
-              ? showDivider
-                ? "mt-4 border-t border-slate-200 pt-4"
-                : "mt-0 pt-0"
-              : "hidden"
-          }
-        >
-          {children}
-        </div>
-      ) : (
-        isOpen && (
-          <div
-            className={
-              showDivider ? "mt-4 border-t border-slate-200 pt-4" : "mt-0 pt-0"
-            }
-          >
-            {children}
-          </div>
-        )
-      )}
-    </section>
-  );
-};
-
 export const RightPanel = ({
   content,
   isContentLoading,
@@ -2703,6 +984,9 @@ export const RightPanel = ({
     tokenAlerts: true,
     theme: "system" as "system" | "light" | "dark",
   });
+  const [isNotesModalOpen, setNotesModalOpen] = useState(false);
+  const [isOriginModalOpen, setOriginModalOpen] = useState(false);
+  const [isTranslationModalOpen, setTranslationModalOpen] = useState(false);
   const [profileStatus, setProfileStatus] = useState({
     consent: false,
     requiredFilled: false,
@@ -2730,6 +1014,17 @@ export const RightPanel = ({
   const [translationNotesError, setTranslationNotesError] = useState<string | null>(
     null,
   );
+  const handleOpenNotesModal = useCallback(() => {
+    setTranslationNotesError(null);
+    setNotesModalOpen(true);
+  }, []);
+
+  const handleCloseNotesModal = useCallback(() => {
+    if (isSavingTranslationNotes) return;
+    setNotesModalOpen(false);
+    setTranslationNotesError(null);
+  }, [isSavingTranslationNotes]);
+
   const [isReanalyzingOrigin, setReanalyzingOrigin] = useState(false);
   const [reanalyzeError, setReanalyzeError] = useState<string | null>(null);
 
@@ -2739,12 +1034,21 @@ export const RightPanel = ({
   }, [activeProjectId]);
 
   useEffect(() => {
+    setNotesModalOpen(false);
+  }, [activeProjectId]);
+
+  useEffect(() => {
     setProfileStatus({ consent: false, requiredFilled: false, complete: false });
   }, [activeProjectId]);
 
   useEffect(() => {
     setReanalyzingOrigin(false);
     setReanalyzeError(null);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    setOriginModalOpen(false);
+    setTranslationModalOpen(false);
   }, [activeProjectId]);
 
   const projectSummary = useMemo(
@@ -2983,9 +1287,22 @@ export const RightPanel = ({
       appliedTranslation?.trim?.().length,
   );
 
+  const originText = content?.content?.origin?.content ?? "";
+  const originTitle =
+    content?.projectProfile?.bookTitle ??
+    projectSummary?.book_title ??
+    content?.projectProfile?.title ??
+    projectSummary?.title ??
+    "";
+  const originAuthor =
+    content?.projectProfile?.meta?.author ??
+    content?.projectProfile?.authorName ??
+    projectSummary?.author_name ??
+    "";
+
   const originFallback = useMemo(() => {
     if (originProfile || !originContentAvailable) return null;
-    const raw = content?.content?.origin?.content ?? "";
+    const raw = originText;
     const trimmed = raw.trim();
     if (!trimmed) return null;
     const paragraphs = trimmed
@@ -3021,7 +1338,12 @@ export const RightPanel = ({
         (content?.content?.origin as { lang?: string } | undefined)?.lang ??
         null,
     };
-  }, [content?.content?.origin, originContentAvailable, originProfile]);
+  }, [
+    content?.content?.origin,
+    originContentAvailable,
+    originProfile,
+    originText,
+  ]);
 
   const originSummaryStatus: SummaryStatus = originProfile
     ? "done"
@@ -3039,6 +1361,138 @@ export const RightPanel = ({
         : translationContentAvailable
           ? "done"
           : "pending";
+
+  const originMetrics = useMemo(() => {
+    if (originProfile?.metrics) return originProfile.metrics;
+    if (originFallback?.metrics) return originFallback.metrics;
+    if (!originContentAvailable) return null;
+    const trimmed = originText.trim();
+    if (!trimmed) return null;
+    const words = trimmed.split(/\s+/).filter(Boolean).length;
+    const chars = trimmed.length;
+    const paragraphs = trimmed
+      .split(/\n{2,}/)
+      .map((segment) => segment.trim())
+      .filter(Boolean).length;
+    const readingTimeMinutes = Number((words / 220).toFixed(2));
+    return {
+      wordCount: words,
+      charCount: chars,
+      paragraphCount: paragraphs || 1,
+      readingTimeMinutes,
+      readingTimeLabel: "",
+    };
+  }, [originProfile, originFallback, originContentAvailable, originText]);
+
+  const originMetricLabels = useMemo(() => {
+    if (!originMetrics) return [] as string[];
+    const labels: string[] = [];
+    if (
+      typeof originMetrics.wordCount === "number" &&
+      Number.isFinite(originMetrics.wordCount)
+    ) {
+      const formatted = Number(originMetrics.wordCount).toLocaleString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_words",
+          `${formatted} words`,
+          {
+            count: formatted,
+          },
+        ),
+      );
+    }
+    if (
+      typeof originMetrics.charCount === "number" &&
+      Number.isFinite(originMetrics.charCount)
+    ) {
+      const formatted = Number(originMetrics.charCount).toLocaleString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_characters",
+          `${formatted} characters`,
+          {
+            count: formatted,
+          },
+        ),
+      );
+    }
+    if (
+      typeof originMetrics.readingTimeMinutes === "number" &&
+      Number.isFinite(originMetrics.readingTimeMinutes)
+    ) {
+      const minutes = Math.max(
+        1,
+        Math.round(originMetrics.readingTimeMinutes),
+      ).toString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_minutes",
+          `${minutes} mins`,
+          {
+            count: minutes,
+          },
+        ),
+      );
+    }
+    return labels;
+  }, [originMetrics, localize]);
+
+  const originTimestampRaw =
+    originProfile?.updatedAt ??
+    originProfile?.createdAt ??
+    content?.content?.origin?.timestamp ??
+    originFallback?.timestamp ??
+    null;
+
+  const originTimestampLabel = useMemo(() => {
+    if (!originTimestampRaw) return null;
+    const parsed = Date.parse(originTimestampRaw);
+    if (Number.isNaN(parsed)) return null;
+    return new Date(parsed).toLocaleString();
+  }, [originTimestampRaw]);
+
+  const handleOpenOriginModal = useCallback(() => {
+    if (!originContentAvailable) return;
+    setOriginModalOpen(true);
+  }, [originContentAvailable]);
+
+  const handleCloseOriginModal = useCallback(() => {
+    setOriginModalOpen(false);
+  }, []);
+
+  const originSummaryAccessory = useMemo(() => {
+    const label = localize(
+      "rightpanel_origin_open_full",
+      "View full manuscript",
+    );
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!originContentAvailable) return;
+          handleOpenOriginModal();
+        }}
+        className={`flex h-7 w-7 items-center justify-center rounded text-sm transition ${
+          originContentAvailable
+            ? "text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            : "cursor-not-allowed text-slate-300"
+        }`}
+        title={label}
+        aria-label={label}
+        data-collapsible-ignore
+        disabled={!originContentAvailable}
+      >
+        <BookOpen className="h-4 w-4" aria-hidden="true" />
+      </button>
+    );
+  }, [
+    originContentAvailable,
+    handleOpenOriginModal,
+    localize,
+  ]);
   const translationFallback = useMemo(() => {
     if (translationProfile) return null;
     const primary = content?.content?.translation?.content ?? "";
@@ -3091,6 +1545,157 @@ export const RightPanel = ({
     content?.proofreading?.updatedAt,
     translationContentFromBatches,
     translationProfile,
+  ]);
+
+  const translationMetrics = useMemo(() => {
+    if (translationProfile?.metrics) return translationProfile.metrics;
+    if (translationFallback?.metrics) return translationFallback.metrics;
+    if (!translationContentAvailable) return null;
+    const trimmed = translationText.trim();
+    if (!trimmed) return null;
+    const words = trimmed.split(/\s+/).filter(Boolean).length;
+    const chars = trimmed.length;
+    const paragraphs = trimmed
+      .split(/\n{2,}/)
+      .map((segment) => segment.trim())
+      .filter(Boolean).length;
+    const readingTimeMinutes = Number((words / 220).toFixed(2));
+    return {
+      wordCount: words,
+      charCount: chars,
+      paragraphCount: paragraphs || 1,
+      readingTimeMinutes,
+      readingTimeLabel: "",
+    };
+  }, [translationProfile, translationFallback, translationContentAvailable, translationText]);
+
+  const translationMetricLabels = useMemo(() => {
+    if (!translationMetrics) return [] as string[];
+    const labels: string[] = [];
+    if (
+      typeof translationMetrics.wordCount === "number" &&
+      Number.isFinite(translationMetrics.wordCount)
+    ) {
+      const formatted = Number(translationMetrics.wordCount).toLocaleString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_words",
+          `${formatted} words`,
+          {
+            count: formatted,
+          },
+        ),
+      );
+    }
+    if (
+      typeof translationMetrics.charCount === "number" &&
+      Number.isFinite(translationMetrics.charCount)
+    ) {
+      const formatted = Number(translationMetrics.charCount).toLocaleString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_characters",
+          `${formatted} characters`,
+          {
+            count: formatted,
+          },
+        ),
+      );
+    }
+    if (
+      typeof translationMetrics.readingTimeMinutes === "number" &&
+      Number.isFinite(translationMetrics.readingTimeMinutes)
+    ) {
+      const minutes = Math.max(
+        1,
+        Math.round(translationMetrics.readingTimeMinutes),
+      ).toString();
+      labels.push(
+        localize(
+          "rightpanel_summary_metric_minutes",
+          `${minutes} mins`,
+          {
+            count: minutes,
+          },
+        ),
+      );
+    }
+    return labels;
+  }, [translationMetrics, localize]);
+
+  const translationTimestampRaw =
+    translationProfile?.updatedAt ??
+    translationProfile?.createdAt ??
+    content?.content?.translation?.timestamp ??
+    translationFallback?.timestamp ??
+    null;
+
+  const translationTimestampLabel = useMemo(() => {
+    if (!translationTimestampRaw) return null;
+    const parsed = Date.parse(translationTimestampRaw);
+    if (Number.isNaN(parsed)) return null;
+    return new Date(parsed).toLocaleString();
+  }, [translationTimestampRaw]);
+
+  const translationTitle =
+    content?.projectProfile?.meta?.bookTitleEn ??
+    content?.projectProfile?.bookTitle ??
+    projectSummary?.title ??
+    "";
+
+  const translationAuthor =
+    content?.projectProfile?.translatorName ??
+    content?.projectProfile?.meta?.translator ??
+    projectSummary?.translator_name ??
+    "";
+
+  const translationModalText = useMemo(() => {
+    if (translationText.trim().length) return translationText;
+    const fallbackStory = translationFallback?.summary?.story ?? "";
+    return fallbackStory;
+  }, [translationText, translationFallback]);
+
+  const handleOpenTranslationModal = useCallback(() => {
+    if (!translationContentAvailable && !translationFallback) return;
+    setTranslationModalOpen(true);
+  }, [translationContentAvailable, translationFallback]);
+
+  const handleCloseTranslationModal = useCallback(() => {
+    setTranslationModalOpen(false);
+  }, []);
+
+  const translationSummaryAccessory = useMemo(() => {
+    const label = localize(
+      "rightpanel_translation_open_full",
+      "View full translation",
+    );
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!translationContentAvailable && !translationFallback) return;
+          handleOpenTranslationModal();
+        }}
+        className={`flex h-7 w-7 items-center justify-center rounded text-sm transition ${
+          translationContentAvailable || translationFallback
+            ? "text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            : "cursor-not-allowed text-slate-300"
+        }`}
+        title={label}
+        aria-label={label}
+        data-collapsible-ignore
+        disabled={!translationContentAvailable && !translationFallback}
+      >
+        <BookOpen className="h-4 w-4" aria-hidden="true" />
+      </button>
+    );
+  }, [
+    translationContentAvailable,
+    translationFallback,
+    handleOpenTranslationModal,
+    localize,
   ]);
 
   const serverProofreadingStage = useMemo(() => {
@@ -3577,7 +2182,11 @@ export const RightPanel = ({
                   translationStatus={translationSummaryStatus}
                   translationFallback={translationFallback}
                   originFallback={originFallback}
-                  onSaveTranslationNotes={handleSaveTranslationNotes}
+                  onEditTranslationNotes={
+                    token && activeProjectId && originProfile
+                      ? handleOpenNotesModal
+                      : undefined
+                  }
                   translationNotesEditable={Boolean(
                     token && activeProjectId && originProfile,
                   )}
@@ -3589,6 +2198,8 @@ export const RightPanel = ({
                   isReanalyzing={isReanalyzingOrigin}
                   canReanalyze={canTriggerReanalysis}
                   reanalysisError={reanalyzeError}
+                  originHeaderAccessory={originSummaryAccessory}
+                  translationHeaderAccessory={translationSummaryAccessory}
                 />
                 <div className="grid gap-4 md:grid-cols-2">
                   <SummaryCard
@@ -3958,6 +2569,139 @@ export const RightPanel = ({
         stage={content?.qualityAssessmentStage}
         latest={content?.qualityAssessment ?? null}
       />
+      {isOriginModalOpen ? (
+        <Modal
+          title={localize(
+            "rightpanel_origin_modal_title",
+            "Original manuscript",
+          )}
+          onClose={handleCloseOriginModal}
+          maxWidthClass="max-w-4xl"
+          showCloseButton
+          closeLabel={localize(
+            "rightpanel_origin_modal_close",
+            "Close manuscript viewer",
+          )}
+        >
+          <div className="space-y-4 text-sm text-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+              <span className="text-slate-700">
+                <span className="font-semibold text-slate-700">
+                  {originTitle?.trim() ? originTitle.trim() : "—"}
+                </span>
+                {originAuthor?.trim() ? (
+                  <span className="text-slate-500"> · {originAuthor.trim()}</span>
+                ) : null}
+              </span>
+              {originFilename ? (
+                <span className="text-xs text-slate-400">{originFilename}</span>
+              ) : null}
+            </div>
+            {(originMetricLabels.length || originTimestampLabel) ? (
+              <p className="text-sm text-slate-600">
+                {originMetricLabels.length ? originMetricLabels.join(" · ") : null}
+                {originMetricLabels.length && originTimestampLabel ? " · " : null}
+                {originTimestampLabel
+                  ? localize(
+                      "rightpanel_summary_metric_updated",
+                      "Updated: {{timestamp}}",
+                      { timestamp: originTimestampLabel },
+                    )
+                  : null}
+              </p>
+            ) : null}
+            <div className="max-h-[60vh] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+              {originContentAvailable ? (
+                <pre className="whitespace-pre-wrap break-words text-slate-700">
+                  {originText}
+                </pre>
+              ) : (
+                <p className="text-slate-400">
+                  {localize(
+                    "rightpanel_origin_modal_empty",
+                    "Manuscript text is not available yet.",
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+      {isNotesModalOpen ? (
+        <Modal
+          title={localize('rightpanel_translation_notes_title', 'Translation notes')}
+          onClose={handleCloseNotesModal}
+          maxWidthClass="max-w-4xl"
+        >
+          <TranslationNotesEditor
+            notes={originProfile?.translationNotes ?? null}
+            localize={localize}
+            onSave={handleSaveTranslationNotes}
+            onCancel={handleCloseNotesModal}
+            isSaving={isSavingTranslationNotes}
+            error={translationNotesError}
+          />
+        </Modal>
+      ) : null}
+      {isTranslationModalOpen ? (
+        <Modal
+          title={localize(
+            "rightpanel_translation_modal_title",
+            "Translated manuscript",
+          )}
+          onClose={handleCloseTranslationModal}
+          maxWidthClass="max-w-4xl"
+          showCloseButton
+          closeLabel={localize(
+            "rightpanel_translation_modal_close",
+            "Close translation viewer",
+          )}
+        >
+          <div className="space-y-4 text-sm text-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+              <span className="text-slate-700">
+                <span className="font-semibold text-slate-700">
+                  {translationTitle?.trim() ? translationTitle.trim() : "—"}
+                </span>
+                {translationAuthor?.trim() ? (
+                  <span className="text-slate-500"> · {translationAuthor.trim()}</span>
+                ) : null}
+              </span>
+            </div>
+            {(translationMetricLabels.length || translationTimestampLabel) ? (
+              <p className="text-sm text-slate-600">
+                {translationMetricLabels.length
+                  ? translationMetricLabels.join(" · ")
+                  : null}
+                {translationMetricLabels.length && translationTimestampLabel
+                  ? " · "
+                  : null}
+                {translationTimestampLabel
+                  ? localize(
+                      "rightpanel_summary_metric_updated",
+                      "Updated: {{timestamp}}",
+                      { timestamp: translationTimestampLabel },
+                    )
+                  : null}
+              </p>
+            ) : null}
+            <div className="max-h-[60vh] overflow-y-auto rounded border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+              {translationModalText.trim().length ? (
+                <pre className="whitespace-pre-wrap break-words text-slate-700">
+                  {translationModalText}
+                </pre>
+              ) : (
+                <p className="text-slate-400">
+                  {localize(
+                    "rightpanel_translation_modal_empty",
+                    "Translated text is not available yet.",
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </ProofreadIssuesProvider>
   );
 };

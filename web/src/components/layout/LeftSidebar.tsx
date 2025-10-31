@@ -745,14 +745,6 @@ export const LeftSidebar = () => {
     [token, invalidateProjects, invalidateProjectContent],
   );
 
-  const projectMap = useMemo(() => {
-    const map = new Map<string, ProjectSummary>();
-    orderedProjects.forEach((project) => {
-      map.set(project.project_id, project);
-    });
-    return map;
-  }, [orderedProjects]);
-
   const projectScopeKey = activeProjectId ?? "global";
   const sectionState = {
     ...DEFAULT_SIDEBAR_SECTIONS,
