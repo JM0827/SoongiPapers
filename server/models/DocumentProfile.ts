@@ -95,6 +95,7 @@ const DocumentProfileSchema = new Schema(
       type: TranslationNotesSchema,
       default: null,
     },
+    analysis_meta: { type: Schema.Types.Mixed, default: null },
     source_hash: { type: String, default: null },
     source_characters: { type: Number, default: null },
     source_preview: { type: String, default: null },
@@ -147,6 +148,7 @@ export type DocumentProfileDocument = {
     measurementUnits: Array<{ source: string; target: string | null }>;
     linguisticFeatures: Array<{ source: string; target: string | null }>;
   } | null;
+  analysis_meta?: Record<string, unknown> | null;
   source_hash?: string | null;
   source_characters?: number | null;
   source_preview?: string | null;

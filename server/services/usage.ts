@@ -4,6 +4,8 @@ import { query } from "../db";
 
 export type UsageEventType =
   | "translate"
+  | "translate_v2_draft"
+  | "translate_v2_revise"
   | "quality"
   | "proofread"
   | "ebook"
@@ -19,6 +21,7 @@ export interface UsageEventInput {
   output_tokens?: number;
   total_cost?: number | null;
   duration_ms?: number | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -53,26 +56,23 @@ export async function recordTokenUsage(
   const durationMs = event.duration_ms ?? null;
   const cost =
     event.total_cost ?? estimateCost(model, inputTokens, outputTokens);
+  const metadataJson = event.metadata ? JSON.stringify(event.metadata) : null;
+
+  const usageParams = [
+    randomUUID(),
+    projectId,
+    jobId,
+    batchId,
+    event.event_type,
+    model,
+    inputTokens,
+    outputTokens,
+    cost,
+    durationMs,
+  ] as const;
 
   try {
-    const usageId = randomUUID();
-    await query(
-      `INSERT INTO token_usage_events
-         (id, project_id, job_id, batch_id, event_type, model, input_tokens, output_tokens, total_cost, duration_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        usageId,
-        projectId,
-        jobId,
-        batchId,
-        event.event_type,
-        model,
-        inputTokens,
-        outputTokens,
-        cost,
-        durationMs,
-      ],
-    );
+    await insertUsageEventRow(log, usageParams, metadataJson);
 
     await query(
       `INSERT INTO project_usage_totals (project_id, total_input_tokens, total_output_tokens, total_cost, updated_at)
@@ -90,4 +90,66 @@ export async function recordTokenUsage(
       `[USAGE] Failed to record usage for project ${projectId}`,
     );
   }
+}
+
+let metadataColumnAvailable = true;
+
+function isMissingColumnError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  if (code === "42703") {
+    return true;
+  }
+  const message =
+    typeof (error as { message?: unknown } | null)?.message === "string"
+      ? ((error as { message: string }).message ?? "")
+      : "";
+  return message.includes("column") && message.includes("metadata");
+}
+
+async function insertUsageEventRow(
+  log: FastifyBaseLogger,
+  params: readonly [
+    string,
+    string,
+    string | null,
+    string | null,
+    UsageEventType,
+    string | null,
+    number,
+    number,
+    number,
+    number | null,
+  ],
+  metadataJson: string | null,
+) {
+  if (metadataColumnAvailable) {
+    try {
+      await query(
+        `INSERT INTO token_usage_events
+           (id, project_id, job_id, batch_id, event_type, model, input_tokens, output_tokens, total_cost, duration_ms, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [...params, metadataJson],
+      );
+      return;
+    } catch (error) {
+      if (isMissingColumnError(error)) {
+        metadataColumnAvailable = false;
+        log.warn(
+          {
+            err: error,
+          },
+          "[USAGE] token_usage_events.metadata column missing; reverting to legacy insert",
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  await query(
+    `INSERT INTO token_usage_events
+       (id, project_id, job_id, batch_id, event_type, model, input_tokens, output_tokens, total_cost, duration_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [...params],
+  );
 }

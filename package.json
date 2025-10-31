@@ -19,12 +19,14 @@
   "devDependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.52.4",
     "@types/jwt-decode": "^2.2.1",
+    "@types/node": "^24.9.1",
     "concurrently": "^8.2.2",
     "prettier": "^3.2.5"
   },
   "dependencies": {
     "@bookko/ai-image-gen": "file:packages/ai-image-gen",
     "bullmq": "^5.61.0",
-    "jwt-decode": "^4.0.0"
+    "jwt-decode": "^4.0.0",
+    "openai": "6.7.0"
   }
 }

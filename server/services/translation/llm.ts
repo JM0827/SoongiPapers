@@ -1,5 +1,10 @@
-import { OpenAI } from "openai";
-import type { TranslationStage } from "../../agents/translation";
+import OpenAI from "openai";
+import type {
+  ResponseReasoningEffort,
+  ResponseVerbosity,
+  TranslationStage,
+} from "../../agents/translation";
+import { safeExtractOpenAIResponse } from "../llm";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY ?? "",
@@ -11,17 +16,30 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 const DEFAULT_STAGE_MODELS: Record<TranslationStage, string> = {
-  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-4o-mini",
-  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-4o",
-  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-4o",
-  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-4o-mini",
+  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-5",
+  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-5",
+  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-5",
+  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-5-mini",
+  draft:
+    process.env.SEQUENTIAL_DRAFT_MODEL ??
+    process.env.SEQUENTIAL_LITERAL_MODEL ??
+    "gpt-5",
+  revise:
+    process.env.SEQUENTIAL_REVISE_MODEL ??
+    process.env.SEQUENTIAL_STYLE_MODEL ??
+    "gpt-5",
+  "micro-check":
+    process.env.SEQUENTIAL_MICRO_CHECK_MODEL ??
+    process.env.SEQUENTIAL_QA_MODEL ??
+    "gpt-5-mini",
 };
 
 export interface StageCallOptions {
   stage: TranslationStage;
   systemPrompt: string;
   userPrompt: string;
-  temperature: number;
+  verbosity: ResponseVerbosity;
+  reasoningEffort: ResponseReasoningEffort;
   maxOutputTokens: number;
   responseFormat?: {
     type: "json_object";
@@ -46,27 +64,50 @@ export async function callStageLLM(options: StageCallOptions): Promise<StageCall
   }
 
   const model = DEFAULT_STAGE_MODELS[options.stage];
-  const response = await client.chat.completions.create({
+  const responseFormat = options.responseFormat
+    ? { type: "json_object" as const }
+    : undefined;
+
+  const textConfig: {
+    verbosity: ResponseVerbosity;
+    format?: { type: "json_object" };
+  } = {
+    verbosity: options.verbosity,
+  };
+
+  if (responseFormat) {
+    textConfig.format = responseFormat;
+  }
+
+  const response = await client.responses.create({
     model,
-    temperature: options.temperature,
-    max_tokens: options.maxOutputTokens,
-    response_format: options.responseFormat
-      ? { type: "json_object" as const }
-      : undefined,
-    messages: [
-      { role: "system", content: options.systemPrompt },
-      { role: "user", content: options.userPrompt },
+    max_output_tokens: options.maxOutputTokens,
+    text: textConfig,
+    reasoning: { effort: options.reasoningEffort },
+    input: [
+      {
+        role: "system",
+        content: [{ type: "input_text", text: options.systemPrompt }],
+      },
+      {
+        role: "user",
+        content: [{ type: "input_text", text: options.userPrompt }],
+      },
     ],
   });
 
-  const text = response.choices[0]?.message?.content?.trim() ?? "";
+  const { parsedJson, text, usage } = safeExtractOpenAIResponse(response);
+  const resolvedText =
+    (responseFormat && parsedJson
+      ? JSON.stringify(parsedJson)
+      : text?.trim()) ?? "";
   return {
-    text,
+    text: resolvedText,
     model: response.model ?? model,
     usage: {
-      inputTokens: response.usage?.prompt_tokens ?? 0,
-      outputTokens: response.usage?.completion_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      inputTokens: usage?.prompt_tokens ?? 0,
+      outputTokens: usage?.completion_tokens ?? 0,
+      totalTokens: usage?.total_tokens ?? 0,
     },
   };
 }

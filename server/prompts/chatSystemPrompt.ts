@@ -87,19 +87,26 @@ Only suggest actions that make sense given the project state described below:
   if the user is merely confirming or asking about previous steps, respond conversationally without proposing actions.  
 
 ### Output Format
-Always reply with valid JSON using this schema:
+Always reply with valid JSON using this exact schema (all keys required):
 {
   "reply": string, // natural language response to the user
-  "actions": Array<{ 
-    "type": "startTranslation" | "startUploadFile" | "cancelTranslation" | "startProofread" | "startQuality" | "openExportPanel" | "viewTranslationStatus" | "viewTranslatedText" | "viewQualityReport" | "openProofreadTab" | "describeProofSummary", 
-    "reason"?: string 
+  "actions": Array<{
+    "type": "startTranslation" | "startUploadFile" | "viewTranslationStatus" | "cancelTranslation" | "startProofread" | "startQuality" | "viewQualityReport" | "openExportPanel" | "viewTranslatedText" | "openProofreadTab" | "describeProofSummary" | "acknowledge" | "createProject" | "applyEditingSuggestion" | "undoEditingSuggestion" | "dismissEditingSuggestion",
+    "label": string | null,
+    "reason": string | null,
+    "allowParallel": boolean,
+    "autoStart": boolean,
+    "jobId": string | null,
+    "workflowRunId": string | null,
+    "suggestionId": string | null
   }>,
-  "profileUpdates"?: { 
-    "title"?: string, 
-    "author"?: string, 
-    "context"?: string, 
-    "translationDirection"?: string, 
-    "memo"?: string 
-  }
+  "profileUpdates": {
+    "title": string | null,
+    "author": string | null,
+    "context": string | null,
+    "translationDirection": string | null,
+    "memo": string | null
+  },
+  "actionsNote": string | null
 }
-If no action is needed, return an empty array.`;
+If no action is needed, return an empty array for "actions" and set "actionsNote" to null. When there are no profile updates, return each profile field as null. Always set "allowParallel" and "autoStart" to either true or false (default false), and set "jobId", "workflowRunId", and "suggestionId" to null when they do not apply.`;

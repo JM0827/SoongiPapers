@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactElement } from 'react';
 import Editor, { type OnChange, type OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import {
@@ -11,6 +12,7 @@ import {
   Heart,
   Shield,
   BookOpenCheck,
+  PenSquare,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -60,18 +62,33 @@ interface AggregatedModel {
 
 const PLAIN_SEGMENT_SEPARATOR = '\n\n';
 
-const STAGE_ORDER: TranslationStageKey[] = [
+const LEGACY_STAGE_ORDER: TranslationStageKey[] = [
   'literal',
   'style',
   'emotion',
   'qa',
 ];
 
+const V2_STAGE_ORDER: TranslationStageKey[] = [
+  'draft',
+  'revise',
+  'micro-check',
+];
+
+const V2_STAGE_SET = new Set(V2_STAGE_ORDER);
+
 const STAGE_META: Record<TranslationStageKey, { icon: LucideIcon; fallback: string; toneClass: string }> = {
   literal: { icon: Layers, fallback: 'Literal pass', toneClass: 'text-sky-600' },
   style: { icon: Sparkles, fallback: 'Style pass', toneClass: 'text-indigo-600' },
   emotion: { icon: Heart, fallback: 'Emotion pass', toneClass: 'text-rose-600' },
   qa: { icon: Shield, fallback: 'QA review', toneClass: 'text-emerald-600' },
+  draft: { icon: BookOpenCheck, fallback: 'Draft pass', toneClass: 'text-sky-600' },
+  revise: { icon: PenSquare, fallback: 'Revise pass', toneClass: 'text-indigo-600' },
+  'micro-check': {
+    icon: ShieldCheck,
+    fallback: 'Micro-check',
+    toneClass: 'text-emerald-600',
+  },
 };
 
 const buildAggregatedModel = (
@@ -560,10 +577,6 @@ export const DualEditorPanel = ({
     '특징',
   );
   const nameLabel = localize('rightpanel_translation_notes_name', '이름');
-  const targetNameLabel = localize(
-    'rightpanel_translation_notes_target_name',
-    '번역 이름',
-  );
   const ageLabel = localize('rightpanel_translation_notes_age', '나이');
   const genderLabel = localize('rightpanel_translation_notes_gender', '성별');
   const summaryTimestampLabel = useMemo(() => {
@@ -627,7 +640,7 @@ export const DualEditorPanel = ({
     title: string,
     entries: Array<{ source: string; target: string | null }>,
     keyPrefix: string,
-  ): JSX.Element | null => {
+  ): ReactElement | null => {
     if (!entries.length) return null;
     return (
       <div className="space-y-1" key={`${keyPrefix}-section`}>
@@ -658,7 +671,7 @@ export const DualEditorPanel = ({
     entries: Array<{ name: string; targetName: string | null; frequency?: number }>,
     keyPrefix: string,
     options?: { twoColumn?: boolean },
-  ): JSX.Element | null => {
+  ): ReactElement | null => {
     if (!entries.length) return null;
     const twoColumn = options?.twoColumn ?? false;
     return (
@@ -700,7 +713,7 @@ export const DualEditorPanel = ({
     );
   };
 
-  const renderCharacterSection = (): JSX.Element | null => {
+  const renderCharacterSection = (): ReactElement | null => {
     if (!characterEntries.length) return null;
     return (
       <div className="space-y-1">
@@ -802,6 +815,13 @@ export const DualEditorPanel = ({
     () => new Set<TranslationStageKey>(knownAvailableStages),
     [knownAvailableStages],
   );
+
+  const stageOrder = useMemo(() => {
+    const hasV2Stage = knownAvailableStages.some((stage) =>
+      V2_STAGE_SET.has(stage),
+    );
+    return hasV2Stage ? V2_STAGE_ORDER : LEGACY_STAGE_ORDER;
+  }, [knownAvailableStages]);
 
   const handleStageButtonClick = useCallback(
     (stageKey: TranslationStageKey) => {
@@ -2469,7 +2489,7 @@ export const DualEditorPanel = ({
               </button>
             </div>
             <div className="flex items-center gap-1">
-              {STAGE_ORDER.map((stageKey) => {
+              {stageOrder.map((stageKey) => {
                 const meta = STAGE_META[stageKey];
                 const Icon = meta.icon;
                 const isActive = stageViewer.isOpen && stageViewer.stage === stageKey;

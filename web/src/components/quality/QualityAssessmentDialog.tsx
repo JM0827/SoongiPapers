@@ -99,6 +99,18 @@ export const QualityAssessmentDialog = ({
 
   const buttonDisabled = isRunning || !chatExecutorReady;
   const runButtonTitle = buttonDisabled && !isRunning ? unavailableTooltip : undefined;
+  const progressPercent = qualityState.chunksTotal
+    ? Math.min(
+        100,
+        Math.round(
+          (qualityState.chunksCompleted /
+            Math.max(qualityState.chunksTotal, 1)) *
+            100,
+        ),
+      )
+    : isRunning
+      ? 5
+      : 0;
 
   if (!open) return null;
 
@@ -147,6 +159,36 @@ export const QualityAssessmentDialog = ({
             </button>
           </div>
         </header>
+        {isRunning && (
+          <div className="px-6 pb-3 text-xs text-slate-600">
+            <div className="mb-2 flex items-center justify-between">
+              <span>
+                {qualityState.chunksTotal
+                  ? `청크 ${Math.min(
+                      qualityState.chunksCompleted + 1,
+                      qualityState.chunksTotal,
+                    )}/${qualityState.chunksTotal} 평가 중…`
+                  : '청크 준비 중…'}
+              </span>
+              {qualityState.chunksTotal ? (
+                <span className="text-[11px] text-slate-400">
+                  {qualityState.chunksCompleted}/{qualityState.chunksTotal}
+                </span>
+              ) : null}
+            </div>
+            <div className="h-2 rounded-full bg-slate-200">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            {qualityState.lastMessage && (
+              <p className="mt-2 text-[11px] text-slate-500">
+                {qualityState.lastMessage}
+              </p>
+            )}
+          </div>
+        )}
         {errorMessage && (
           <p className="px-6 pt-3 text-xs text-rose-600">{errorMessage}</p>
         )}

@@ -35,11 +35,21 @@ CREATE TABLE IF NOT EXISTS token_usage_events (
   output_tokens INTEGER DEFAULT 0,
   total_cost NUMERIC(14,6) DEFAULT 0,
   duration_ms INTEGER,
+  metadata JSONB,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_project ON token_usage_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_job ON token_usage_events(job_id);
+
+CREATE TABLE IF NOT EXISTS translation_cancellation_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT NOT NULL,
+  project_id TEXT,
+  user_id TEXT,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS project_usage_totals (
   project_id TEXT PRIMARY KEY,
@@ -88,7 +98,7 @@ CREATE TABLE IF NOT EXISTS translation_drafts (
   project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
   job_id TEXT NOT NULL,
   workflow_run_id UUID,
-  stage TEXT NOT NULL CHECK (stage IN ('literal','style','emotion','qa')),
+  stage TEXT NOT NULL CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check')),
   batch_id UUID,
   segment_index INT NOT NULL,
   segment_id TEXT,
@@ -101,6 +111,8 @@ CREATE TABLE IF NOT EXISTS translation_drafts (
   scores JSONB,
   guards JSONB,
   notes JSONB,
+  span_pairs JSONB,
+  candidates JSONB,
   needs_review BOOLEAN NOT NULL DEFAULT FALSE,
   retry_count INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -115,20 +127,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_drafts_job_stage
 
 CREATE INDEX IF NOT EXISTS idx_translation_drafts_project
   ON translation_drafts (project_id, stage);
-
-CREATE TABLE IF NOT EXISTS ebook_artifacts (
-  ebook_id UUID PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  translation_file_id TEXT NOT NULL,
-  quality_assessment_id TEXT,
-  format TEXT NOT NULL DEFAULT 'txt',
-  status TEXT NOT NULL DEFAULT 'pending',
-  storage_ref TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_artifacts_project ON ebook_artifacts(project_id);
 
 CREATE TABLE IF NOT EXISTS ebooks (
   ebook_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -285,25 +283,6 @@ CREATE TABLE IF NOT EXISTS ebook_metadata (
   extra JSONB,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXISTS ebook_distribution_channels (
-  channel_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ebook_id UUID NOT NULL,
-  channel TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  listing_id TEXT,
-  price NUMERIC(10,2),
-  currency TEXT,
-  planned_publish_at TIMESTAMPTZ,
-  published_at TIMESTAMPTZ,
-  last_synced_at TIMESTAMPTZ,
-  failure_reason TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_ebook ON ebook_distribution_channels(ebook_id);
 
 CREATE TABLE IF NOT EXISTS ebook_audit_log (
   log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

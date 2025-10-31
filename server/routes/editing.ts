@@ -4,8 +4,13 @@ import {
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
-import { OpenAI } from "openai";
+import type { OpenAI } from "openai";
 import { requireAuthAndPlanCheck } from "../middleware/auth";
+import { getOpenAIClient } from "../services/openaiClient";
+import { estimateTokens } from "../services/llm";
+import { getEditingAssistantDefaults } from "../services/responsesConfig";
+import { editingAssistantSchema } from "../services/responsesSchemas";
+import { runJsonSchemaResponse } from "../services/responsesRunner";
 
 interface SelectionRange {
   startLineNumber: number;
@@ -76,8 +81,8 @@ const isEditingSelection = (
 const REWRITE_PROMPT = `You are a meticulous bilingual editor for the Soongi Pagers literary translation studio. Rewrite the provided passage according to the user's instructions while preserving the original meaning, tense, and voice. Always respond with a JSON object:
 {
   "updatedText": string,       // revised passage
-  "explanation": string|null,  // <= 2 sentences explaining key changes
-  "warnings": string[]         // optional cautions
+  "explanation": string|null,  // <= 2 sentences explaining key changes (set null when not needed)
+  "warnings": string[]         // provide [] when there are no cautions
 }
 
 Rules:
@@ -103,20 +108,18 @@ const getSystemPrompt = (mode: EditingMode): string => {
 };
 
 const editingRoutes: FastifyPluginAsync = async (fastify) => {
-  const openai = process.env.OPENAI_API_KEY
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
-  const modelId =
-    process.env.EDITING_MODEL ??
-    process.env.CHAT_MODEL ??
-    process.env.SMALL_MODEL ??
-    "gpt-4o-mini";
+  let openaiClient: OpenAI | null = null;
+  try {
+    openaiClient = getOpenAIClient();
+  } catch (error) {
+    fastify.log.error({ err: error }, "[editing] Failed to initialise OpenAI client");
+  }
 
   const runEditingCompletion = async (
     mode: EditingMode,
     body: EditingRequestBody,
   ): Promise<EditingCompletionResult> => {
-    if (!openai) {
+    if (!openaiClient) {
       throw new Error("LLM is not configured");
     }
     if (!body.selection || !isEditingSelection(body.selection)) {
@@ -140,70 +143,70 @@ const editingRoutes: FastifyPluginAsync = async (fastify) => {
       locale: body.locale ?? null,
       context: body.context ?? null,
     };
+    const tokenEstimate = Math.max(
+      estimateTokens(selection.rawText ?? selection.text),
+      120,
+    );
+    const defaults = getEditingAssistantDefaults(tokenEstimate + 120);
+    const initialTokenBudget = Math.min(
+      defaults.maxOutputTokensCap,
+      Math.max(defaults.maxOutputTokens, tokenEstimate + 120),
+    );
 
-    const completion = await openai.chat.completions.create({
-      model: modelId,
-      temperature: 0.4,
-      response_format: { type: "json_object" },
+    const result = await runJsonSchemaResponse<{
+      updatedText: string;
+      explanation?: string | null;
+      warnings?: string[];
+    }>({
+      client: openaiClient,
+      model: defaults.model,
+      maxOutputTokens: initialTokenBudget,
+      maxOutputTokensCap: defaults.maxOutputTokensCap,
       messages: [
         { role: "system", content: getSystemPrompt(mode) },
-        {
-          role: "user",
-          content: JSON.stringify(payload),
-        },
+        { role: "user", content: JSON.stringify(payload) },
       ],
+      schema: editingAssistantSchema,
+      verbosity: defaults.verbosity,
+      reasoningEffort: defaults.reasoningEffort,
     });
 
-    const content = completion.choices[0]?.message?.content ?? "";
-    let updatedText = selection.text;
-    let explanation: string | null = null;
-    let warnings: string[] = [];
+    const updatedText =
+      typeof result.parsed?.updatedText === "string" &&
+      result.parsed.updatedText.trim().length
+        ? result.parsed.updatedText
+        : selection.text;
+    const explanation =
+      typeof result.parsed?.explanation === "string"
+        ? result.parsed.explanation.trim() || null
+        : null;
+    const warnings = Array.isArray(result.parsed?.warnings)
+      ? result.parsed.warnings.filter(
+          (item): item is string =>
+            typeof item === "string" && item.trim().length > 0,
+        )
+      : [];
 
-    if (content.trim()) {
-      try {
-        const parsed = JSON.parse(content) as {
-          updatedText?: unknown;
-          explanation?: unknown;
-          warnings?: unknown;
-        };
-        if (
-          typeof parsed.updatedText === "string" &&
-          parsed.updatedText.trim().length
-        ) {
-          updatedText = parsed.updatedText;
-        }
-        if (typeof parsed.explanation === "string") {
-          const trimmed = parsed.explanation.trim();
-          explanation = trimmed.length ? trimmed : null;
-        }
-        if (Array.isArray(parsed.warnings)) {
-          warnings = parsed.warnings
-            .filter(
-              (item): item is string =>
-                typeof item === "string" && item.trim().length > 0,
-            )
-            .map((item) => item.trim());
-        }
-      } catch (error) {
-        fastify.log.warn(
-          { err: error, content },
-          "[editing] Failed to parse model response",
-        );
-        warnings.push("모델 응답을 해석하지 못했습니다.");
-      }
+    if (result.truncated) {
+      fastify.log.warn(
+        {
+          mode,
+          selectionLength: selection.text.length,
+          responseId: result.responseId,
+        },
+        "[editing] Responses payload truncated",
+      );
     }
-
-    const usage = completion.usage ?? null;
 
     return {
       resultText: updatedText,
       explanation,
       warnings,
-      tokens: usage
+      tokens: result.usage
         ? {
-            prompt: usage.prompt_tokens ?? null,
-            completion: usage.completion_tokens ?? null,
-            total: usage.total_tokens ?? null,
+            prompt: result.usage.prompt_tokens ?? null,
+            completion: result.usage.completion_tokens ?? null,
+            total: result.usage.total_tokens ?? null,
           }
         : null,
     };

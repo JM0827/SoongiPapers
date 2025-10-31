@@ -4,6 +4,7 @@ import TranslationDraft, {
   type TranslationDraftSegmentDocument,
 } from "../models/TranslationDraft";
 import type { OriginSegment } from "../agents/translation/segmentationAgent";
+import type { TranslationDraftAgentResultMeta } from "../agents/translation/translationDraftAgent";
 
 export interface DraftSeed {
   projectId: string;
@@ -17,8 +18,9 @@ export interface DraftSeed {
   originFileSize?: number | null;
   draftConfig?: {
     model?: string;
-    temperature?: number;
-    topP?: number;
+    verbosity?: string;
+    reasoningEffort?: string;
+    maxOutputTokens?: number;
   };
 }
 
@@ -78,9 +80,8 @@ export async function completeDraft(
     segments: TranslationDraftSegmentDocument[];
     mergedText: string;
     model: string;
-    temperature: number;
-    topP: number;
     usage: { inputTokens: number; outputTokens: number };
+    meta: TranslationDraftAgentResultMeta;
   },
 ) {
   return TranslationDraft.findByIdAndUpdate(
@@ -91,12 +92,19 @@ export async function completeDraft(
         segments: payload.segments,
         merged_text: payload.mergedText,
         model: payload.model,
-        temperature: payload.temperature,
-        top_p: payload.topP,
+        temperature: null,
+        top_p: null,
+        verbosity: payload.meta.verbosity,
+        reasoning_effort: payload.meta.reasoningEffort,
+        max_output_tokens: payload.meta.maxOutputTokens,
+        retry_count: payload.meta.retryCount,
+        truncated: payload.meta.truncated,
+        fallback_model_used: payload.meta.fallbackModelUsed,
         usage: {
           input_tokens: payload.usage.inputTokens,
           output_tokens: payload.usage.outputTokens,
         },
+        "metadata.analysis_meta": payload.meta,
         finished_at: new Date(),
       },
     },
@@ -170,6 +178,93 @@ export async function loadDraftsByIds(
   return TranslationDraft.find(filter)
     .sort({ run_order: 1 })
     .lean();
+}
+
+export interface TranslationDraftRunSummary {
+  id: string;
+  projectId: string;
+  jobId: string;
+  runOrder: number;
+  model: string | null;
+  verbosity: string | null;
+  reasoningEffort: string | null;
+  maxOutputTokens: number | null;
+  retryCount: number;
+  attempts: number | null;
+  truncated: boolean;
+  fallbackModelUsed: boolean;
+  usage: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+  finishedAt: Date | null;
+  updatedAt: Date;
+}
+
+export async function listRecentDraftRuns(config: {
+  projectId?: string;
+  limit?: number;
+}): Promise<TranslationDraftRunSummary[]> {
+  const filter: Record<string, unknown> = { status: "succeeded" };
+  if (config.projectId) {
+    filter.project_id = config.projectId;
+  }
+
+  const limit = Math.max(1, Math.min(config.limit ?? 50, 200));
+
+  const docs = await TranslationDraft.find(filter)
+    .sort({ finished_at: -1, updated_at: -1 })
+    .limit(limit)
+    .select({
+      project_id: 1,
+      job_id: 1,
+      run_order: 1,
+      model: 1,
+      verbosity: 1,
+      reasoning_effort: 1,
+      max_output_tokens: 1,
+      retry_count: 1,
+      metadata: 1,
+      truncated: 1,
+      fallback_model_used: 1,
+      usage: 1,
+      finished_at: 1,
+      updated_at: 1,
+    })
+    .lean();
+
+  return docs.map((doc) => {
+    const analysisMeta = (
+      (doc.metadata as { analysis_meta?: { attempts?: unknown } } | null | undefined)?.analysis_meta ??
+      null
+    );
+
+    const attempts =
+      analysisMeta && typeof analysisMeta.attempts === "number"
+        ? analysisMeta.attempts
+        : null;
+
+    return {
+      id: doc._id.toString(),
+      projectId: doc.project_id,
+      jobId: doc.job_id,
+      runOrder: doc.run_order,
+      model: doc.model ?? null,
+      verbosity: doc.verbosity ?? null,
+      reasoningEffort: doc.reasoning_effort ?? null,
+      maxOutputTokens: doc.max_output_tokens ?? null,
+      retryCount: doc.retry_count ?? 0,
+      attempts,
+      truncated: Boolean(doc.truncated),
+      fallbackModelUsed: Boolean(doc.fallback_model_used),
+      usage: {
+        inputTokens: doc.usage?.input_tokens ?? null,
+        outputTokens: doc.usage?.output_tokens ?? null,
+      },
+      finishedAt: doc.finished_at ?? null,
+      updatedAt: doc.updated_at,
+    } satisfies TranslationDraftRunSummary;
+  });
 }
 
 export type { TranslationDraftDocument, TranslationDraftSegmentDocument };

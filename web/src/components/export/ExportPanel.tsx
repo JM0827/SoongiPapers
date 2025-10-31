@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
 import { useAuthStore } from "../../store/auth.store";
 import { useProjectStore } from "../../store/project.store";
@@ -11,6 +12,7 @@ import type {
   CoverAssetRole,
   ProjectTranslationOption,
 } from "../../types/domain";
+import { projectKeys } from "../../hooks/useProjectData";
 
 interface ExportPanelProps {
   content?: ProjectContent | null;
@@ -59,6 +61,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     () => projects.find((project) => project.project_id === projectId) ?? null,
     [projects, projectId],
   );
+  const queryClient = useQueryClient();
 
   const [format, setFormat] = useState<EbookFormat>("pdf");
   const [isLoading, setIsLoading] = useState(false);
@@ -414,6 +417,14 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       });
       setResult(response);
       await fetchEbookDetailsInfo();
+      if (projectId) {
+        queryClient.invalidateQueries({
+          queryKey: projectKeys.content(projectId),
+        });
+        queryClient.invalidateQueries({
+          queryKey: projectKeys.workflow(projectId),
+        });
+      }
       if (response.requiresConfirmation) {
         void loadTranslationOptions(
           response.recommendation?.translationFileId ?? null,

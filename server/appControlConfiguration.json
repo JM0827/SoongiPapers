@@ -11,10 +11,27 @@
       "summaryMax": 120,
       "mode": "hybrid"
     },
-    "temps": {
-      "literal": 0.35,
-      "style": 0.6,
-      "emotion": 0.6
+    "stageParameters": {
+      "literal": {
+        "verbosity": "low",
+        "reasoningEffort": "minimal",
+        "maxOutputTokens": 900
+      },
+      "style": {
+        "verbosity": "medium",
+        "reasoningEffort": "low",
+        "maxOutputTokens": 900
+      },
+      "emotion": {
+        "verbosity": "medium",
+        "reasoningEffort": "medium",
+        "maxOutputTokens": 900
+      },
+      "qa": {
+        "verbosity": "low",
+        "reasoningEffort": "low",
+        "maxOutputTokens": 600
+      }
     },
     "register": "literary",
     "honorifics": "preserve",
@@ -34,9 +51,5 @@
       "minSeverity": "medium",
       "autoApplySafeFixes": false
     }
-  },
-  "translationStageQueue": {
-    "removeOnComplete": true,
-    "removeOnFailAgeSeconds": 86400
   }
 }

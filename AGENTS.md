@@ -1,19 +1,22 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The Vite client lives in `web/src`, with React views, hooks, and colocated `*.test.tsx`; shared helpers sit under `web/src/lib`, and global styles in `web/src/global.css`. Static assets ship from `web/public`. Fastify server code resides in `server/`, split into HTTP handlers (`server/routes`), agents (`server/agents`), models (`server/models`), and shared utilities (`server/services`, `server/config`). Reusable AI image logic is published from `packages/ai-image-gen`, while architecture decisions and notes are kept in `docs/`.
+The Vite client lives in `web/src` for React views, hooks, and colocated `*.test.tsx`; shared helpers sit in `web/src/lib`, global styles in `web/src/global.css`, and assets under `web/public`. Fastify backend logic stays in `server/`, with HTTP routes in `server/routes`, agents in `server/agents`, models in `server/models`, and shared services or config in `server/services` and `server/config`. Workspace utilities, including the AI image generator, live in `packages/ai-image-gen`, while ADRs and notes remain in `docs/`.
 
 ## Build, Test, and Development Commands
-`npm run dev --prefix web` spins up the React dev server at http://localhost:5173 for live reloading. `npm run dev --prefix server` starts the Fastify API at http://localhost:8080 with auto-restart. Use `npm run build --prefix web` and `npm run build --prefix server` to produce production bundles; run both before tagging releases. From the repo root, `npm install` synchronizes workspace dependencies when package manifests change.
+- `npm run dev --prefix web` launches the React dev server at http://localhost:5173 with hot reload.
+- `npm run dev --prefix server` boots the Fastify API at http://localhost:8080.
+- `npm run build --prefix web` and `npm run build --prefix server` create production bundles; run both before any release tag.
+- `npm install` (repo root) syncs workspace dependencies, and `npm test --prefix web` executes the Vitest suite.
 
 ## Coding Style & Naming Conventions
-All TypeScript should declare explicit return types, use 2-space indentation, single quotes, trailing commas, and favor `async/await`. Name React components in PascalCase (e.g., `OrderStatusCard.tsx`), hooks and utilities in camelCase (e.g., `useOrders.ts`), and server agents in kebab-case (e.g., `order-status-agent.ts`). Run `npm run format` prior to committing to apply Prettier and lint rules consistently.
+Write TypeScript with explicit return types, 2-space indentation, single quotes, trailing commas, and prefer `async/await`. React components follow PascalCase (`OrderStatusCard.tsx`), hooks/utilities use camelCase (`useOrders.ts`), and Fastify agents remain kebab-case (`order-status-agent.ts`). Execute `npm run format` before committing to apply Prettier plus lint rules consistently across packages.
 
 ## Testing Guidelines
-Vitest powers unit and component coverage; keep tests colocated as `Component.test.tsx` and store snapshots under `__snapshots__/`. Aim for meaningful assertions over fixture sprawl, and avoid `.skip` without an owner. Execute `npm test --prefix web` before merging UI or shared utilities, and review any snapshot diffs line by line.
+Vitest covers unit and component scenarios; keep test files beside their subjects as `Component.test.tsx` and store related snapshots in `__snapshots__/`. Favor meaningful assertions, avoid `.skip` unless an owner is recorded, ensure `npm test --prefix web` passes before merging UI or shared library changes, and review snapshot diffs line by line to confirm intentional output.
 
 ## Commit & Pull Request Guidelines
-Commits follow `<type>: imperative summary` and stay within 72 characters, such as `feat: add order status agent`. Pull requests should outline scope, manual QA (dev servers + `npm test --prefix web`), linked issues, and include screenshots or logs when relevant. Highlight schema or environment updates explicitly and document follow-up tasks for any deferred work.
+Commits follow `<type>: imperative summary` within 72 characters (e.g., `feat: add order status agent`). PRs must outline scope, manual QA steps (dev servers + `npm test --prefix web`), linked issues, and attach screenshots or logs when behavior changes. Highlight schema or environment updates explicitly and document any deferred work so reviewers can track remaining risk.
 
 ## Security & Configuration Tips
-Keep credentials in environment-specific `.env` files and never commit tokens or API keys. Reuse existing middleware, agents, and helpers to reduce drift, and scrub sensitive data from logs, fixtures, and snapshots. Request maintainer review before introducing new third-party services or dependencies.
+Keep credentials inside environment-specific `.env` files and never commit tokens or API keys. Reuse existing middleware, agents, and shared helpers to minimize drift, and scrub sensitive data from logs, fixtures, and snapshots. Request maintainer approval before adding third-party services or dependencies to preserve review coverage and license compliance.

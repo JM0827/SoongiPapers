@@ -73,6 +73,7 @@ export interface JobSequentialSummary {
       details?: Record<string, unknown> | null;
     }>;
   }>;
+  pipelineStages?: string[];
 }
 
 export interface TranslationDraftSummary {
@@ -96,7 +97,14 @@ export interface TranslationFinalSummary {
   sourceHash?: string | null;
 }
 
-export type TranslationStageKey = "literal" | "style" | "emotion" | "qa";
+export type TranslationStageKey =
+  | "literal"
+  | "style"
+  | "emotion"
+  | "qa"
+  | "draft"
+  | "revise"
+  | "micro-check";
 
 export type WorkflowType = "translation" | "proofread" | "quality";
 
@@ -180,6 +188,14 @@ export interface ProjectUsageResponse {
 
 export type ProofreadingSeverity = "low" | "medium" | "high";
 
+export type ProofreadingGuardStatus = "qa_also" | "llm_only" | "guard_only";
+
+export interface ProofreadingEvidence {
+  reference: "source" | "target" | "memory" | "other";
+  quote: string;
+  note?: string | null;
+}
+
 export interface ProofreadingIssue {
   id: string;
   kr_sentence_id?: number | null;
@@ -200,6 +216,9 @@ export interface ProofreadingIssue {
   sourceExcerpt?: string;
   translationExcerpt?: string;
   tags?: string[];
+  guardStatus?: ProofreadingGuardStatus;
+  guardStatusLabel?: string;
+  evidence?: ProofreadingEvidence[];
   status?: string;
   appliedAt?: string | null;
   applied_at?: string | null;
@@ -238,6 +257,28 @@ export interface ProofreadingReport {
     target?: { lang: string; path: string };
     alignment?: string;
     generatedAt?: string;
+    llm?: {
+      runs: Array<{
+        tier: "quick" | "deep";
+        subfeatureKey: string;
+        subfeatureLabel: string;
+        chunkIndex: number;
+        model: string;
+        maxOutputTokens: number;
+        attempts: number;
+        truncated: boolean;
+        requestId: string | null;
+        usage: {
+          promptTokens: number | null;
+          completionTokens: number | null;
+          totalTokens: number | null;
+        };
+        verbosity: "low" | "medium" | "high";
+        reasoningEffort: "minimal" | "low" | "medium" | "high";
+        guardSegments: number;
+        memoryContextVersion: number | null;
+      }>;
+    };
   };
   results?: ProofreadingBucket[];
   summary?: ProofreadingReportSummary;
@@ -295,10 +336,20 @@ export interface ProofreadEditorIssueEntry {
     before?: string | null;
     after?: string | null;
   } | null;
+  guardStatus?: ProofreadingGuardStatus | string | null;
+  guardStatusLabel?: string | null;
   spans?: Array<{ start: number; end: number }>;
   documentSpan?: { start?: number | null; end?: number | null } | null;
   updatedAt?: string | null;
   createdAt?: string | null;
+  notes?: {
+    guardFindings?: Array<{
+      type?: string | null;
+      summary?: string | null;
+      severity?: string | null;
+    }>;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -314,6 +365,50 @@ export interface ProofreadEditorResponse {
   issueAssignments: Record<string, string[]>;
   versions: ProofreadEditorVersions;
   featureToggles: Record<string, boolean>;
+}
+
+export interface ProofreadingLogEntry {
+  id: string;
+  projectId: string;
+  jobId: string;
+  proofreadingId: string;
+  runId: string;
+  tier: "quick" | "deep";
+  subfeatureKey: string;
+  subfeatureLabel: string;
+  chunkIndex: number;
+  model: string;
+  maxOutputTokens: number;
+  attempts: number;
+  truncated: boolean;
+  requestId: string | null;
+  guardSegments: number;
+  memoryVersion: number | null;
+  usagePromptTokens: number | null;
+  usageCompletionTokens: number | null;
+  usageTotalTokens: number | null;
+  verbosity: string;
+  reasoningEffort: string;
+  createdAt: string;
+}
+
+export interface TranslationDraftAdminRun {
+  id: string;
+  projectId: string;
+  jobId: string;
+  runOrder: number;
+  model: string | null;
+  verbosity: string | null;
+  reasoningEffort: string | null;
+  maxOutputTokens: number | null;
+  retryCount: number;
+  attempts: number | null;
+  truncated: boolean;
+  fallbackModelUsed: boolean;
+  usageInputTokens: number | null;
+  usageOutputTokens: number | null;
+  finishedAt: string | null;
+  updatedAt: string;
 }
 
 export interface ProofreadEditorPatchSegmentInput {
@@ -840,10 +935,12 @@ export interface EditingSuggestionResponse {
 }
 
 interface BaseChatAction {
-  reason?: string;
+  reason?: string | null;
   label?: string | null;
   allowParallel?: boolean;
   autoStart?: boolean;
+  jobId?: string | null;
+  workflowRunId?: string | null;
 }
 
 export type ChatAction =
@@ -912,6 +1009,28 @@ export interface ChatResponse {
   };
   model?: string;
 }
+
+export interface ChatStreamCompleteEvent {
+  type: 'chat.complete';
+  reply: string;
+  actions: ChatAction[];
+  profileUpdates?: Record<string, unknown> | null;
+  meta?: {
+    model?: string;
+    tokens?: {
+      input?: number | null;
+      output?: number | null;
+      total?: number | null;
+    };
+    truncated?: boolean;
+  };
+}
+
+export type ChatStreamEvent =
+  | { type: 'chat.delta'; text: string }
+  | { type: 'chat.error'; message: string }
+  | { type: 'chat.end' }
+  | ChatStreamCompleteEvent;
 
 export interface ChatHistoryItem {
   id: string;

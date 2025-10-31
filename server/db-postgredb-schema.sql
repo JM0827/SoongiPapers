@@ -4,8 +4,8 @@ DROP TABLE IF EXISTS translation_memory_versions CASCADE;
 DROP TABLE IF EXISTS translation_memory CASCADE;
 DROP TABLE IF EXISTS translation_drafts CASCADE;
 DROP TABLE IF EXISTS proofreading_history CASCADE;
+DROP TABLE IF EXISTS proofreading_logs CASCADE;
 DROP TABLE IF EXISTS ebook_cover_sets CASCADE;
-DROP TABLE IF EXISTS ebook_artifacts CASCADE;
 DROP TABLE IF EXISTS project_usage_totals CASCADE;
 DROP TABLE IF EXISTS token_usage_events CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS translation_drafts (
   project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
   job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   workflow_run_id UUID REFERENCES workflow_runs(run_id),
-  stage TEXT NOT NULL CHECK (stage IN ('literal','style','emotion','qa')),
+  stage TEXT NOT NULL CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check')),
   batch_id UUID,
   segment_index INT NOT NULL,
   segment_id TEXT,
@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS translation_drafts (
   scores JSONB,
   guards JSONB,
   notes JSONB,
+  span_pairs JSONB,
+  candidates JSONB,
   needs_review BOOLEAN NOT NULL DEFAULT FALSE,
   retry_count INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -202,6 +204,34 @@ CREATE TABLE IF NOT EXISTS proofread_runs (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proofread_runs_dedupe
   ON proofread_runs (project_id, translation_file_id, memory_version, final_text_hash);
 
+CREATE TABLE IF NOT EXISTS proofreading_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  proofreading_id UUID NOT NULL,
+  run_id TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  subfeature_key TEXT NOT NULL,
+  subfeature_label TEXT NOT NULL,
+  chunk_index INT NOT NULL,
+  model TEXT NOT NULL,
+  max_output_tokens INT NOT NULL,
+  attempts INT NOT NULL,
+  truncated BOOLEAN NOT NULL,
+  request_id TEXT,
+  guard_segments INT NOT NULL,
+  memory_version INT,
+  usage_prompt_tokens INT,
+  usage_completion_tokens INT,
+  usage_total_tokens INT,
+  verbosity TEXT NOT NULL,
+  reasoning_effort TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proofreading_logs_project_created_at
+  ON proofreading_logs (project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS token_usage_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES translationprojects(project_id) ON DELETE CASCADE,
@@ -213,11 +243,21 @@ CREATE TABLE IF NOT EXISTS token_usage_events (
   output_tokens INTEGER DEFAULT 0,
   total_cost NUMERIC(14,6) DEFAULT 0,
   duration_ms INTEGER,
+  metadata JSONB,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_project ON token_usage_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_events_job ON token_usage_events(job_id);
+
+CREATE TABLE IF NOT EXISTS translation_cancellation_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES translationprojects(project_id) ON DELETE SET NULL,
+  user_id TEXT,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS project_usage_totals (
   project_id UUID PRIMARY KEY REFERENCES translationprojects(project_id) ON DELETE CASCADE,
@@ -226,20 +266,6 @@ CREATE TABLE IF NOT EXISTS project_usage_totals (
   total_cost NUMERIC(14,6) DEFAULT 0,
   updated_at TIMESTAMPTZ DEFAULT now()
 );
-
-CREATE TABLE IF NOT EXISTS ebook_artifacts (
-  ebook_id UUID PRIMARY KEY,
-  project_id UUID REFERENCES translationprojects(project_id) ON DELETE CASCADE,
-  translation_file_id TEXT NOT NULL,
-  quality_assessment_id TEXT,
-  format TEXT NOT NULL DEFAULT 'txt',
-  status TEXT NOT NULL DEFAULT 'pending',
-  storage_ref TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_artifacts_project ON ebook_artifacts(project_id);
 
 CREATE TABLE IF NOT EXISTS ebooks (
   ebook_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -417,26 +443,6 @@ CREATE TABLE IF NOT EXISTS ebook_metadata (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ebook_metadata_isbn ON ebook_metadata(isbn) WHERE isbn IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS ebook_distribution_channels (
-  channel_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ebook_id UUID NOT NULL REFERENCES ebooks(ebook_id) ON DELETE CASCADE,
-  channel TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  listing_id TEXT,
-  price NUMERIC(10,2),
-  currency TEXT,
-  planned_publish_at TIMESTAMPTZ,
-  published_at TIMESTAMPTZ,
-  last_synced_at TIMESTAMPTZ,
-  failure_reason TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_ebook ON ebook_distribution_channels(ebook_id);
-CREATE INDEX IF NOT EXISTS idx_ebook_distribution_channel ON ebook_distribution_channels(channel);
 
 CREATE TABLE IF NOT EXISTS ebook_audit_log (
   log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -75,7 +75,14 @@ export interface ProjectMemory {
   [key: string]: unknown;
 }
 
-export type TranslationStage = 'literal' | 'style' | 'emotion' | 'qa';
+export type TranslationStage =
+  | 'literal'
+  | 'style'
+  | 'emotion'
+  | 'qa'
+  | 'draft'
+  | 'revise'
+  | 'micro-check';
 
 export interface EmotionBaseline {
   vector: number[];
@@ -155,6 +162,23 @@ export interface SequentialTranslationTemps {
   emotion: number;
 }
 
+export type ResponseVerbosity = 'low' | 'medium' | 'high';
+
+export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
+export interface SequentialStageLLMParameters {
+  verbosity: ResponseVerbosity;
+  reasoningEffort: ResponseReasoningEffort;
+  maxOutputTokens: number;
+}
+
+export interface SequentialTranslationStageConfig {
+  literal: SequentialStageLLMParameters;
+  style: SequentialStageLLMParameters;
+  emotion: SequentialStageLLMParameters;
+  qa: SequentialStageLLMParameters;
+}
+
 export interface SequentialTranslationMBRConfig {
   enable: boolean;
   k: number;
@@ -220,7 +244,9 @@ export interface SequentialTranslationConfig {
   segmentMode: SegmentMode | string;
   window: number;
   contextPolicy: ContextPolicyConfig;
-  temps: SequentialTranslationTemps;
+  stageParameters: SequentialTranslationStageConfig;
+  /** @deprecated retained for backward compatibility */
+  temps?: SequentialTranslationTemps;
   register?: string;
   honorifics?: string;
   romanizationPolicy?: RomanizationPolicy;
@@ -253,7 +279,27 @@ export interface TranslateSegmentRes {
   scores?: MetricScores;
   guards?: GuardBooleans;
   notes?: unknown;
+  spanPairs?: SpanPair[];
+  candidates?: SegmentCandidateVariant[];
   [key: string]: unknown;
+}
+
+export interface SpanPair {
+  sourceSpanId: string;
+  sourceStart: number;
+  sourceEnd: number;
+  targetStart: number;
+  targetEnd: number;
+  note?: string;
+  confidence?: number;
+}
+
+export interface SegmentCandidateVariant {
+  candidateId: string;
+  text: string;
+  rationale?: string;
+  score?: number;
+  selected?: boolean;
 }
 
 export interface SequentialStageResult extends TranslateSegmentRes {

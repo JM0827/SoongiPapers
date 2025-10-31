@@ -4,7 +4,15 @@ import { requireAuthAndPlanCheck } from "../middleware/auth";
 import TranslationFile from "../models/TranslationFile";
 import { query } from "../db";
 
-const VALID_STAGES = new Set(["literal", "style", "emotion", "qa"]);
+const VALID_STAGES = new Set([
+  "literal",
+  "style",
+  "emotion",
+  "qa",
+  "draft",
+  "revise",
+  "micro-check",
+]);
 
 type StageDraftRow = {
   segment_id: string | null;

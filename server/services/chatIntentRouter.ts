@@ -6,12 +6,13 @@ import { translate as defaultTranslate } from "./localeService";
 
 export interface LlmAction {
   type: string;
-  reason?: string;
+  reason?: string | null;
   allowParallel?: boolean;
   label?: string | null;
   autoStart?: boolean;
   jobId?: string | null;
   workflowRunId?: string | null;
+  suggestionId?: string | null;
 }
 
 export interface IntentRoutingPreflight {

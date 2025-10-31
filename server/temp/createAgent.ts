@@ -73,7 +73,7 @@ export async function analyzeDraftContent(
 
   const prompt = buildPrompt(request, truncatedText);
   const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-5o-mini",
     messages: prompt,
     temperature: 0.2,
   });

@@ -2,6 +2,8 @@ import type {
   ChatAction,
   ChatMessagePayload,
   ChatResponse,
+  ChatStreamCompleteEvent,
+  ChatStreamEvent,
   ChatLogRequest,
   ChatHistoryItem,
   EbookResponse,
@@ -24,6 +26,7 @@ import type {
   WorkflowSummary,
   WorkflowRunRecord,
   TranslationDraftSummary,
+  TranslationDraftAdminRun,
   ProofreadEditorResponse,
   ProofreadEditorPatchPayload,
   ProofreadEditorPatchResponse,
@@ -33,8 +36,10 @@ import type {
   TranslationStageKey,
   EditingSelectionPayload,
   EditingSuggestionResponse,
+  ProofreadingLogEntry,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
+import { streamNdjson } from "./sse";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -43,6 +48,108 @@ const defaultHeaders = (token?: string) =>
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }) as const;
+
+export type QualityStreamStartEvent = {
+  type: "start";
+  totalChunks: number;
+  model: string;
+  params: {
+    chunkSize: number;
+    overlap: number;
+    maxOutputTokens: number;
+    maxOutputTokensCap: number;
+    concurrency: number;
+  };
+};
+
+export type QualityStreamChunkStartEvent = {
+  type: "chunk-start";
+  index: number;
+  total: number;
+  sourceLength: number;
+  translatedLength: number;
+  maxOutputTokens: number;
+  pairCount?: number;
+  overlapPairCount?: number;
+  sourceTokens?: number;
+  translatedTokens?: number;
+};
+
+export type QualityStreamChunkRetryEvent = {
+  type: "chunk-retry";
+  index: number;
+  from: number;
+  to: number;
+};
+
+export type QualityStreamChunkCompleteEvent = {
+  type: "chunk-complete";
+  index: number;
+  total: number;
+  durationMs: number;
+  requestId?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  maxOutputTokensUsed: number;
+  result: QualityAssessmentResultPayload;
+  fallbackApplied?: boolean;
+  missingFields?: string[];
+  attempts?: number;
+  preview?: string | null;
+  pairCount?: number;
+  overlapPairCount?: number;
+  sourceTokens?: number;
+  translatedTokens?: number;
+  truncated?: boolean;
+};
+
+export type QualityStreamChunkPartialEvent = {
+  type: "chunk-partial";
+  index: number;
+  total: number;
+  attempt: number;
+  missingFields: string[];
+  requestId?: string;
+  preview?: string | null;
+  fallbackApplied: boolean;
+};
+
+export type QualityStreamChunkErrorEvent = {
+  type: "chunk-error";
+  index: number;
+  message: string;
+  error?: unknown;
+};
+
+export type QualityStreamProgressEvent = {
+  type: "progress";
+  completed: number;
+  total: number;
+};
+
+export type QualityStreamCompleteEvent = {
+  type: "complete";
+  result: QualityAssessmentResultPayload;
+};
+
+export type QualityStreamErrorEvent = {
+  type: "error";
+  message: string;
+};
+
+export type QualityStreamEvent =
+  | QualityStreamStartEvent
+  | QualityStreamChunkStartEvent
+  | QualityStreamChunkRetryEvent
+  | QualityStreamChunkCompleteEvent
+  | QualityStreamChunkPartialEvent
+  | QualityStreamChunkErrorEvent
+  | QualityStreamProgressEvent
+  | QualityStreamCompleteEvent
+  | QualityStreamErrorEvent;
 
 type UploadOriginResponse = {
   success: boolean;
@@ -376,6 +483,12 @@ const normalizeJob = (job: unknown): JobSummary => {
           .filter((stage): stage is string => Boolean(stage))
       : [];
 
+    const pipelineStages = Array.isArray(job.sequential.pipelineStages)
+      ? job.sequential.pipelineStages
+          .map((stage) => (typeof stage === "string" ? stage : null))
+          .filter((stage): stage is string => Boolean(stage))
+      : undefined;
+
     sequential = {
       stageCounts,
       totalSegments: Number(job.sequential.totalSegments ?? 0),
@@ -387,6 +500,7 @@ const normalizeJob = (job: unknown): JobSummary => {
           : null,
       guardFailures,
       flaggedSegments,
+      pipelineStages,
     };
   }
 
@@ -831,6 +945,173 @@ export const api = {
     return handle<EbookResponse>(res);
   },
 
+  async fetchProofreadingLogs(
+    token: string,
+    params: { projectId?: string; limit?: number } = {},
+  ): Promise<ProofreadingLogEntry[]> {
+    const search = new URLSearchParams();
+    if (params.projectId) {
+      search.set("projectId", params.projectId);
+    }
+    if (params.limit) {
+      search.set("limit", String(params.limit));
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/admin/proofreading/logs${
+        search.toString() ? `?${search.toString()}` : ""
+      }`,
+      {
+        headers: defaultHeaders(token),
+      },
+    );
+
+    type RawEntry = {
+      id: string;
+      project_id: string;
+      job_id: string;
+      proofreading_id: string;
+      run_id: string;
+      tier: string;
+      subfeature_key: string;
+      subfeature_label: string;
+      chunk_index: number;
+      model: string;
+      max_output_tokens: number;
+      attempts: number;
+      truncated: boolean;
+      request_id: string | null;
+      guard_segments: number;
+      memory_version: number | null;
+      usage_prompt_tokens: number | null;
+      usage_completion_tokens: number | null;
+      usage_total_tokens: number | null;
+      verbosity: string;
+      reasoning_effort: string;
+      created_at: string;
+    };
+
+    const data = await handle<{ logs?: RawEntry[] }>(res);
+    const rows = Array.isArray(data.logs) ? data.logs : [];
+
+    return rows.map((entry) => ({
+      id: String(entry.id ?? ""),
+      projectId: String(entry.project_id ?? ""),
+      jobId: String(entry.job_id ?? ""),
+      proofreadingId: String(entry.proofreading_id ?? ""),
+      runId: String(entry.run_id ?? ""),
+      tier:
+        entry.tier === "deep" ? "deep" : (entry.tier === "quick" ? "quick" : "quick"),
+      subfeatureKey: String(entry.subfeature_key ?? ""),
+      subfeatureLabel: String(entry.subfeature_label ?? ""),
+      chunkIndex: Number(entry.chunk_index ?? 0),
+      model: String(entry.model ?? ""),
+      maxOutputTokens: Number(entry.max_output_tokens ?? 0),
+      attempts: Number(entry.attempts ?? 0),
+      truncated: Boolean(entry.truncated),
+      requestId: entry.request_id ?? null,
+      guardSegments: Number(entry.guard_segments ?? 0),
+      memoryVersion:
+        entry.memory_version === null || entry.memory_version === undefined
+          ? null
+          : Number(entry.memory_version),
+      usagePromptTokens:
+        entry.usage_prompt_tokens === null || entry.usage_prompt_tokens === undefined
+          ? null
+          : Number(entry.usage_prompt_tokens),
+      usageCompletionTokens:
+        entry.usage_completion_tokens === null ||
+        entry.usage_completion_tokens === undefined
+          ? null
+          : Number(entry.usage_completion_tokens),
+      usageTotalTokens:
+        entry.usage_total_tokens === null || entry.usage_total_tokens === undefined
+          ? null
+          : Number(entry.usage_total_tokens),
+      verbosity: String(entry.verbosity ?? ""),
+      reasoningEffort: String(entry.reasoning_effort ?? ""),
+      createdAt: String(entry.created_at ?? ""),
+    }));
+  },
+
+  async fetchTranslationDraftRuns(
+    token: string,
+    params: { projectId?: string; limit?: number } = {},
+  ): Promise<TranslationDraftAdminRun[]> {
+    const search = new URLSearchParams();
+    if (params.projectId) {
+      search.set("projectId", params.projectId);
+    }
+    if (params.limit) {
+      search.set("limit", String(params.limit));
+    }
+
+    const res = await fetch(
+      `${API_BASE}/api/admin/translation/drafts${
+        search.toString() ? `?${search.toString()}` : ""
+      }`,
+      {
+        headers: defaultHeaders(token),
+      },
+    );
+
+    type RawDraft = {
+      id?: string;
+      projectId?: string;
+      jobId?: string;
+      runOrder?: number;
+      model?: string | null;
+      verbosity?: string | null;
+      reasoningEffort?: string | null;
+      maxOutputTokens?: number | null;
+      retryCount?: number | null;
+      attempts?: number | null;
+      truncated?: boolean;
+      fallbackModelUsed?: boolean;
+      usage?: {
+        inputTokens?: number | null;
+        outputTokens?: number | null;
+      };
+      finishedAt?: string | null;
+      updatedAt?: string;
+    };
+
+    const data = await handle<{ drafts?: RawDraft[] }>(res);
+    const rows = Array.isArray(data.drafts) ? data.drafts : [];
+
+    return rows.map((entry) => ({
+      id: String(entry.id ?? ""),
+      projectId: String(entry.projectId ?? ""),
+      jobId: String(entry.jobId ?? ""),
+      runOrder: Number(entry.runOrder ?? 0),
+      model: entry.model ?? null,
+      verbosity: entry.verbosity ?? null,
+      reasoningEffort: entry.reasoningEffort ?? null,
+      maxOutputTokens:
+        entry.maxOutputTokens === null || entry.maxOutputTokens === undefined
+          ? null
+          : Number(entry.maxOutputTokens),
+      retryCount: Number(entry.retryCount ?? 0),
+      attempts:
+        entry.attempts === null || entry.attempts === undefined
+          ? null
+          : Number(entry.attempts),
+      truncated: Boolean(entry.truncated),
+      fallbackModelUsed: Boolean(entry.fallbackModelUsed),
+      usageInputTokens:
+        entry.usage?.inputTokens === null || entry.usage?.inputTokens === undefined
+          ? null
+          : Number(entry.usage.inputTokens),
+      usageOutputTokens:
+        entry.usage?.outputTokens === null ||
+        entry.usage?.outputTokens === undefined
+          ? null
+          : Number(entry.usage.outputTokens),
+      finishedAt: entry.finishedAt ?? null,
+      updatedAt: String(entry.updatedAt ?? ""),
+    }));
+  },
+
   async fetchProjectTranslations(
     token: string,
     projectId: string,
@@ -1159,6 +1440,7 @@ export const api = {
       segmentCount: number;
       segmentationMode?: string;
       sourceHash?: string;
+      pipeline?: string;
     }>(res);
   },
 
@@ -1398,6 +1680,109 @@ export const api = {
       profileUpdates: data.profileUpdates,
       model: data.model,
     };
+  },
+
+  async chatStream(
+    token: string,
+    payload: {
+      projectId: string | null;
+      messages: ChatMessagePayload[];
+      contextSnapshot?: ProjectContextSnapshotPayload | null;
+      model?: string | null;
+    },
+    handlers: {
+      onDelta?: (delta: string) => void;
+      onComplete?: (event: ChatStreamCompleteEvent) => void;
+      onError?: (message: string) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const controller = new AbortController();
+    if (handlers.signal) {
+      const abortViaSignal = () => controller.abort();
+      if (handlers.signal.aborted) {
+        controller.abort();
+      } else {
+        handlers.signal.addEventListener('abort', abortViaSignal, { once: true });
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: defaultHeaders(token),
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || 'Failed to stream chat');
+    }
+
+    const body = res.body;
+    if (!body) {
+      throw new Error('Streaming body is not supported in this environment');
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed = false;
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith(':')) continue;
+          if (!trimmed.startsWith('data:')) continue;
+          const payloadText = trimmed.slice(5).trim();
+          if (!payloadText) continue;
+          try {
+            const event = JSON.parse(payloadText) as ChatStreamEvent;
+            switch (event.type) {
+              case 'chat.delta': {
+                if (typeof event.text === 'string') {
+                  handlers.onDelta?.(event.text);
+                }
+                break;
+              }
+              case 'chat.complete': {
+                completed = true;
+                handlers.onComplete?.(event);
+                break;
+              }
+              case 'chat.error': {
+                const message =
+                  typeof event.message === 'string'
+                    ? event.message
+                    : 'Chat stream error';
+                handlers.onError?.(message);
+                throw new Error(message);
+              }
+              case 'chat.end':
+                break;
+              default:
+                break;
+            }
+          } catch (err) {
+            console.warn('[api] failed to parse chat stream event', err);
+          }
+        }
+      }
+    } finally {
+      controller.abort();
+    }
+
+    if (!completed) {
+      throw new Error('Chat stream ended without completion event');
+    }
   },
 
   async listModels(token: string): Promise<ModelListResponse> {
@@ -1686,6 +2071,81 @@ export const api = {
     return handle<
       QualityAssessmentResultPayload | { data?: QualityAssessmentResultPayload }
     >(res);
+  },
+
+  async evaluateQualityStream(
+    token: string,
+    payload: {
+      source: string;
+      translated: string;
+      authorIntention?: string;
+      model?: string;
+      maxCharsPerChunk?: number;
+      overlap?: number;
+      projectId?: string;
+      jobId?: string;
+      workflowLabel?: string | null;
+      workflowAllowParallel?: boolean;
+    },
+    handlers: {
+      onEvent?: (event: QualityStreamEvent) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<QualityAssessmentResultPayload> {
+    const controller = new AbortController();
+    if (handlers.signal) {
+      const abortViaSignal = () => controller.abort();
+      if (handlers.signal.aborted) {
+        controller.abort();
+      } else {
+        handlers.signal.addEventListener("abort", abortViaSignal, {
+          once: true,
+        });
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/api/evaluate/stream`, {
+      method: "POST",
+      headers: defaultHeaders(token),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Failed to stream quality assessment");
+    }
+
+    let finalResult: QualityAssessmentResultPayload | null = null;
+    let streamError: Error | null = null;
+
+    try {
+      await streamNdjson<QualityStreamEvent>(res, (event) => {
+        handlers.onEvent?.(event);
+        if (event.type === "complete") {
+          finalResult = event.result;
+        }
+        if (event.type === "error") {
+          streamError = new Error(event.message ?? "Quality stream error");
+          controller.abort();
+        }
+      });
+    } catch (err) {
+      if (!streamError) {
+        streamError =
+          err instanceof Error ? err : new Error(String(err ?? "Unknown error"));
+      }
+    }
+
+    if (streamError) {
+      throw streamError;
+    }
+
+    if (!finalResult) {
+      throw new Error("Quality stream ended without a result");
+    }
+
+    return finalResult;
   },
 
   async saveQualityAssessment(

@@ -25,7 +25,15 @@ export interface SegmentationAgentOptions {
   maxSegmentLength?: number;
 }
 
-const DEFAULT_MAX_SEGMENT_LENGTH = 2000;
+const parsedMaxSegmentLength = Number.parseInt(
+  process.env.SEGMENTATION_MAX_SEGMENT_LENGTH_V2 ?? '',
+  10,
+);
+
+const DEFAULT_MAX_SEGMENT_LENGTH =
+  Number.isFinite(parsedMaxSegmentLength) && parsedMaxSegmentLength > 0
+    ? parsedMaxSegmentLength
+    : 1600;
 
 const sentenceRegex = /[^.!?\u203D\u203C\u3002\uFF01\uFF1F]+(?:[.!?\u203D\u203C\u3002\uFF01\uFF1F]+|$)/gu;
 

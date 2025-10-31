@@ -35,6 +35,7 @@ import {
   getOriginPrepGuardMessage,
   isOriginPrepReady,
 } from "../../lib/originPrep";
+import { useNavigate } from "react-router-dom";
 
 const languageOptions = [
   { value: "Korean", labelKey: "language_korean", fallback: "Korean" },
@@ -75,6 +76,7 @@ const formatRecentTimestamp = (value?: string | null) => {
 };
 
 export const LeftSidebar = () => {
+  const navigate = useNavigate();
   const { data: projects } = useProjectList();
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
   const setActiveProject = useProjectStore((state) => state.setActiveProject);
@@ -848,6 +850,20 @@ export const LeftSidebar = () => {
       onClick: async () => {
         if (!chatExecutorReady || !translationDone) return;
         await chatActionExecute({ type: "openExportPanel" });
+      },
+    },
+    {
+      key: "admin-dashboard",
+      label: localize('sidebar_quick_admin_label', 'Admin dashboard'),
+      icon: <ShieldCheck size={18} />,
+      tooltip: localize(
+        'sidebar_quick_admin_tooltip',
+        'Open the proofreading monitoring dashboard.',
+      ),
+      disabled: false,
+      status: "default",
+      onClick: () => {
+        navigate('/admin');
       },
     },
   ];

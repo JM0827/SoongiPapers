@@ -3,19 +3,213 @@ import { OpenAI } from "openai";
 
 import type { TranslationNotes } from "../../models/DocumentProfile";
 import {
-  DEFAULT_LOCALE,
   resolveLocale as resolveOutputLocale,
   type UILocale,
 } from "../../services/localeService";
+import { safeExtractOpenAIResponse } from "../../services/llm";
 
-const DEFAULT_MODEL =
-  process.env.PROFILE_AGENT_MODEL || process.env.CHAT_MODEL || "gpt-4o-mini";
+type ResponseVerbosity = "low" | "medium" | "high";
+type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
+
 const WORDS_PER_MINUTE = 220;
-const MAX_CONTEXT_CHARS = 8000;
+const DEFAULT_MODEL =
+  process.env.PROFILE_AGENT_MODEL?.trim() || "gpt-5-mini";
+const FALLBACK_MODEL =
+  process.env.PROFILE_AGENT_VALIDATION_MODEL?.trim() || "gpt-5-mini";
+const DEFAULT_VERBOSITY = normalizeVerbosity(
+  process.env.PROFILE_AGENT_VERBOSITY,
+);
+const DEFAULT_REASONING_EFFORT = normalizeReasoningEffort(
+  process.env.PROFILE_AGENT_REASONING_EFFORT,
+);
+const DEFAULT_MAX_OUTPUT_TOKENS = normalizePositiveInteger(
+  process.env.PROFILE_AGENT_MAX_OUTPUT_TOKENS,
+  1600,
+);
+const MAX_OUTPUT_TOKENS_CAP = normalizePositiveInteger(
+  process.env.PROFILE_AGENT_MAX_OUTPUT_TOKENS_CAP,
+  4800,
+);
+const CONTEXT_CHAR_LIMIT = normalizePositiveInteger(
+  process.env.PROFILE_AGENT_CONTEXT_CHAR_LIMIT,
+  20_000,
+);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "",
 });
+
+interface RawProfileResponse {
+  summary?: unknown;
+  intention?: unknown;
+  readerPoints?: unknown;
+  translationNotes?: unknown;
+}
+
+const profileResponseSchema = {
+  name: "document_profile_analysis",
+  schema: {
+    type: "object",
+    required: ["summary", "intention", "readerPoints", "translationNotes"],
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string", maxLength: 800 },
+      intention: { type: "string", maxLength: 300 },
+      readerPoints: {
+        type: "array",
+        minItems: 0,
+        maxItems: 6,
+        items: { type: "string", maxLength: 160 },
+        default: [],
+      },
+      translationNotes: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          characters: {
+            type: "array",
+            default: [],
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                targetName: { type: ["string", "null"], default: null },
+                age: { type: ["string", "null"], default: null },
+                gender: { type: ["string", "null"], default: null },
+                traits: {
+                  type: "array",
+                  default: [],
+                  items: { type: "string" },
+                },
+              },
+              required: ["name", "targetName", "age", "gender", "traits"],
+            },
+          },
+          namedEntities: {
+            type: "array",
+            default: [],
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                targetName: { type: ["string", "null"], default: null },
+                frequency: { type: ["number", "null"], default: 0 },
+              },
+              required: ["name", "targetName", "frequency"],
+            },
+          },
+          locations: {
+            type: "array",
+            default: [],
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                targetName: { type: ["string", "null"], default: null },
+                frequency: { type: ["number", "null"], default: 0 },
+              },
+              required: ["name", "targetName", "frequency"],
+            },
+          },
+          measurementUnits: {
+            type: "array",
+            default: [],
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                source: { type: "string" },
+                target: { type: ["string", "null"], default: null },
+              },
+              required: ["source", "target"],
+            },
+          },
+          linguisticFeatures: {
+            type: "array",
+            default: [],
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                source: { type: "string" },
+                target: { type: ["string", "null"], default: null },
+              },
+              required: ["source", "target"],
+            },
+          },
+          timePeriod: { type: ["string", "null"], default: null },
+        },
+        required: [
+          "characters",
+          "namedEntities",
+          "locations",
+          "measurementUnits",
+          "linguisticFeatures",
+          "timePeriod",
+        ],
+      },
+    },
+  },
+};
+
+function normalizeVerbosity(value: string | undefined | null): ResponseVerbosity {
+  if (!value) return "medium";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+    return normalized;
+  }
+  return "medium";
+}
+
+function normalizeReasoningEffort(
+  value: string | undefined | null,
+): ResponseReasoningEffort {
+  if (!value) return "medium";
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+  return "medium";
+}
+
+function normalizePositiveInteger(
+  value: string | undefined | null,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return fallback;
+}
+
+const VERBOSITY_ORDER: ResponseVerbosity[] = ["low", "medium", "high"];
+const EFFORT_ORDER: ResponseReasoningEffort[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+];
+
+function escalateVerbosity(current: ResponseVerbosity): ResponseVerbosity {
+  const index = VERBOSITY_ORDER.indexOf(current);
+  return VERBOSITY_ORDER[Math.min(VERBOSITY_ORDER.length - 1, index + 1)];
+}
+
+function escalateReasoningEffort(
+  current: ResponseReasoningEffort,
+): ResponseReasoningEffort {
+  const index = EFFORT_ORDER.indexOf(current);
+  return EFFORT_ORDER[Math.min(EFFORT_ORDER.length - 1, index + 1)];
+}
 
 export type ProfileVariant = "origin" | "translation";
 
@@ -50,6 +244,14 @@ export interface ProfileAgentOutput {
   sourceHash: string;
   sourcePreview: string;
   translationNotes: TranslationNotes | null;
+  meta: {
+    verbosity: ResponseVerbosity;
+    reasoningEffort: ResponseReasoningEffort;
+    maxOutputTokens: number;
+    chunkCount: number;
+    retryCount: number;
+    truncated: boolean;
+  };
 }
 
 function countWords(text: string) {
@@ -267,9 +469,10 @@ export async function analyzeDocumentProfile(
   const readingTimeLabel = formatReadingTimeLabel(wordCount);
 
   const truncated =
-    text.length > MAX_CONTEXT_CHARS
-      ? `${text.slice(0, MAX_CONTEXT_CHARS)}\n\n[... 생략됨 ...]`
+    text.length > CONTEXT_CHAR_LIMIT
+      ? `${text.slice(0, CONTEXT_CHAR_LIMIT)}\n\n[... 생략됨 ...]`
       : text;
+  const wasTruncated = truncated.length !== text.length;
   const sourceHash = createHash("sha256").update(text).digest("hex");
   const sourcePreview = text.slice(0, 600);
 
@@ -315,37 +518,177 @@ Text to analyze:
 """
 ${truncated}
 """`;
+  let dynamicMaxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS;
+  let lastRequestMaxTokens = Math.min(
+    dynamicMaxOutputTokens,
+    MAX_OUTPUT_TOKENS_CAP,
+  );
+  const attempts: Array<{
+    model: string;
+    verbosity: ResponseVerbosity;
+    effort: ResponseReasoningEffort;
+  }> = [
+    {
+      model: DEFAULT_MODEL,
+      verbosity: DEFAULT_VERBOSITY,
+      effort: DEFAULT_REASONING_EFFORT,
+    },
+    {
+      model: DEFAULT_MODEL,
+      verbosity: "low",
+      effort: "minimal",
+    },
+  ];
 
-  const completion = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
-    temperature: 0.5,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  });
-
-  const content = completion.choices[0]?.message?.content ?? "{}";
-
-  let parsed: {
-    summary?: string;
-    intention?: string;
-    readerPoints?: unknown;
-    translationNotes?: unknown;
-  };
-  try {
-    parsed = JSON.parse(content);
-  } catch (error) {
-    throw new Error(
-      `Failed to parse profile agent payload: ${(error as Error).message}`,
-    );
+  if (FALLBACK_MODEL && FALLBACK_MODEL !== DEFAULT_MODEL) {
+    attempts.push({
+      model: FALLBACK_MODEL,
+      verbosity: "low",
+      effort: "minimal",
+    });
   }
 
-  const storySummary = truncateWords((parsed.summary ?? "").trim(), 120);
-  const intention = truncateWords((parsed.intention ?? "").trim(), 60);
-  const readerPoints = normalizeReaderPoints(parsed.readerPoints);
-  const translationNotes = parseTranslationNotes(parsed.translationNotes ?? null);
+  let parsedPayload: RawProfileResponse | null = null;
+  let responseModel = DEFAULT_MODEL;
+  let usage = { inputTokens: 0, outputTokens: 0 };
+  let selectedAttemptIndex = -1;
+  let lastError: unknown = null;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    try {
+      const requestMaxTokens = Math.min(
+        dynamicMaxOutputTokens,
+        MAX_OUTPUT_TOKENS_CAP,
+      );
+
+      const response = await openai.responses.create({
+        model: attempt.model,
+        max_output_tokens: requestMaxTokens,
+        text: {
+          format: {
+            type: "json_schema",
+            name: profileResponseSchema.name,
+            schema: profileResponseSchema.schema,
+            strict: true,
+          },
+          verbosity: attempt.verbosity,
+        },
+        reasoning: { effort: attempt.effort },
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: systemPrompt }],
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: userPrompt }],
+          },
+        ],
+      });
+
+      const { parsedJson, text: rawText, usage: responseUsage } =
+        safeExtractOpenAIResponse(response);
+
+      let payload: RawProfileResponse | null = null;
+
+      lastRequestMaxTokens = requestMaxTokens;
+
+      if (parsedJson && typeof parsedJson === "object") {
+        payload = parsedJson as RawProfileResponse;
+      } else if (rawText && rawText.trim().length) {
+        try {
+          payload = JSON.parse(rawText) as RawProfileResponse;
+        } catch (parseError) {
+          const err = new Error("profile_invalid_json");
+          (err as Error & { cause?: unknown; raw?: string }).cause = parseError;
+          (err as Error & { cause?: unknown; raw?: string }).raw =
+            rawText.slice(0, 2000);
+          throw err;
+        }
+      }
+
+      if (!payload) {
+        throw new Error("Profile agent returned an empty payload");
+      }
+
+      parsedPayload = payload;
+      responseModel = response.model || attempt.model;
+      usage = {
+        inputTokens: responseUsage?.prompt_tokens ?? 0,
+        outputTokens: responseUsage?.completion_tokens ?? 0,
+      };
+      selectedAttemptIndex = index;
+      break;
+    } catch (error) {
+      lastError = error;
+      // eslint-disable-next-line no-console
+      console.warn("[PROFILE] attempt failed", {
+        attempt: attempts[index],
+        error,
+      });
+
+      if (
+        error &&
+        typeof error === "object" &&
+        (error as { code?: string }).code === "openai_response_incomplete"
+      ) {
+        dynamicMaxOutputTokens = Math.min(
+          Math.ceil(dynamicMaxOutputTokens * 2),
+          MAX_OUTPUT_TOKENS_CAP,
+        );
+
+        // ensure the next attempt runs with the leanest configuration available
+        if (index + 1 < attempts.length) {
+          attempts[index + 1] = {
+            ...attempts[index + 1],
+            verbosity: "low",
+            effort: "minimal",
+          };
+        }
+        continue;
+      }
+
+      if (
+        error instanceof Error &&
+        error.message === "profile_invalid_json"
+      ) {
+        dynamicMaxOutputTokens = Math.min(
+          Math.ceil(dynamicMaxOutputTokens * 1.5),
+          MAX_OUTPUT_TOKENS_CAP,
+        );
+        if (index + 1 < attempts.length) {
+          attempts[index + 1] = {
+            ...attempts[index + 1],
+            verbosity: "low",
+            effort: "minimal",
+          };
+        }
+        continue;
+      }
+    }
+  }
+
+  if (!parsedPayload) {
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error("Failed to generate document profile");
+  }
+
+  const storySummary = truncateWords(
+    (toNullableString(parsedPayload.summary) ?? "").trim(),
+    120,
+  );
+  const intention = truncateWords(
+    (toNullableString(parsedPayload.intention) ?? "").trim(),
+    60,
+  );
+  const readerPoints = normalizeReaderPoints(parsedPayload.readerPoints);
+  const translationNotes = parseTranslationNotes(parsedPayload.translationNotes);
+
+  const selectedAttempt =
+    attempts[Math.max(0, selectedAttemptIndex)] ?? attempts[0];
 
   return {
     summary: {
@@ -360,13 +703,18 @@ ${truncated}
       readingTimeMinutes,
       readingTimeLabel,
     },
-    model: completion.model || DEFAULT_MODEL,
-    usage: {
-      inputTokens: completion.usage?.prompt_tokens ?? 0,
-      outputTokens: completion.usage?.completion_tokens ?? 0,
-    },
+    model: responseModel,
+    usage,
     sourceHash,
     sourcePreview,
     translationNotes,
+    meta: {
+      verbosity: selectedAttempt.verbosity,
+      reasoningEffort: selectedAttempt.effort,
+      maxOutputTokens: lastRequestMaxTokens,
+      chunkCount: 1,
+      retryCount: Math.max(0, selectedAttemptIndex),
+      truncated: wasTruncated,
+    },
   };
 }

@@ -4,10 +4,9 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const nodeRequire: NodeJS.Require = createRequire(__filename);
 const fixturesDir = path.resolve(__dirname, '../../../..', 'web/files');
 
 const hwpMockText = '엄마의 얼굴엔 피곤이 노인의 상념이 되어 잠겨 들어가고 있었다.';
@@ -32,8 +31,7 @@ function createMockSpawn() {
 }
 
 test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
-  const require = createRequire(import.meta.url);
-  const childProcess = require('node:child_process') as {
+  const childProcess = nodeRequire('node:child_process') as {
     spawn: typeof import('node:child_process').spawn;
   };
   const originalSpawn = childProcess.spawn;
@@ -41,9 +39,11 @@ test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
   const originalPythonBin = process.env.PYTHON_BIN;
   process.env.PYTHON_BIN = 'fake-python';
 
-  const extractorModule = (await import(
-    `../../origin/extractor?cache=${Date.now()}`,
-  )) as typeof import('../../origin/extractor');
+  const extractorPath = nodeRequire.resolve('../../origin/extractor');
+  if (nodeRequire.cache?.[extractorPath]) {
+    delete nodeRequire.cache[extractorPath];
+  }
+  const extractorModule = nodeRequire(extractorPath) as typeof import('../../origin/extractor');
   const { extractOriginFromUpload } = extractorModule;
 
   try {
@@ -82,9 +82,8 @@ test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
 
   await t.test('pdf extraction returns text via pdf-parse', async () => {
     const buffer = Buffer.from('%PDF-1.4 synthetic fixture');
-    const require = createRequire(import.meta.url);
-    const modulePath = require.resolve('pdf-parse');
-    const originalEntry = require.cache[modulePath];
+    const modulePath = nodeRequire.resolve('pdf-parse');
+    const originalEntry = nodeRequire.cache?.[modulePath];
 
     const stubText = [
       '흐린 공항 앞 광장에서 검정 우산을 든 사람들이 서 있었다.',
@@ -93,7 +92,7 @@ test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
       '작은 물방울이 우산 끝에서 또르르 떨어져 바닥에 꽃무늬를 그렸다.',
     ].join(' ');
 
-    require.cache[modulePath] = {
+    nodeRequire.cache[modulePath] = {
       id: modulePath,
       filename: modulePath,
       loaded: true,
@@ -113,9 +112,9 @@ test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
       assert.ok(result.text.length > 100);
     } finally {
       if (originalEntry) {
-        require.cache[modulePath] = originalEntry;
+        nodeRequire.cache[modulePath] = originalEntry;
       } else {
-        delete require.cache[modulePath];
+        delete nodeRequire.cache[modulePath];
       }
     }
   });
@@ -171,9 +170,7 @@ test('extractOriginFromUpload handles txt, hwp, and pdf inputs', async (t) => {
 
   await t.test('surfaced python missing error for hwp extraction', async () => {
     const buffer = await fs.readFile(path.join(fixturesDir, '검정 우산.hwp'));
-    const require = createRequire(import.meta.url);
-
-    const childProcess = require('node:child_process') as {
+    const childProcess = nodeRequire('node:child_process') as {
       spawn: typeof import('node:child_process').spawn;
     };
     const originalSpawn = childProcess.spawn;

@@ -5,7 +5,7 @@
     "aligner": "embeddings",
     "maxWorkers": 6,
     "maxCharsPerChunk": 2400,
-    "quickChunkSize": 6,
+    "quickChunkSize": 3,
     "deepChunkSize": 3
   },
   "groups": [
@@ -16,8 +16,6 @@
           "key": "auto_translation_reference",
           "label": "Auto-translation (Reference Draft)",
           "enabled": false,
-          "model": "gpt-4o-mini",
-          "temperature": 0.2,
           "prompt": {
             "system": "Generate a faithful, neutral English draft translation from Korean solely for reference comparison. Do not embellish. Output minimal JSON: {items:[{issue_ko:'참고 번역 생성', issue_en:'Reference translation generated', recommendation_ko:'대조용 참고 번역을 활용하세요.', recommendation_en:'Use the reference translation for comparison.', before:null, after:'<reference-translation>', rationale_ko:'자동 생성된 대조 번역입니다.', rationale_en:'Automatically generated reference translation.', confidence:0.6, severity:'low'}]}."
           }
@@ -32,8 +30,6 @@
           "label": "Grammar, Spelling & Punctuation",
           "enabled": true,
           "tier": "quick",
-          "model": "gpt-4o-mini",
-          "temperature": 0.05,
           "prompt": {
             "system": "You are a senior copy editor reviewing translated prose. Fix only clear grammatical errors, punctuation mistakes, spacing bugs, or strongly unidiomatic phrasing that harms comprehension. Skip stylistic preferences. Surface at most 3 issues per chunk and leave items:[] when no high-impact problems exist. Preserve meaning and voice. Return {items:[{issue_ko,issue_en,recommendation_ko,recommendation_en,before,after,alternatives?,rationale_ko,rationale_en,confidence,severity,tags?,source?,sourceExcerpt?,translationExcerpt?}]}"
           }
@@ -43,8 +39,6 @@
           "label": "Lexical Variety & Diction Enhancement",
           "enabled": false,
           "tier": "quick",
-          "model": "gpt-4o-mini",
-          "temperature": 0.3,
           "prompt": {
             "system": "Suggest 1–2 concise, idiomatic alternatives to reduce repetition and lift diction, without purple prose or register shift. Return unified JSON schema as specified."
           }
@@ -54,8 +48,6 @@
           "label": "Style & Register Consistency",
           "enabled": true,
           "tier": "quick",
-          "model": "gpt-4o-mini",
-          "temperature": 0.1,
           "prompt": {
             "system": "Assess overall style and tone consistency between source and target text. Flag only clear register shifts, tonal mismatches, or rhythm issues that would confuse readers. Ignore subjective tweaks. Provide at most 2 findings per chunk. Return the unified JSON schema {items:[...]}, including optional source/sourceExcerpt/translationExcerpt fields when helpful."
           }
@@ -70,8 +62,6 @@
           "label": "Logical Consistency & Continuity",
           "enabled": false,
           "tier": "deep",
-          "model": "gpt-4o-mini",
-          "temperature": 0.1,
           "prompt": {
             "system": "Check timeline order, causal links, and character references vs the source text. Flag only material contradictions or missing links with brief evidence and proposed minimal fixes. Limit output to the most critical 2 findings. Return the unified JSON schema."
           }
@@ -81,8 +71,6 @@
           "label": "Emotion & Tone Alignment",
           "enabled": false,
           "tier": "deep",
-          "model": "gpt-4o-mini",
-          "temperature": 0.2,
           "prompt": {
             "system": "Compare the emotional nuance of the KR source (e.g., restrained sadness) with the EN translation; point out under/over-translation of tone and propose restrained fixes. Return unified JSON schema."
           }
@@ -97,8 +85,6 @@
           "label": "Cultural References & Figurative Language",
           "enabled": false,
           "tier": "deep",
-          "model": "gpt-4o-mini",
-          "temperature": 0.15,
           "prompt": {
             "system": "Evaluate idioms, cultural references, and metaphors between source and target. Flag only cases where meaning is lost or misrepresented; avoid optional embellishments. Suggest concise fixes and cap the response at 2 findings. Do not over-explain. Return the unified JSON schema."
           }
@@ -108,8 +94,6 @@
           "label": "Originality Risk (Heuristic Only)",
           "enabled": false,
           "tier": "deep",
-          "model": "gpt-4o-mini",
-          "temperature": 0.0,
           "prompt": {
             "system": "Heuristic similarity check without using external sources. If phrasing seems formulaic or cliché, flag with rationale and suggest alternatives. Disclaimer: not legal advice. Return unified JSON schema."
           }
