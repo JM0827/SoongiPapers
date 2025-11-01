@@ -1,4 +1,4 @@
-import { OpenAI } from 'openai';
+import { OpenAI } from "openai";
 
 let cachedClient: OpenAI | null = null;
 
@@ -9,7 +9,7 @@ export const getOpenAIClient = (): OpenAI => {
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured');
+    throw new Error("OPENAI_API_KEY is not configured");
   }
 
   cachedClient = new OpenAI({
@@ -22,7 +22,7 @@ export const getOpenAIClient = (): OpenAI => {
 };
 
 export const resetOpenAIClientForTests = () => {
-  if (process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === "test") {
     cachedClient = null;
   }
 };

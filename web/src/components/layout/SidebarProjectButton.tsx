@@ -133,7 +133,10 @@ const SidebarProjectButtonComponent = ({
 
     const handleClickAway = (event: MouseEvent) => {
       if (!menuRef.current) return;
-      if (event.target instanceof Node && menuRef.current.contains(event.target)) {
+      if (
+        event.target instanceof Node &&
+        menuRef.current.contains(event.target)
+      ) {
         return;
       }
       setMenuOpen(false);
@@ -173,50 +176,51 @@ const SidebarProjectButtonComponent = ({
     }
   };
 
-  const menuItems = useMemo(
-    () => {
-      const items: Array<
-        | { type: "item"; key: string; label: string; action: string; tone?: "danger"; disabled?: boolean }
-        | { type: "separator"; key: string }
-      > = [
-        {
-          type: "item",
-          key: "properties",
-          label: localize(
-            'sidebar_project_menu_properties',
-            'Properties',
-          ),
-          action: "rename",
-        },
-        {
-          type: "item",
-          key: "share",
-          label: localize('sidebar_project_menu_share', 'Share'),
-          action: "export",
-          disabled: true,
-        },
-        {
-          type: "item",
-          key: "complete",
-          label:
-            normalizedStatus === "completed" || normalizedStatus === "complete"
-              ? localize('sidebar_project_menu_reopen', 'Reopen project')
-              : localize('sidebar_project_menu_complete', 'Mark complete'),
-          action: "complete",
-        },
-        { type: "separator", key: "separator-delete" },
-        {
-          type: "item",
-          key: "delete",
-          label: localize('sidebar_project_menu_delete', 'Delete'),
-          action: "delete",
-          tone: "danger",
-        },
-      ];
-      return items;
-    },
-    [localize, normalizedStatus],
-  );
+  const menuItems = useMemo(() => {
+    const items: Array<
+      | {
+          type: "item";
+          key: string;
+          label: string;
+          action: string;
+          tone?: "danger";
+          disabled?: boolean;
+        }
+      | { type: "separator"; key: string }
+    > = [
+      {
+        type: "item",
+        key: "properties",
+        label: localize("sidebar_project_menu_properties", "Properties"),
+        action: "rename",
+      },
+      {
+        type: "item",
+        key: "share",
+        label: localize("sidebar_project_menu_share", "Share"),
+        action: "export",
+        disabled: true,
+      },
+      {
+        type: "item",
+        key: "complete",
+        label:
+          normalizedStatus === "completed" || normalizedStatus === "complete"
+            ? localize("sidebar_project_menu_reopen", "Reopen project")
+            : localize("sidebar_project_menu_complete", "Mark complete"),
+        action: "complete",
+      },
+      { type: "separator", key: "separator-delete" },
+      {
+        type: "item",
+        key: "delete",
+        label: localize("sidebar_project_menu_delete", "Delete"),
+        action: "delete",
+        tone: "danger",
+      },
+    ];
+    return items;
+  }, [localize, normalizedStatus]);
 
   return (
     <div
@@ -245,8 +249,8 @@ const SidebarProjectButtonComponent = ({
             >
               <span
                 className={clsx(
-                  'text-sm font-medium',
-                  active ? 'text-emerald-900' : 'text-slate-900',
+                  "text-sm font-medium",
+                  active ? "text-emerald-900" : "text-slate-900",
                 )}
               >
                 {project.title || "제목 없음"}
@@ -264,7 +268,7 @@ const SidebarProjectButtonComponent = ({
         </div>
         <div className="ml-5 flex items-center gap-1.5 text-[10px] text-slate-500">
           <span className="font-mono uppercase tracking-tight text-slate-400 text-[10px]">
-            {`${directionLabel.replace('→', '->')}${qualityScore !== null ? ` Q${qualityScore.toFixed(0)}` : ''}`}
+            {`${directionLabel.replace("→", "->")}${qualityScore !== null ? ` Q${qualityScore.toFixed(0)}` : ""}`}
           </span>
           <span className="flex items-center gap-1">
             {[0, 1, 2].map((index) => (

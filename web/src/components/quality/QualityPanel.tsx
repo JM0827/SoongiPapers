@@ -40,8 +40,10 @@ const parseMeta = (value: unknown): QualityAssessmentMetaShape | undefined => {
   if (typeof value.chunks === "number") meta.chunks = value.chunks;
   if (typeof value.chunkSize === "number") meta.chunkSize = value.chunkSize;
   if (typeof value.overlap === "number") meta.overlap = value.overlap;
-  if (Array.isArray(value.chunkStats)) meta.chunkStats = value.chunkStats as Array<Record<string, unknown>>;
-  if (isRecord(value.config)) meta.config = value.config as Record<string, unknown>;
+  if (Array.isArray(value.chunkStats))
+    meta.chunkStats = value.chunkStats as Array<Record<string, unknown>>;
+  if (isRecord(value.config))
+    meta.config = value.config as Record<string, unknown>;
   return Object.keys(meta).length ? meta : undefined;
 };
 
@@ -301,7 +303,9 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
   const projectId = useProjectStore((state) => state.activeProjectId);
   const { data: qualityHistory } = useQualityHistory(projectId);
   const qualityStatus = useWorkflowStore((state) => state.quality.status);
-  const qualityLastMessage = useWorkflowStore((state) => state.quality.lastMessage);
+  const qualityLastMessage = useWorkflowStore(
+    (state) => state.quality.lastMessage,
+  );
   const assessments = useMemo(
     () => extractAssessments(qualityHistory),
     [qualityHistory],
@@ -338,13 +342,14 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
     return `Quality assessment completed at ${completedAt}.`;
   })();
 
-  const stageTone = qualityStatus === "running"
-    ? "running"
-    : qualityStatus === "failed"
-      ? "failed"
-      : qualityResult && stageLabel !== "no-assessment"
-        ? "done"
-        : "idle";
+  const stageTone =
+    qualityStatus === "running"
+      ? "running"
+      : qualityStatus === "failed"
+        ? "failed"
+        : qualityResult && stageLabel !== "no-assessment"
+          ? "done"
+          : "idle";
 
   const metaLine = useMemo(() => {
     if (!qualityResult?.meta) return null;
@@ -352,8 +357,7 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
     const parts: string[] = [];
     if (model) parts.push(`최신 평가 모델: ${model}`);
     if (typeof chunks === "number" || typeof chunkSize === "number") {
-      const chunkCountLabel =
-        typeof chunks === "number" ? `${chunks}` : "?";
+      const chunkCountLabel = typeof chunks === "number" ? `${chunks}` : "?";
       const chunkSizeLabel =
         typeof chunkSize === "number" ? `${chunkSize}` : "?";
       parts.push(`청크 수: ${chunkCountLabel} / 청크 크기: ${chunkSizeLabel}`);
@@ -418,20 +422,19 @@ export const QualityPanel = ({ stage, latest }: QualityPanelProps) => {
         <p className={stageDescriptionClass}>{stageDescription}</p>
       </div>
 
-      {stage === "no-assessment" && !qualityResult && qualityStatus !== "running" && (
-        <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-          품질 검토가 실행되면 정량/정성 분석 결과가 표시됩니다.
-        </div>
-      )}
+      {stage === "no-assessment" &&
+        !qualityResult &&
+        qualityStatus !== "running" && (
+          <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+            품질 검토가 실행되면 정량/정성 분석 결과가 표시됩니다.
+          </div>
+        )}
 
       <QuantitativeTable data={qualityResult?.quantitative} />
       <div className="space-y-3">
         <QualitativeTable data={qualityResult?.qualitative} />
-        {metaLine && (
-          <p className="text-[11px] text-slate-500">{metaLine}</p>
-        )}
+        {metaLine && <p className="text-[11px] text-slate-500">{metaLine}</p>}
       </div>
-
     </div>
   );
 };

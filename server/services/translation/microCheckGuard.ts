@@ -1,4 +1,7 @@
-import type { GuardFindingDetail, GuardBooleans } from "@bookko/translation-types";
+import type {
+  GuardFindingDetail,
+  GuardBooleans,
+} from "@bookko/translation-types";
 import type { OriginSegment } from "../../agents/translation/segmentationAgent";
 import type { TranslationReviseSegmentResult } from "../../agents/translation/reviseAgent";
 
@@ -25,7 +28,9 @@ const LENGTH_RATIO_MIN = 0.7;
 const LENGTH_RATIO_MAX = 1.3;
 
 export function runMicroChecks(options: MicroCheckOptions): MicroCheckResult {
-  const originMap = new Map(options.originSegments.map((segment) => [segment.id, segment.text]));
+  const originMap = new Map(
+    options.originSegments.map((segment) => [segment.id, segment.text]),
+  );
   const segments: MicroCheckSegmentResult[] = [];
   let violationCount = 0;
 

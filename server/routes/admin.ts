@@ -19,9 +19,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (request) => {
       const { projectId, limit } = request.query;
       const parsedLimit = limit ? Number(limit) : undefined;
-      const safeLimit = Number.isFinite(parsedLimit) && parsedLimit! > 0
-        ? Math.min(parsedLimit!, 500)
-        : undefined;
+      const safeLimit =
+        Number.isFinite(parsedLimit) && parsedLimit! > 0
+          ? Math.min(parsedLimit!, 500)
+          : undefined;
 
       const logs = await listProofreadingLogs({
         projectId: projectId?.trim() || undefined,
@@ -42,9 +43,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (request) => {
       const { projectId, limit } = request.query;
       const parsedLimit = limit ? Number(limit) : undefined;
-      const safeLimit = Number.isFinite(parsedLimit) && parsedLimit! > 0
-        ? Math.min(parsedLimit!, 200)
-        : undefined;
+      const safeLimit =
+        Number.isFinite(parsedLimit) && parsedLimit! > 0
+          ? Math.min(parsedLimit!, 200)
+          : undefined;
 
       const drafts = await listRecentDraftRuns({
         projectId: projectId?.trim() || undefined,

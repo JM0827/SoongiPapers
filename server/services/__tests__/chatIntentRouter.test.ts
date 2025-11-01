@@ -1,11 +1,16 @@
 import { describe, test } from "node:test";
 import assert from "node:assert";
 
-import { handleIntentRouting, type IntentRoutingPreflight } from "../chatIntentRouter";
+import {
+  handleIntentRouting,
+  type IntentRoutingPreflight,
+} from "../chatIntentRouter";
 import type { IntentClassification } from "../intentClassifier";
 import type { WorkflowRunRecord } from "../workflowManager";
 
-const buildRun = (overrides: Partial<WorkflowRunRecord> = {}): WorkflowRunRecord => ({
+const buildRun = (
+  overrides: Partial<WorkflowRunRecord> = {},
+): WorkflowRunRecord => ({
   runId: "run-1",
   projectId: "proj-1",
   type: "translation",
@@ -62,7 +67,9 @@ describe("handleIntentRouting", () => {
     assert.ok(result.handled);
     assert.ok(result.llmContext?.includes("번역을 바로 시작할게요"));
     assert.ok(result.llmContext?.includes("실험 번역"));
-    assert.ok(result.llmContext?.includes("진행 상황은 타임라인에서 확인해 주세요."));
+    assert.ok(
+      result.llmContext?.includes("진행 상황은 타임라인에서 확인해 주세요."),
+    );
     assert.deepStrictEqual(result.actions, [{ type: "viewTranslationStatus" }]);
     assert.strictEqual(result.classificationForEvent?.label, "실험 번역");
   });
@@ -142,7 +149,10 @@ describe("handleIntentRouting", () => {
     });
 
     assert.ok(result.handled);
-    assert.match(result.llmContext ?? "", /I couldn't start the quality review/);
+    assert.match(
+      result.llmContext ?? "",
+      /I couldn't start the quality review/,
+    );
     assert.deepStrictEqual(result.actions, [{ type: "viewQualityReport" }]);
   });
 

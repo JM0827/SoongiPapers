@@ -58,7 +58,8 @@ export const useTranslationStageDrafts = ({
         translationFileId,
       });
     },
-    enabled:
-      Boolean(enabled && token && projectId && stage && (jobId || translationFileId)),
+    enabled: Boolean(
+      enabled && token && projectId && stage && (jobId || translationFileId),
+    ),
     staleTime: 60_000,
   });

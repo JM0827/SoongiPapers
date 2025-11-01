@@ -7,7 +7,8 @@
     "dev:https": "cross-env HTTPS_ENABLED=true ts-node-dev index.ts",
     "db-init": "tsx db-init.ts",
     "test": "tsx --test \"{agents,services,db}/**/__tests__/**/*.test.ts\"",
-    "postinstall": "node scripts/ensure-mongodb-search-index.js"
+    "postinstall": "node scripts/ensure-mongodb-search-index.js",
+    "lint": "eslint . --ext .ts"
   },
   "dependencies": {
     "@bookko/ai-image-gen": "file:../packages/ai-image-gen",

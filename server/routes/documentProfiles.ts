@@ -32,7 +32,9 @@ const serializeProfile = (doc: any) =>
             ? String(doc.proofreading_id)
             : null,
         },
-        translationNotes: normalizeTranslationNotes(doc.translation_notes ?? null),
+        translationNotes: normalizeTranslationNotes(
+          doc.translation_notes ?? null,
+        ),
         source: {
           hash: doc.source_hash ?? null,
           preview: doc.source_preview ?? null,
@@ -243,7 +245,10 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
           return reply.status(404).send({ error: "Project not found" });
         }
       } catch (err) {
-        request.log.error({ err }, "[PROFILE] Failed to validate project ownership");
+        request.log.error(
+          { err },
+          "[PROFILE] Failed to validate project ownership",
+        );
         return reply.status(500).send({ error: "Failed to validate project" });
       }
 
@@ -288,12 +293,15 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
             const targetValue = sanitizeString(entry.target ?? null);
             return { source: sourceValue, target: targetValue };
           })
-          .filter((entry): entry is TranslationNotes["measurementUnits"][number] =>
-            Boolean(entry),
+          .filter(
+            (entry): entry is TranslationNotes["measurementUnits"][number] =>
+              Boolean(entry),
           );
       };
 
-      const toNotes = (input: typeof parsed.data.translationNotes): TranslationNotes | null => {
+      const toNotes = (
+        input: typeof parsed.data.translationNotes,
+      ): TranslationNotes | null => {
         if (!input) return null;
         const characters = (input.characters ?? [])
           .map((character) => {
@@ -307,8 +315,9 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
               traits: sanitizeTraits(character.traits ?? []),
             };
           })
-          .filter((character): character is TranslationNotes["characters"][number] =>
-            Boolean(character),
+          .filter(
+            (character): character is TranslationNotes["characters"][number] =>
+              Boolean(character),
           );
 
         const mapEntities = (values?: typeof input.namedEntities) =>
@@ -325,8 +334,9 @@ const documentProfileRoutes: FastifyPluginAsync = async (fastify) => {
                 frequency,
               };
             })
-            .filter((entity): entity is TranslationNotes["namedEntities"][number] =>
-              Boolean(entity),
+            .filter(
+              (entity): entity is TranslationNotes["namedEntities"][number] =>
+                Boolean(entity),
             );
 
         const namedEntities = mapEntities(input.namedEntities);

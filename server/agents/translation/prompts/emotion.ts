@@ -37,6 +37,8 @@ export function buildEmotionUserPrompt({
     `Honorific policy: ${config.honorifics ?? "preserve"}. Romanization: ${config.romanizationPolicy ?? "as-is"}.`,
   );
   sections.push(`Styled translation:\n${styledDraft}`);
-  sections.push("Align the emotional tone and imagery while keeping the narrative accurate.");
+  sections.push(
+    "Align the emotional tone and imagery while keeping the narrative accurate.",
+  );
   return sections.join("\n\n");
 }

@@ -1,4 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { translate } from "../../lib/locale";
 import { useUILocale } from "../../hooks/useUILocale";
 

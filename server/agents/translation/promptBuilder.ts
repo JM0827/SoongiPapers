@@ -26,7 +26,10 @@ const GENERAL_GUARDLINES = [
   "Do not add commentary, summaries, or content that isn't in the source.",
 ];
 
-function formatLanguage(label?: string | null, fallback = FALLBACK_SOURCE_LANG) {
+function formatLanguage(
+  label?: string | null,
+  fallback = FALLBACK_SOURCE_LANG,
+) {
   const normalized = label?.trim();
   return normalized && normalized.length ? normalized : fallback;
 }
@@ -79,13 +82,17 @@ function buildEntitySection(
   return `${label}:\n${formatBulletList(list)}`;
 }
 
-function buildMeasurementSection(notes: TranslationNotes | null): string | null {
+function buildMeasurementSection(
+  notes: TranslationNotes | null,
+): string | null {
   if (!notes?.measurementUnits?.length) return null;
-  const list = truncateList(notes.measurementUnits, MAX_MEASUREMENT_ENTRIES).map(
-    (entry) =>
-      entry.target && entry.target !== entry.source
-        ? `${entry.source} → ${entry.target}`
-        : entry.source,
+  const list = truncateList(
+    notes.measurementUnits,
+    MAX_MEASUREMENT_ENTRIES,
+  ).map((entry) =>
+    entry.target && entry.target !== entry.source
+      ? `${entry.source} → ${entry.target}`
+      : entry.source,
   );
   if (!list.length) return null;
   return `Measurement & units to respect:\n${formatBulletList(list)}`;
@@ -93,11 +100,13 @@ function buildMeasurementSection(notes: TranslationNotes | null): string | null 
 
 function buildLinguisticSection(notes: TranslationNotes | null): string | null {
   if (!notes?.linguisticFeatures?.length) return null;
-  const list = truncateList(notes.linguisticFeatures, MAX_LINGUISTIC_ENTRIES).map(
-    (entry) =>
-      entry.target && entry.target !== entry.source
-        ? `${entry.source} → ${entry.target}`
-        : entry.source,
+  const list = truncateList(
+    notes.linguisticFeatures,
+    MAX_LINGUISTIC_ENTRIES,
+  ).map((entry) =>
+    entry.target && entry.target !== entry.source
+      ? `${entry.source} → ${entry.target}`
+      : entry.source,
   );
   if (!list.length) return null;
   return `Key expressions / slang to keep consistent:\n${formatBulletList(list)}`;
@@ -107,10 +116,12 @@ function buildGlossarySection(notes: TranslationNotes | null): string | null {
   const glossaryPairs: Array<{ source: string; target: string | null }> = [];
   if (notes?.namedEntities?.length) {
     glossaryPairs.push(
-      ...truncateList(notes.namedEntities, MAX_ENTITY_ENTRIES).map((entity) => ({
-        source: entity.name,
-        target: entity.targetName ?? null,
-      })),
+      ...truncateList(notes.namedEntities, MAX_ENTITY_ENTRIES).map(
+        (entity) => ({
+          source: entity.name,
+          target: entity.targetName ?? null,
+        }),
+      ),
     );
   }
   if (notes?.locations?.length) {
@@ -169,7 +180,11 @@ export function buildDraftSystemPrompt(context: DraftPromptContext): string {
     );
   }
 
-  const sections: string[] = [headerLines.join("\n"), "\nGuidelines:", formatBulletList(guidelineLines)];
+  const sections: string[] = [
+    headerLines.join("\n"),
+    "\nGuidelines:",
+    formatBulletList(guidelineLines),
+  ];
 
   if (synopsis?.trim()) {
     sections.push(`\nStory context:\n${synopsis.trim()}`);

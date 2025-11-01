@@ -1,17 +1,17 @@
-export type ResponseVerbosity = 'low' | 'medium' | 'high';
-export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+export type ResponseVerbosity = "low" | "medium" | "high";
+export type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
-const VERBOSITY_VALUES: ResponseVerbosity[] = ['low', 'medium', 'high'];
+const VERBOSITY_VALUES: ResponseVerbosity[] = ["low", "medium", "high"];
 const REASONING_VALUES: ResponseReasoningEffort[] = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
+  "minimal",
+  "low",
+  "medium",
+  "high",
 ];
 
-const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || 'gpt-5';
+const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || "gpt-5";
 const DEFAULT_CHAT_FALLBACK_MODEL =
-  process.env.CHAT_FALLBACK_MODEL?.trim() || 'gpt-5-mini';
+  process.env.CHAT_FALLBACK_MODEL?.trim() || "gpt-5-mini";
 
 const normalizeVerbosity = (
   value: string | undefined,
@@ -62,13 +62,10 @@ export const getChatResponsesDefaults = (): ChatResponsesDefaults => {
   return {
     model: DEFAULT_CHAT_MODEL,
     fallbackModel: DEFAULT_CHAT_FALLBACK_MODEL,
-    verbosity: normalizeVerbosity(
-      process.env.CHAT_VERBOSITY,
-      'medium',
-    ),
+    verbosity: normalizeVerbosity(process.env.CHAT_VERBOSITY, "medium"),
     reasoningEffort: normalizeEffort(
       process.env.CHAT_REASONING_EFFORT,
-      'medium',
+      "medium",
     ),
     maxOutputTokens: maxTokens,
     maxOutputTokensCap: maxTokensCap,
@@ -83,14 +80,11 @@ export interface IntentClassifierDefaults {
 }
 
 export const getIntentClassifierDefaults = (): IntentClassifierDefaults => ({
-  model: process.env.INTENT_CLASSIFIER_MODEL?.trim() || 'gpt-5-mini',
-  verbosity: normalizeVerbosity(
-    process.env.INTENT_CLASSIFIER_VERBOSITY,
-    'low',
-  ),
+  model: process.env.INTENT_CLASSIFIER_MODEL?.trim() || "gpt-5-mini",
+  verbosity: normalizeVerbosity(process.env.INTENT_CLASSIFIER_VERBOSITY, "low"),
   reasoningEffort: normalizeEffort(
     process.env.INTENT_CLASSIFIER_EFFORT,
-    'minimal',
+    "minimal",
   ),
   maxOutputTokens: parseInteger(
     process.env.INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
@@ -107,18 +101,9 @@ export interface EntityExtractionDefaults {
 
 export const getEntityExtractionDefaults = (): EntityExtractionDefaults => ({
   model: process.env.CHAT_ENTITY_MODEL?.trim() || DEFAULT_CHAT_FALLBACK_MODEL,
-  verbosity: normalizeVerbosity(
-    process.env.CHAT_ENTITY_VERBOSITY,
-    'low',
-  ),
-  reasoningEffort: normalizeEffort(
-    process.env.CHAT_ENTITY_EFFORT,
-    'minimal',
-  ),
-  maxOutputTokens: parseInteger(
-    process.env.CHAT_ENTITY_MAX_OUTPUT_TOKENS,
-    256,
-  ),
+  verbosity: normalizeVerbosity(process.env.CHAT_ENTITY_VERBOSITY, "low"),
+  reasoningEffort: normalizeEffort(process.env.CHAT_ENTITY_EFFORT, "minimal"),
+  maxOutputTokens: parseInteger(process.env.CHAT_ENTITY_MAX_OUTPUT_TOKENS, 256),
 });
 
 export interface EditingAssistantDefaults {
@@ -138,14 +123,12 @@ export const getEditingAssistantDefaults = (
   );
 
   return {
-    model: process.env.EDITING_ASSIST_MODEL?.trim() || DEFAULT_CHAT_FALLBACK_MODEL,
-    verbosity: normalizeVerbosity(
-      process.env.EDITING_ASSIST_VERBOSITY,
-      'low',
-    ),
+    model:
+      process.env.EDITING_ASSIST_MODEL?.trim() || DEFAULT_CHAT_FALLBACK_MODEL,
+    verbosity: normalizeVerbosity(process.env.EDITING_ASSIST_VERBOSITY, "low"),
     reasoningEffort: normalizeEffort(
       process.env.EDITING_ASSIST_REASONING_EFFORT,
-      'low',
+      "low",
     ),
     maxOutputTokens: envMaxTokens,
     maxOutputTokensCap: Math.max(envMaxTokens, baseTokens * 3),

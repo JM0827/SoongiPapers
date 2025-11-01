@@ -186,7 +186,9 @@ export const useUIStore = create<UIState>((set) => ({
   setAdvancedProofreadEnabled: (next) => {
     set((state) => {
       const value =
-        typeof next === 'function' ? next(state.advancedProofreadEnabled) : next;
+        typeof next === "function"
+          ? next(state.advancedProofreadEnabled)
+          : next;
       persistAdvancedProofreadFlag(value);
       return { advancedProofreadEnabled: value };
     });

@@ -27,7 +27,12 @@ import {
   WORKFLOW_EVENTS,
   type IntentSnapshot as StoredIntentSnapshot,
 } from "../services/workflowEvents";
-import { getWorkflowSummary, requestAction, type WorkflowSummary, type WorkflowType } from "../services/workflowManager";
+import {
+  getWorkflowSummary,
+  requestAction,
+  type WorkflowSummary,
+  type WorkflowType,
+} from "../services/workflowManager";
 import {
   ACTION_INTENT_MAP,
   handleIntentRouting,
@@ -43,7 +48,10 @@ import {
   getEntityExtractionDefaults,
   type EntityExtractionDefaults,
 } from "../services/responsesConfig";
-import { chatReplySchema, entityExtractionSchema } from "../services/responsesSchemas";
+import {
+  chatReplySchema,
+  entityExtractionSchema,
+} from "../services/responsesSchemas";
 import {
   runJsonSchemaResponse,
   toResponsesInput,
@@ -519,76 +527,79 @@ const postProcessChatPayload = async (
     project,
   } = input;
 
-const stringOrNull = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
-};
-
-const normalizeAction = (action: LlmAction): LlmAction => {
-  const normalized: LlmAction = {
-    ...action,
-    label: typeof action.label === 'string' ? action.label : null,
-    reason: typeof action.reason === 'string' ? action.reason : null,
-    allowParallel: Boolean(action.allowParallel),
-    autoStart: Boolean(action.autoStart),
-    jobId: action.jobId ?? null,
-    workflowRunId: action.workflowRunId ?? null,
+  const stringOrNull = (value: unknown): string | null => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
   };
 
-  if ('suggestionId' in action) {
-    (normalized as LlmAction & { suggestionId?: string | null }).suggestionId =
-      (action as LlmAction & { suggestionId?: string | null }).suggestionId ?? null;
-  }
+  const normalizeAction = (action: LlmAction): LlmAction => {
+    const normalized: LlmAction = {
+      ...action,
+      label: typeof action.label === "string" ? action.label : null,
+      reason: typeof action.reason === "string" ? action.reason : null,
+      allowParallel: Boolean(action.allowParallel),
+      autoStart: Boolean(action.autoStart),
+      jobId: action.jobId ?? null,
+      workflowRunId: action.workflowRunId ?? null,
+    };
 
-  return normalized;
-};
-
-const normalizeProfileUpdatesOutput = (
-  updates?: Record<string, unknown> | null,
-):
-  | {
-      title: string | null;
-      author: string | null;
-      context: string | null;
-      translationDirection: string | null;
-      memo: string | null;
+    if ("suggestionId" in action) {
+      (
+        normalized as LlmAction & { suggestionId?: string | null }
+      ).suggestionId =
+        (action as LlmAction & { suggestionId?: string | null }).suggestionId ??
+        null;
     }
-  | undefined => {
-  if (!updates) return undefined;
-  return {
-    title: stringOrNull(updates.title),
-    author: stringOrNull(updates.author),
-    context: stringOrNull(updates.context),
-    translationDirection: stringOrNull(updates.translationDirection),
-    memo: stringOrNull(updates.memo),
-  };
-};
 
-const normalizeIntentValue = (
+    return normalized;
+  };
+
+  const normalizeProfileUpdatesOutput = (
+    updates?: Record<string, unknown> | null,
+  ):
+    | {
+        title: string | null;
+        author: string | null;
+        context: string | null;
+        translationDirection: string | null;
+        memo: string | null;
+      }
+    | undefined => {
+    if (!updates) return undefined;
+    return {
+      title: stringOrNull(updates.title),
+      author: stringOrNull(updates.author),
+      context: stringOrNull(updates.context),
+      translationDirection: stringOrNull(updates.translationDirection),
+      memo: stringOrNull(updates.memo),
+    };
+  };
+
+  const normalizeIntentValue = (
     value: string | null | undefined,
   ): IntentType | undefined => {
     if (!value) return undefined;
     const normalized = value.toLowerCase();
     switch (normalized) {
-      case 'translate':
-      case 'translation':
-        return 'translate';
-      case 'proofread':
-      case 'proofreading':
-        return 'proofread';
-      case 'quality':
-        return 'quality';
-      case 'status':
-        return 'status';
-      case 'cancel':
-        return 'cancel';
-      case 'upload':
-        return 'upload';
-      case 'ebook':
-        return 'ebook';
-      case 'other':
-        return 'other';
+      case "translate":
+      case "translation":
+        return "translate";
+      case "proofread":
+      case "proofreading":
+        return "proofread";
+      case "quality":
+        return "quality";
+      case "status":
+        return "status";
+      case "cancel":
+        return "cancel";
+      case "upload":
+        return "upload";
+      case "ebook":
+        return "ebook";
+      case "other":
+        return "other";
       default:
         return undefined;
     }
@@ -618,12 +629,13 @@ const normalizeIntentValue = (
   });
 
   if (actionNotes.length) {
-    modelReply = `${modelReply}\n\n${actionNotes.join('\n')}`;
+    modelReply = `${modelReply}\n\n${actionNotes.join("\n")}`;
   }
 
-  actions = (plannedRoutingActions?.length
-    ? [...plannedRoutingActions, ...reconciledActions]
-    : reconciledActions
+  actions = (
+    plannedRoutingActions?.length
+      ? [...plannedRoutingActions, ...reconciledActions]
+      : reconciledActions
   ).map(normalizeAction);
 
   const normalizedEffectiveIntent =
@@ -647,12 +659,15 @@ const normalizeIntentValue = (
 
   try {
     const entityMessages = toResponsesMessages([
-      { role: 'system', content: ENTITY_PROMPT },
-      { role: 'system', content: contextMeta },
-      { role: 'user', content: latestUserMessage },
+      { role: "system", content: ENTITY_PROMPT },
+      { role: "system", content: contextMeta },
+      { role: "user", content: latestUserMessage },
     ]);
     const entityResult = await runJsonSchemaResponse<
-      Record<'title' | 'author' | 'context' | 'translationDirection' | 'memo', string | null | undefined>
+      Record<
+        "title" | "author" | "context" | "translationDirection" | "memo",
+        string | null | undefined
+      >
     >({
       client: openaiClient,
       model: entityDefaults.model,
@@ -665,21 +680,18 @@ const normalizeIntentValue = (
     });
 
     const entityPayload = entityResult.parsed;
-    if (entityPayload && typeof entityPayload === 'object') {
-      request.log.info(
-        { entityPayload },
-        '[CHAT] Entity extraction payload',
-      );
+    if (entityPayload && typeof entityPayload === "object") {
+      request.log.info({ entityPayload }, "[CHAT] Entity extraction payload");
       profileUpdates = { ...(profileUpdates ?? {}) };
       for (const key of [
-        'title',
-        'author',
-        'context',
-        'translationDirection',
-        'memo',
+        "title",
+        "author",
+        "context",
+        "translationDirection",
+        "memo",
       ] as const) {
         const value = entityPayload[key];
-        if (typeof value === 'string' && value.trim().length > 0) {
+        if (typeof value === "string" && value.trim().length > 0) {
           profileUpdates[key] = value.trim();
         }
       }
@@ -687,17 +699,14 @@ const normalizeIntentValue = (
   } catch (err) {
     request.log.warn(
       { err, model: entityDefaults.model },
-      '[CHAT] Entity extraction failed',
+      "[CHAT] Entity extraction failed",
     );
   }
 
   const inferredAuthor = extractAuthorFromMessage(latestUserMessage);
   if (inferredAuthor) {
     profileUpdates = { ...(profileUpdates ?? {}), author: inferredAuthor };
-    request.log.info(
-      { inferredAuthor },
-      '[CHAT] Rule-based author inference',
-    );
+    request.log.info({ inferredAuthor }, "[CHAT] Rule-based author inference");
   }
 
   const sanitizedUpdates = sanitizeProfileUpdates(
@@ -707,7 +716,7 @@ const normalizeIntentValue = (
   );
   request.log.info(
     { sanitizedUpdates },
-    '[CHAT] Sanitized profile updates (final)',
+    "[CHAT] Sanitized profile updates (final)",
   );
   profileUpdates = sanitizedUpdates;
 
@@ -717,10 +726,7 @@ const normalizeIntentValue = (
     const memoParts: string[] = [];
     let metaChanged = false;
     const nextMeta: Record<string, any> = { ...currentMeta };
-    request.log.info(
-      { profileUpdates },
-      '[CHAT] Profile updates after merge',
-    );
+    request.log.info({ profileUpdates }, "[CHAT] Profile updates after merge");
 
     const translationDirection = stringOrNull(
       profileUpdates.translationDirection,
@@ -740,7 +746,7 @@ const normalizeIntentValue = (
       metaChanged = true;
     }
     const existingMemoEntries =
-      typeof project?.memo === 'string'
+      typeof project?.memo === "string"
         ? project.memo
             .split(/\n+/)
             .map((entry: string) => entry.trim())
@@ -748,7 +754,10 @@ const normalizeIntentValue = (
         : [];
     const memoValue = stringOrNull(profileUpdates.memo);
     if (memoValue) {
-      if (!existingMemoEntries.includes(memoValue) && !memoParts.includes(memoValue)) {
+      if (
+        !existingMemoEntries.includes(memoValue) &&
+        !memoParts.includes(memoValue)
+      ) {
         memoParts.push(memoValue);
       }
     }
@@ -770,7 +779,7 @@ const normalizeIntentValue = (
       updates.push(
         `memo = CONCAT_WS(E'\\n', NULLIF(memo, ''), $${updates.length + 1}::text)`,
       );
-      values.push(memoParts.join('\n'));
+      values.push(memoParts.join("\n"));
     }
 
     if (metaChanged) {
@@ -783,23 +792,20 @@ const normalizeIntentValue = (
         values.push(projectId);
         request.log.info(
           { updates, valuesSnapshot: values },
-          '[CHAT] Executing project update',
+          "[CHAT] Executing project update",
         );
         await query(
           `UPDATE translationprojects
-           SET ${updates.join(', ')}, updated_at = now()
+           SET ${updates.join(", ")}, updated_at = now()
            WHERE project_id = $${values.length}`,
           values,
         );
         request.log.info(
           { projectId, profileUpdates },
-          '[CHAT] Project profile updated',
+          "[CHAT] Project profile updated",
         );
       } catch (err) {
-        request.log.warn(
-          { err },
-          '[CHAT] Failed to update project profile',
-        );
+        request.log.warn({ err }, "[CHAT] Failed to update project profile");
       }
     }
   }
@@ -817,14 +823,14 @@ const normalizeIntentValue = (
     } catch (snapshotError) {
       request.log.warn(
         { err: snapshotError },
-        '[CHAT] Failed to persist intent snapshot',
+        "[CHAT] Failed to persist intent snapshot",
       );
     }
   }
 
   await ChatMessageModel.create({
     project_id: projectId,
-    role: 'assistant',
+    role: "assistant",
     content: modelReply,
     actions,
     metadata: { profileUpdates, model: chatModelUsed },
@@ -844,7 +850,10 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
   try {
     openaiClient = getOpenAIClient();
   } catch (error) {
-    fastify.log.error({ err: error }, "[CHAT] Failed to initialise OpenAI client");
+    fastify.log.error(
+      { err: error },
+      "[CHAT] Failed to initialise OpenAI client",
+    );
   }
 
   const chatDefaults = getChatResponsesDefaults();
@@ -860,7 +869,9 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       if (!openaiClient) {
-        request.log.warn("[CHAT] Missing OPENAI_API_KEY; returning fallback reply");
+        request.log.warn(
+          "[CHAT] Missing OPENAI_API_KEY; returning fallback reply",
+        );
         return reply.send({
           reply:
             "LLM 구성이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.",
@@ -1004,7 +1015,9 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           else if (jobRow.status === "failed")
             translationStage = "translation-error";
           else if (jobRow.status === "cancelled")
-            translationStage = originDoc?.text_content ? "origin-only" : "no-origin";
+            translationStage = originDoc?.text_content
+              ? "origin-only"
+              : "no-origin";
           else translationStage = "translating";
         }
       } catch (err) {
@@ -1101,7 +1114,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
 
       const acceptLanguage =
         typeof request.headers["accept-language"] === "string"
-          ? request.headers["accept-language"]?.split(",")[0] ?? null
+          ? (request.headers["accept-language"]?.split(",")[0] ?? null)
           : null;
 
       const locale = resolveLocale(
@@ -1166,7 +1179,9 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         request.log.warn({ err }, "[CHAT] Failed to load workflow summary");
       }
 
-      const workflowStatusSnapshot = buildStatusSnapshot(workflowSummary ?? null);
+      const workflowStatusSnapshot = buildStatusSnapshot(
+        workflowSummary ?? null,
+      );
       const workflowStatusContext = formatStatusSnapshotForLlm(
         workflowStatusSnapshot,
       );
@@ -1625,24 +1640,25 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           flushHeaders?: () => void;
         };
 
-        rawReply.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        rawReply.setHeader('Cache-Control', 'no-cache, no-transform');
-        rawReply.setHeader('Connection', 'keep-alive');
+        rawReply.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        rawReply.setHeader("Cache-Control", "no-cache, no-transform");
+        rawReply.setHeader("Connection", "keep-alive");
         rawReply.flushHeaders?.();
 
         const flush = () => rawReply.flush?.();
         const sendEvent = (payload: Record<string, unknown>) => {
-          rawReply.write('data: ' + JSON.stringify(payload) + '\r\n\r\n');
+          rawReply.write("data: " + JSON.stringify(payload) + "\r\n\r\n");
           flush();
         };
 
         const heartbeat = setInterval(() => {
-          rawReply.write(': heartbeat\r\n\r\n');
+          rawReply.write(": heartbeat\r\n\r\n");
           flush();
         }, 30_000);
         heartbeat.unref?.();
 
-        let responseStream: ReturnType<OpenAI['responses']['stream']> | null = null;
+        let responseStream: ReturnType<OpenAI["responses"]["stream"]> | null =
+          null;
         const cleanup = () => {
           clearInterval(heartbeat);
         };
@@ -1653,11 +1669,11 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           }
         };
 
-        request.raw.on('close', () => {
+        request.raw.on("close", () => {
           abortStream();
           cleanup();
         });
-        request.raw.on('error', () => {
+        request.raw.on("error", () => {
           abortStream();
           cleanup();
         });
@@ -1671,7 +1687,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             text: {
               verbosity: chatDefaults.verbosity,
               format: {
-                type: 'json_schema',
+                type: "json_schema",
                 name: chatReplySchema.name,
                 schema: chatReplySchema.schema,
                 strict: true,
@@ -1681,20 +1697,21 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             input: toResponsesInput(toResponseMessages),
           });
 
-          responseStream.on('response.output_text.delta', (event: any) => {
-            const delta = typeof event?.delta === 'string' ? event.delta : '';
+          responseStream.on("response.output_text.delta", (event: any) => {
+            const delta = typeof event?.delta === "string" ? event.delta : "";
             if (delta) {
-              sendEvent({ type: 'chat.delta', text: delta });
+              sendEvent({ type: "chat.delta", text: delta });
             }
           });
 
-          responseStream.on('error', (error: unknown) => {
+          responseStream.on("error", (error: unknown) => {
             if (streamErrored) return;
             streamErrored = true;
-            const message = (
-              error instanceof Error ? error.message : 'Streaming encountered an error'
-            );
-            sendEvent({ type: 'chat.error', message });
+            const message =
+              error instanceof Error
+                ? error.message
+                : "Streaming encountered an error";
+            sendEvent({ type: "chat.error", message });
           });
 
           const finalResponse = await responseStream.finalResponse();
@@ -1704,25 +1721,31 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           }
 
           const extracted = safeExtractOpenAIResponse(finalResponse);
-          const parsedPayload = (extracted.parsedJson ?? {}) as Partial<ChatModelResponsePayload>;
-          const isTruncated = (finalResponse as any)?.status === 'incomplete';
+          const parsedPayload = (extracted.parsedJson ??
+            {}) as Partial<ChatModelResponsePayload>;
+          const isTruncated = (finalResponse as any)?.status === "incomplete";
 
           let streamReply =
-            typeof parsedPayload?.reply === 'string' && parsedPayload.reply.trim()
+            typeof parsedPayload?.reply === "string" &&
+            parsedPayload.reply.trim()
               ? parsedPayload.reply
               : modelReply;
           const streamActions = Array.isArray(parsedPayload?.actions)
             ? (parsedPayload!.actions as LlmAction[])
-            : plannedRoutingActions ?? [];
-          const streamProfileUpdates = parsedPayload?.profileUpdates ?? EMPTY_PROFILE_UPDATES;
+            : (plannedRoutingActions ?? []);
+          const streamProfileUpdates =
+            parsedPayload?.profileUpdates ?? EMPTY_PROFILE_UPDATES;
           const streamActionsNote =
-            typeof parsedPayload?.actionsNote === 'string' || parsedPayload?.actionsNote === null
+            typeof parsedPayload?.actionsNote === "string" ||
+            parsedPayload?.actionsNote === null
               ? parsedPayload.actionsNote
               : null;
 
           const hasProfileUpdate = streamProfileUpdates
             ? Object.values(streamProfileUpdates).some((value) =>
-                typeof value === 'string' ? value.trim().length > 0 : value !== null,
+                typeof value === "string"
+                  ? value.trim().length > 0
+                  : value !== null,
               )
             : false;
 
@@ -1745,7 +1768,10 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             proofCompleted,
             qualityCompleted,
             latestJob: latestJob
-              ? { id: latestJob.id, workflow_run_id: latestJob.workflow_run_id ?? null }
+              ? {
+                  id: latestJob.id,
+                  workflow_run_id: latestJob.workflow_run_id ?? null,
+                }
               : null,
             previousIntentSnapshot,
             workflowEvents,
@@ -1760,7 +1786,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           });
 
           sendEvent({
-            type: 'chat.complete',
+            type: "chat.complete",
             reply: postProcess.reply,
             actions: postProcess.actions,
             profileUpdates: postProcess.profileUpdates ?? null,
@@ -1775,16 +1801,15 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             },
           });
 
-          sendEvent({ type: 'chat.end' });
+          sendEvent({ type: "chat.end" });
           rawReply.end();
         } catch (error) {
           if (!streamErrored) {
-            const message = (
+            const message =
               error instanceof Error
                 ? error.message
-                : '대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
-            );
-            sendEvent({ type: 'chat.error', message });
+                : "대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+            sendEvent({ type: "chat.error", message });
           }
           rawReply.end();
         } finally {
@@ -1809,7 +1834,9 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         });
 
       let chatModelUsed = selectedModelId;
-      let chatResult: JsonSchemaResponseResult<ChatModelResponsePayload> | undefined;
+      let chatResult:
+        | JsonSchemaResponseResult<ChatModelResponsePayload>
+        | undefined;
       const attemptedModels: string[] = [];
 
       const executeWithFallback = async () => {
@@ -1820,7 +1847,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         } catch (error) {
           request.log.warn(
             { err: error, model: selectedModelId },
-            '[CHAT] Primary Responses call failed; evaluating fallback',
+            "[CHAT] Primary Responses call failed; evaluating fallback",
           );
           if (
             chatDefaults.fallbackModel &&
@@ -1834,7 +1861,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             } catch (fallbackError) {
               request.log.error(
                 { err: fallbackError, models: attemptedModels },
-                '[CHAT] Fallback Responses call failed',
+                "[CHAT] Fallback Responses call failed",
               );
               throw fallbackError;
             }
@@ -1847,12 +1874,13 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         await executeWithFallback();
       } catch (error) {
         return reply.send({
-          reply: '대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+          reply: "대화를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
           actions: [],
         });
       }
 
-      const parsedPayload = (chatResult?.parsed ?? {}) as Partial<ChatModelResponsePayload>;
+      const parsedPayload = (chatResult?.parsed ??
+        {}) as Partial<ChatModelResponsePayload>;
       if (chatResult?.truncated) {
         request.log.warn(
           {
@@ -1860,33 +1888,35 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             model: chatModelUsed,
             attemptedModels,
           },
-          '[CHAT] Responses payload truncated after retries',
+          "[CHAT] Responses payload truncated after retries",
         );
       }
 
       modelReply =
-        typeof parsedPayload?.reply === 'string' && parsedPayload.reply.trim()
+        typeof parsedPayload?.reply === "string" && parsedPayload.reply.trim()
           ? parsedPayload.reply
           : modelReply;
 
       actions = Array.isArray(parsedPayload?.actions)
         ? (parsedPayload!.actions as LlmAction[])
-        : plannedRoutingActions ?? [];
+        : (plannedRoutingActions ?? []);
 
-      const parsedProfileUpdates = parsedPayload?.profileUpdates ?? EMPTY_PROFILE_UPDATES;
-      const hasProfileUpdate = Object.values(parsedProfileUpdates).some((value) =>
-        typeof value === 'string' ? value.trim().length > 0 : value !== null,
+      const parsedProfileUpdates =
+        parsedPayload?.profileUpdates ?? EMPTY_PROFILE_UPDATES;
+      const hasProfileUpdate = Object.values(parsedProfileUpdates).some(
+        (value) =>
+          typeof value === "string" ? value.trim().length > 0 : value !== null,
       );
       profileUpdates = hasProfileUpdate ? parsedProfileUpdates : undefined;
       if (profileUpdates) {
         request.log.info(
           { profileUpdates, model: chatModelUsed },
-          '[CHAT] Model profileUpdates payload',
+          "[CHAT] Model profileUpdates payload",
         );
       }
 
       if (
-        typeof parsedPayload?.actionsNote === 'string' &&
+        typeof parsedPayload?.actionsNote === "string" &&
         parsedPayload.actionsNote.trim()
       ) {
         modelReply = `${modelReply}\n\n${parsedPayload.actionsNote.trim()}`;
@@ -1907,7 +1937,10 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         proofCompleted,
         qualityCompleted,
         latestJob: latestJob
-          ? { id: latestJob.id, workflow_run_id: latestJob.workflow_run_id ?? null }
+          ? {
+              id: latestJob.id,
+              workflow_run_id: latestJob.workflow_run_id ?? null,
+            }
           : null,
         previousIntentSnapshot,
         workflowEvents,
@@ -2142,10 +2175,7 @@ function reconcileActions(options: ReconcileOptions): ReconcileResult {
         autoStart: true,
       });
       for (const type of START_ACTIONS) {
-        remove(
-          type,
-          "번역 중지 요청이 있어 새 작업을 시작하지 않았습니다.",
-        );
+        remove(type, "번역 중지 요청이 있어 새 작업을 시작하지 않았습니다.");
       }
     } else {
       remove(
@@ -2244,7 +2274,9 @@ function reconcileActions(options: ReconcileOptions): ReconcileResult {
         ...cancelAction,
         jobId: cancelAction.jobId ?? activeTranslationJob?.jobId ?? null,
         workflowRunId:
-          cancelAction.workflowRunId ?? activeTranslationJob?.workflowRunId ?? null,
+          cancelAction.workflowRunId ??
+          activeTranslationJob?.workflowRunId ??
+          null,
       });
     }
   } else {

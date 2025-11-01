@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from "node:events";
 
 export interface ProofreadEditorUpdateEvent {
   projectId: string;
@@ -14,9 +14,11 @@ type Listener = (event: ProofreadEditorUpdateEvent) => void;
 const emitter = new EventEmitter();
 emitter.setMaxListeners(0);
 
-const CHANNEL_PREFIX = 'proofread-editor:';
+const CHANNEL_PREFIX = "proofread-editor:";
 
-export function emitProofreadEditorUpdate(event: ProofreadEditorUpdateEvent): void {
+export function emitProofreadEditorUpdate(
+  event: ProofreadEditorUpdateEvent,
+): void {
   const channel = `${CHANNEL_PREFIX}${event.projectId}`;
   emitter.emit(channel, event);
 }

@@ -25,7 +25,11 @@ type StageParameterOverrides = Partial<
 type SequentialTranslationOverrides = Partial<
   Omit<
     SequentialTranslationConfig,
-    "contextPolicy" | "stageParameters" | "batching" | "tokenBudget" | "proofread"
+    | "contextPolicy"
+    | "stageParameters"
+    | "batching"
+    | "tokenBudget"
+    | "proofread"
   >
 > & {
   contextPolicy?: Partial<ContextPolicyConfig>;
@@ -164,7 +168,7 @@ function mergeTranslationConfig(
       return fallback;
     }
     const lower = lang.toLowerCase() as LanguageCode;
-    return (lower === "ko" || lower === "en") ? lower : fallback;
+    return lower === "ko" || lower === "en" ? lower : fallback;
   };
 
   const segmentMode =
@@ -275,7 +279,9 @@ export function getSequentialTranslationConfig(): SequentialTranslationConfig {
 
 export function getTranslationSegmentationMode(): SegmentationMode {
   const config = getSequentialTranslationConfig();
-  return config.segmentMode === "sentence" ? "sentence" : DEFAULT_SEGMENTATION_MODE;
+  return config.segmentMode === "sentence"
+    ? "sentence"
+    : DEFAULT_SEGMENTATION_MODE;
 }
 
 export function getTranslationPassCount(): number {

@@ -28,11 +28,16 @@ export interface ProjectMemoryCharacter {
   name: BilingualValue;
   role: string;
   voice?: string;
-  honorifics?: Record<'source' | 'target', string>;
+  honorifics?: Record<"source" | "target", string>;
   description?: string;
 }
 
-export type MemoryEntityType = 'place' | 'person' | 'org' | 'object' | 'concept';
+export type MemoryEntityType =
+  | "place"
+  | "person"
+  | "org"
+  | "object"
+  | "concept";
 
 export interface ProjectMemoryEntity {
   label: BilingualValue;
@@ -60,7 +65,7 @@ export interface ProjectMemoryLinguisticFeatures {
   target?: Record<string, string>;
 }
 
-export type RomanizationPolicy = 'as-is' | 'rr' | 'none' | string;
+export type RomanizationPolicy = "as-is" | "rr" | "none" | string;
 
 export interface ProjectMemory {
   style_profile: ProjectMemoryStyleProfile;
@@ -76,13 +81,13 @@ export interface ProjectMemory {
 }
 
 export type TranslationStage =
-  | 'literal'
-  | 'style'
-  | 'emotion'
-  | 'qa'
-  | 'draft'
-  | 'revise'
-  | 'micro-check';
+  | "literal"
+  | "style"
+  | "emotion"
+  | "qa"
+  | "draft"
+  | "revise"
+  | "micro-check";
 
 export interface EmotionBaseline {
   vector: number[];
@@ -101,7 +106,7 @@ export interface VividnessBaseline {
 
 export interface MetaphorBaselineItem {
   phrase: string;
-  type: 'image' | 'metaphor' | 'symbol-candidate';
+  type: "image" | "metaphor" | "symbol-candidate";
   connotations?: string[];
   salience?: number;
 }
@@ -152,7 +157,7 @@ export interface GuardFindingDetail {
   summary: string;
   segmentId?: string;
   score?: number;
-  severity?: 'info' | 'warn' | 'error';
+  severity?: "info" | "warn" | "error";
   details?: Record<string, unknown>;
 }
 
@@ -162,9 +167,9 @@ export interface SequentialTranslationTemps {
   emotion: number;
 }
 
-export type ResponseVerbosity = 'low' | 'medium' | 'high';
+export type ResponseVerbosity = "low" | "medium" | "high";
 
-export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+export type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 export interface SequentialStageLLMParameters {
   verbosity: ResponseVerbosity;
@@ -234,11 +239,11 @@ export interface SequentialTranslationTokenBudget {
 export interface ContextPolicyConfig {
   verbatimMax: number;
   summaryMax: number;
-  mode: 'hybrid' | 'deterministic' | 'llm';
+  mode: "hybrid" | "deterministic" | "llm";
 }
 
 export interface SequentialTranslationConfig {
-  translationMode: 'sequential';
+  translationMode: "sequential";
   sourceLang: LanguageCode;
   targetLang: LanguageCode;
   segmentMode: SegmentMode | string;
@@ -250,7 +255,7 @@ export interface SequentialTranslationConfig {
   register?: string;
   honorifics?: string;
   romanizationPolicy?: RomanizationPolicy;
-  creativeAutonomy?: 'none' | 'light' | 'moderate';
+  creativeAutonomy?: "none" | "light" | "moderate";
   mbr?: SequentialTranslationMBRConfig;
   pivots?: SequentialTranslationPivotConfig;
   weights?: SequentialTranslationWeights;

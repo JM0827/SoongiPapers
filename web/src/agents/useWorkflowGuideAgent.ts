@@ -117,7 +117,11 @@ export const useWorkflowGuideAgent = ({
 }: WorkflowGuideAgentOptions) => {
   const { locale } = useUILocale();
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
@@ -141,9 +145,7 @@ export const useWorkflowGuideAgent = ({
     historyGuideState?.translationSummaryShared ?? false;
 
   const guideStateCacheRef = useRef<Record<string, GuideState>>({});
-  const guideStateRef = useRef<GuideState>(
-    createGuideState(projectId ?? null),
-  );
+  const guideStateRef = useRef<GuideState>(createGuideState(projectId ?? null));
 
   const originAvailableFromContent = Boolean(
     content?.content?.origin?.content?.trim(),
@@ -231,16 +233,20 @@ export const useWorkflowGuideAgent = ({
       type: "collectMetadata",
       message: prompts.join(" "),
       badge: {
-        label: localize(
-          "workflow_badge_metadata_needed",
-          "Metadata needed",
-        ),
+        label: localize("workflow_badge_metadata_needed", "Metadata needed"),
         tone: "default",
       },
       autoStart: false,
       stage: "origin",
     });
-  }, [projectId, originAvailable, projectProfile, projectTitle, scheduleTask]);
+  }, [
+    projectId,
+    originAvailable,
+    projectProfile,
+    projectTitle,
+    scheduleTask,
+    localize,
+  ]);
 
   const scheduleTranslationPrompt = useCallback(() => {
     if (!projectId || !originAvailable) return;
@@ -282,7 +288,6 @@ export const useWorkflowGuideAgent = ({
     originAvailable,
     translationAvailable,
     translationState.status,
-    scheduleTask,
     scheduleTranslationPrompt,
   ]);
 
@@ -322,6 +327,7 @@ export const useWorkflowGuideAgent = ({
     originProfile,
     scheduleTask,
     scheduleTranslationPrompt,
+    localize,
   ]);
 
   const maybeHandleTranslationReady = useCallback(() => {
@@ -337,8 +343,12 @@ export const useWorkflowGuideAgent = ({
     guideStateRef.current.translationSummaryShared = false;
     guideStateRef.current.proofreadingReadyHandled = false;
     guideStateRef.current.workflowCompleted = false;
-
-  }, [projectId, translationAvailable, translationStage, translationState.projectId]);
+  }, [
+    projectId,
+    translationAvailable,
+    translationStage,
+    translationState.projectId,
+  ]);
 
   const maybeShareTranslationSummary = useCallback(() => {
     if (!historyReady) return;
@@ -375,6 +385,7 @@ export const useWorkflowGuideAgent = ({
     translationProfile,
     translationState.projectId,
     scheduleTask,
+    localize,
   ]);
 
   const maybeHandleProofreadReady = useCallback(() => {
@@ -391,8 +402,12 @@ export const useWorkflowGuideAgent = ({
 
     guideStateRef.current.proofreadingReadyHandled = true;
     guideStateRef.current.workflowCompleted = false;
-
-  }, [projectId, proofreadingState.projectId, proofreadingState.status, proofreadingStage]);
+  }, [
+    projectId,
+    proofreadingState.projectId,
+    proofreadingState.status,
+    proofreadingStage,
+  ]);
 
   const maybeHandleQualityReady = useCallback(() => {
     if (!projectId) return;
@@ -408,10 +423,7 @@ export const useWorkflowGuideAgent = ({
       message:
         "품질 검토까지 완료했습니다. 필요하시면 전자책 내보내기나 추가 교정을 요청해 주세요!",
       badge: {
-        label: localize(
-          "workflow_badge_complete",
-          "Workflow complete",
-        ),
+        label: localize("workflow_badge_complete", "Workflow complete"),
         tone: "success",
       },
       autoStart: false,
@@ -426,6 +438,7 @@ export const useWorkflowGuideAgent = ({
     qualityState.status,
     qualityStage,
     scheduleTask,
+    localize,
   ]);
 
   useEffect(() => {
@@ -491,8 +504,8 @@ export const useWorkflowGuideAgent = ({
         default:
           break;
       }
-    },
-    [projectId, scheduleTask],
+  },
+    [projectId, scheduleTask, localize],
   );
 
   return { handleIntent };

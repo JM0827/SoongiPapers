@@ -14,7 +14,16 @@ const QualityAssessmentSchema = new Schema(
       enum: ["auto", "manual"],
       default: "auto",
     },
-    modelUsed: { type: String, default: process.env.QUALITY_MODEL || process.env.LITERARY_QA_MODEL || process.env.TRANSLATION_DRAFT_MODEL_V2 || process.env.TRANSLATION_DRAFT_MODEL || process.env.CHAT_MODEL || "gpt-4o" },
+    modelUsed: {
+      type: String,
+      default:
+        process.env.QUALITY_MODEL ||
+        process.env.LITERARY_QA_MODEL ||
+        process.env.TRANSLATION_DRAFT_MODEL_V2 ||
+        process.env.TRANSLATION_DRAFT_MODEL ||
+        process.env.CHAT_MODEL ||
+        "gpt-4o",
+    },
     userId: { type: String, required: true, index: true },
   },
   {

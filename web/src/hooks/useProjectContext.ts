@@ -163,7 +163,9 @@ const buildSnapshot = (params: {
   const originTimelineState = (() => {
     const filenameNote = originMeta?.filename ?? undefined;
     const analysisUpdatedAt =
-      originPrep?.analysis.updatedAt ?? originPrep?.analysis.job?.updatedAt ?? null;
+      originPrep?.analysis.updatedAt ??
+      originPrep?.analysis.job?.updatedAt ??
+      null;
     const notesUpdatedAt = originPrep?.notes.updatedAt ?? null;
 
     if (!originPrep) {

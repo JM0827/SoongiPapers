@@ -1,15 +1,18 @@
-import type { OpenAI } from 'openai';
-import type { ResponseCreateParamsNonStreaming } from 'openai/resources/responses/responses';
+import type { OpenAI } from "openai";
+import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
 
-import { runResponsesWithRetry } from './openaiResponses';
+import {
+  runResponsesWithRetry,
+  type ResponsesRetryAttemptContext,
+} from "./openaiResponses";
 import {
   type ResponseReasoningEffort,
   type ResponseVerbosity,
-} from './responsesConfig';
-import { safeExtractOpenAIResponse } from './llm';
+} from "./responsesConfig";
+import { safeExtractOpenAIResponse } from "./llm";
 
 export type ResponsesInputMessage = {
-  role: 'system' | 'user' | 'assistant';
+  role: "system" | "user" | "assistant";
   content: string;
 };
 
@@ -20,10 +23,10 @@ export type JsonSchemaEnvelope = {
 
 export const toResponsesInput = (
   messages: ResponsesInputMessage[],
-): ResponseCreateParamsNonStreaming['input'] =>
+): ResponseCreateParamsNonStreaming["input"] =>
   messages.map((message) => ({
     role: message.role,
-    content: [{ type: 'input_text', text: message.content }],
+    content: [{ type: "input_text", text: message.content }],
   }));
 
 export interface JsonSchemaResponseOptions<TParsed> {
@@ -51,6 +54,7 @@ export interface JsonSchemaResponseResult<TParsed> {
   attempts: number;
   truncated: boolean;
   maxOutputTokens: number;
+  attemptHistory: ResponsesRetryAttemptContext[];
 }
 
 export const runJsonSchemaResponse = async <TParsed>(
@@ -82,7 +86,7 @@ export const runJsonSchemaResponse = async <TParsed>(
         text: {
           verbosity,
           format: {
-            type: 'json_schema',
+            type: "json_schema",
             name: schema.name,
             schema: schema.schema,
             strict: true,
@@ -95,7 +99,7 @@ export const runJsonSchemaResponse = async <TParsed>(
 
   const extracted = safeExtractOpenAIResponse(runResult.response);
   if (!extracted.parsedJson) {
-    throw new Error('OpenAI Responses payload missing parsed JSON');
+    throw new Error("OpenAI Responses payload missing parsed JSON");
   }
 
   return {
@@ -106,5 +110,6 @@ export const runJsonSchemaResponse = async <TParsed>(
     attempts: runResult.attempts,
     truncated: runResult.truncated,
     maxOutputTokens: runResult.maxOutputTokens,
+    attemptHistory: runResult.attemptHistory,
   } satisfies JsonSchemaResponseResult<TParsed>;
 };

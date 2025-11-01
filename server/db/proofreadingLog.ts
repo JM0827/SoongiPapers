@@ -1,6 +1,9 @@
 import { randomUUID } from "crypto";
 import { query } from "../db";
-import { recordProofreadLog, listProofreadLogsFromMemory } from "../services/proofreadTelemetry";
+import {
+  recordProofreadLog,
+  listProofreadLogsFromMemory,
+} from "../services/proofreadTelemetry";
 
 export type ProofreadingLogSeverity = "info" | "warn" | "error";
 
@@ -197,7 +200,7 @@ export async function listProofreadingLogs(config: {
     const { rows } = await query(queryText, params);
     if (rows.length) return rows as ProofreadingLogEntry[];
   } catch (error) {
-    console.error('[proofreading] failed to fetch logs from db', error);
+    console.error("[proofreading] failed to fetch logs from db", error);
   }
 
   return listProofreadLogsFromMemory(config);

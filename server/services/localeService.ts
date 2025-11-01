@@ -72,9 +72,7 @@ const normalizeLocale = (value?: string | null): UILocale | null => {
 export const isSupportedLocale = (value?: string | null): value is UILocale =>
   Boolean(normalizeLocale(value));
 
-export const detectLocaleFromMessage = (
-  text?: string | null,
-): UILocale => {
+export const detectLocaleFromMessage = (text?: string | null): UILocale => {
   if (!text || !text.trim()) {
     return DEFAULT_LOCALE;
   }

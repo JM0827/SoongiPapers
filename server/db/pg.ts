@@ -10,12 +10,20 @@ const pool = new Pool({
 
 const TABLE_MISSING_CODE = "42P01";
 
+type PgError = Error & { code?: string };
+
+const isPgError = (error: unknown): error is PgError =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  typeof (error as { code?: unknown }).code === "string";
+
 async function safeQuery(sql: string, params: any[], context: string) {
   try {
     await pool.query(sql, params);
     return true;
-  } catch (error: any) {
-    if (error?.code === TABLE_MISSING_CODE) {
+  } catch (error) {
+    if (isPgError(error) && error.code === TABLE_MISSING_CODE) {
       console.warn(`[Proofreading][PG] Skipping ${context}: ${error.message}`);
       return false;
     }

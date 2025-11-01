@@ -2,24 +2,12 @@ import {
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-} from 'react';
+} from "react";
 
-export const INTERACTIVE_SELECTOR =
-  'button, a, input, textarea, select, label, [data-collapsible-ignore]';
-
-export const isEventFromInteractive = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  Boolean(target.closest(INTERACTIVE_SELECTOR));
-
-export const handleKeyboardToggle = <T extends HTMLElement>(
-  event: ReactKeyboardEvent<T>,
-  toggle: () => void,
-) => {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    toggle();
-  }
-};
+import {
+  handleKeyboardToggle,
+  isEventFromInteractive,
+} from "./collapsibleUtils";
 
 export interface CollapsibleProps {
   title: string;
@@ -59,8 +47,8 @@ export const Collapsible = ({
   };
 
   const bodyClassName = showDivider
-    ? 'mt-4 border-t border-slate-200 pt-4'
-    : 'mt-0 pt-0';
+    ? "mt-4 border-t border-slate-200 pt-4"
+    : "mt-0 pt-0";
 
   return (
     <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
@@ -91,11 +79,11 @@ export const Collapsible = ({
           aria-label={isOpen ? `${title} 접기` : `${title} 펼치기`}
           data-collapsible-ignore
         >
-          {isOpen ? '˄' : '˅'}
+          {isOpen ? "˄" : "˅"}
         </button>
       </header>
       {keepMounted ? (
-        <div className={isOpen ? bodyClassName : 'hidden'}>{children}</div>
+        <div className={isOpen ? bodyClassName : "hidden"}>{children}</div>
       ) : (
         isOpen && <div className={bodyClassName}>{children}</div>
       )}

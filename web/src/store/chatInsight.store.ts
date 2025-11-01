@@ -54,8 +54,7 @@ interface ChatInsightState {
 
 export const useChatInsightStore = create<ChatInsightState>((set) => ({
   queue: [],
-  enqueue: (insight) =>
-    set((state) => ({ queue: [...state.queue, insight] })),
+  enqueue: (insight) => set((state) => ({ queue: [...state.queue, insight] })),
   upsertProofSummary: (insight) =>
     set((state) => {
       const key = insight.proofreadingId ?? "global";

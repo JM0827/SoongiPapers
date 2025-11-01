@@ -73,8 +73,8 @@ export const SidebarQuickActions = ({
         setToast({
           id,
           message: localize(
-            'sidebar_quick_toast_processing',
-            '{{label}} request is being processed.',
+            "sidebar_quick_toast_processing",
+            "{{label}} request is being processed.",
             { label: action.label },
           ),
         });
@@ -83,8 +83,8 @@ export const SidebarQuickActions = ({
           error instanceof Error
             ? error.message
             : localize(
-                'sidebar_quick_error_generic',
-                'Unable to complete {{label}}.',
+                "sidebar_quick_error_generic",
+                "Unable to complete {{label}}.",
                 { label: action.label },
               );
         setToast({ id, message });
@@ -103,10 +103,10 @@ export const SidebarQuickActions = ({
 
   return (
     <SidebarSection
-      title={localize('sidebar_quick_title', 'Quick actions')}
+      title={localize("sidebar_quick_title", "Quick actions")}
       subtitle={localize(
-        'sidebar_quick_subtitle',
-        'Launch essential workflows instantly.',
+        "sidebar_quick_subtitle",
+        "Launch essential workflows instantly.",
       )}
       isOpen={isOpen}
       onToggle={onToggle}
@@ -114,16 +114,19 @@ export const SidebarQuickActions = ({
       <div className="grid grid-cols-3 gap-1.5">
         {actions.map((action) => {
           const busy = isBusy(action.key);
-          const effectiveStatus = busy ? "running" : action.status ?? "default";
-          const statusDescription = describeStatus(action.label, effectiveStatus);
+          const effectiveStatus = busy
+            ? "running"
+            : (action.status ?? "default");
+          const statusDescription = describeStatus(
+            action.label,
+            effectiveStatus,
+          );
           const tooltipId = action.tooltip
             ? `${baseId}-${action.key}-tooltip`
             : undefined;
           const statusId = `${baseId}-${action.key}-status`;
-          const describedBy = [statusId, tooltipId]
-            .filter(Boolean)
-            .join(" ")
-            .trim() || undefined;
+          const describedBy =
+            [statusId, tooltipId].filter(Boolean).join(" ").trim() || undefined;
 
           return (
             <button
@@ -199,8 +202,11 @@ export const SidebarQuickActions = ({
               })()}
               <span className="leading-tight">{action.label}</span>
               {busy ? (
-                <span className="text-[10px] text-indigo-500" aria-hidden="true">
-                  {localize('sidebar_quick_running_label', 'In progress…')}
+                <span
+                  className="text-[10px] text-indigo-500"
+                  aria-hidden="true"
+                >
+                  {localize("sidebar_quick_running_label", "In progress…")}
                 </span>
               ) : null}
             </button>

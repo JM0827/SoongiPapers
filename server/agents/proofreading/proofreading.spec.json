@@ -5,8 +5,9 @@
     "aligner": "embeddings",
     "maxWorkers": 6,
     "maxCharsPerChunk": 2400,
-    "quickChunkSize": 3,
-    "deepChunkSize": 3
+    "quickChunkSize": 2,
+    "deepChunkSize": 3,
+    "debugLogging": true
   },
   "groups": [
     {

@@ -208,8 +208,10 @@ async function handle<T>(res: Response): Promise<T> {
 
     let message = res.statusText;
     if (payload && typeof payload === "object") {
-      const errorValue = (payload as { error?: unknown; message?: unknown }).error;
-      const messageValue = (payload as { error?: unknown; message?: unknown }).message;
+      const errorValue = (payload as { error?: unknown; message?: unknown })
+        .error;
+      const messageValue = (payload as { error?: unknown; message?: unknown })
+        .message;
       if (typeof errorValue === "string" && errorValue.trim()) {
         message = errorValue.trim();
       } else if (typeof messageValue === "string" && messageValue.trim()) {
@@ -323,8 +325,7 @@ const normalizeJob = (job: unknown): JobSummary => {
                 : draft.error === null
                   ? null
                   : undefined,
-            model:
-              typeof draft.model === "string" ? draft.model : null,
+            model: typeof draft.model === "string" ? draft.model : null,
             temperature: Number.isFinite(draft.temperature)
               ? Number(draft.temperature)
               : null,
@@ -347,9 +348,7 @@ const normalizeJob = (job: unknown): JobSummary => {
 
   const finalTranslation = isRecord(job.finalTranslation)
     ? {
-        id: job.finalTranslation.id
-          ? String(job.finalTranslation.id)
-          : "",
+        id: job.finalTranslation.id ? String(job.finalTranslation.id) : "",
         projectId: job.finalTranslation.project_id
           ? String(job.finalTranslation.project_id)
           : job.finalTranslation.projectId
@@ -421,16 +420,20 @@ const normalizeJob = (job: unknown): JobSummary => {
           return acc;
         }
 
-        const guardFindingsRaw: unknown[] = Array.isArray(segment.guardFindings)
-          ? segment.guardFindings
-          : Array.isArray((segment as any).guard_findings)
-            ? (segment as any).guard_findings
+        const segmentRecord = segment as Record<string, unknown>;
+        const guardFindingsRaw: unknown[] = Array.isArray(
+          segmentRecord.guardFindings,
+        )
+          ? (segmentRecord.guardFindings as unknown[])
+          : Array.isArray(segmentRecord.guard_findings)
+            ? (segmentRecord.guard_findings as unknown[])
             : [];
 
         const guardFindings: GuardFinding[] = guardFindingsRaw
           .map((finding): GuardFinding | null => {
             if (!isRecord(finding)) return null;
-            const summary = typeof finding.summary === "string" ? finding.summary : null;
+            const summary =
+              typeof finding.summary === "string" ? finding.summary : null;
             if (!summary) return null;
             const normalized: GuardFinding = {
               type: typeof finding.type === "string" ? finding.type : "unknown",
@@ -452,21 +455,21 @@ const normalizeJob = (job: unknown): JobSummary => {
           })
           .filter((value): value is GuardFinding => Boolean(value));
 
-        const segmentId = typeof segment.segmentId === "string"
-          ? segment.segmentId
-          : typeof (segment as any).segment_id === "string"
-            ? (segment as any).segment_id
-            : "";
+        const segmentIdSource = segmentRecord.segmentId ?? segmentRecord.segment_id;
+        const segmentId =
+          typeof segmentIdSource === "string" ? segmentIdSource : "";
         if (!segmentId) {
           return acc;
         }
 
-        const guards = isRecord(segment.guards)
-          ? (segment.guards as Record<string, unknown>)
+        const guards = isRecord(segmentRecord.guards)
+          ? (segmentRecord.guards as Record<string, unknown>)
           : null;
 
         acc.push({
-          segmentIndex: Number(segment.segmentIndex ?? segment.segment_index ?? 0),
+          segmentIndex: Number(
+            segmentRecord.segmentIndex ?? segmentRecord.segment_index ?? 0,
+          ),
           segmentId,
           guards,
           guardFindings,
@@ -1002,7 +1005,11 @@ export const api = {
       proofreadingId: String(entry.proofreading_id ?? ""),
       runId: String(entry.run_id ?? ""),
       tier:
-        entry.tier === "deep" ? "deep" : (entry.tier === "quick" ? "quick" : "quick"),
+        entry.tier === "deep"
+          ? "deep"
+          : entry.tier === "quick"
+            ? "quick"
+            : "quick",
       subfeatureKey: String(entry.subfeature_key ?? ""),
       subfeatureLabel: String(entry.subfeature_label ?? ""),
       chunkIndex: Number(entry.chunk_index ?? 0),
@@ -1017,7 +1024,8 @@ export const api = {
           ? null
           : Number(entry.memory_version),
       usagePromptTokens:
-        entry.usage_prompt_tokens === null || entry.usage_prompt_tokens === undefined
+        entry.usage_prompt_tokens === null ||
+        entry.usage_prompt_tokens === undefined
           ? null
           : Number(entry.usage_prompt_tokens),
       usageCompletionTokens:
@@ -1026,7 +1034,8 @@ export const api = {
           ? null
           : Number(entry.usage_completion_tokens),
       usageTotalTokens:
-        entry.usage_total_tokens === null || entry.usage_total_tokens === undefined
+        entry.usage_total_tokens === null ||
+        entry.usage_total_tokens === undefined
           ? null
           : Number(entry.usage_total_tokens),
       verbosity: String(entry.verbosity ?? ""),
@@ -1100,7 +1109,8 @@ export const api = {
       truncated: Boolean(entry.truncated),
       fallbackModelUsed: Boolean(entry.fallbackModelUsed),
       usageInputTokens:
-        entry.usage?.inputTokens === null || entry.usage?.inputTokens === undefined
+        entry.usage?.inputTokens === null ||
+        entry.usage?.inputTokens === undefined
           ? null
           : Number(entry.usage.inputTokens),
       usageOutputTokens:
@@ -1451,14 +1461,16 @@ export const api = {
     options: { projectId?: string; status?: string; limit?: number } = {},
   ): Promise<JobSummary[]> {
     const params = new URLSearchParams();
-    if (options.projectId) params.set('projectId', options.projectId);
-    if (options.status) params.set('status', options.status);
+    if (options.projectId) params.set("projectId", options.projectId);
+    if (options.status) params.set("status", options.status);
     if (options.limit !== undefined) {
-      params.set('limit', String(options.limit));
+      params.set("limit", String(options.limit));
     }
 
     const search = params.toString();
-    const url = search ? `${API_BASE}/api/jobs?${search}` : `${API_BASE}/api/jobs`;
+    const url = search
+      ? `${API_BASE}/api/jobs?${search}`
+      : `${API_BASE}/api/jobs`;
 
     const res = await fetch(url, {
       headers: defaultHeaders(token),
@@ -1639,7 +1651,11 @@ export const api = {
   async cancelTranslation(
     token: string,
     projectId: string,
-    payload: { jobId?: string | null; workflowRunId?: string | null; reason?: string | null },
+    payload: {
+      jobId?: string | null;
+      workflowRunId?: string | null;
+      reason?: string | null;
+    },
   ) {
     const res = await fetch(
       `${API_BASE}/api/projects/${projectId}/translation/cancel`,
@@ -1705,12 +1721,14 @@ export const api = {
       if (handlers.signal.aborted) {
         controller.abort();
       } else {
-        handlers.signal.addEventListener('abort', abortViaSignal, { once: true });
+        handlers.signal.addEventListener("abort", abortViaSignal, {
+          once: true,
+        });
       }
     }
 
     const res = await fetch(`${API_BASE}/api/chat`, {
-      method: 'POST',
+      method: "POST",
       headers: defaultHeaders(token),
       body: JSON.stringify({ ...payload, stream: true }),
       signal: controller.signal,
@@ -1718,17 +1736,17 @@ export const api = {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || 'Failed to stream chat');
+      throw new Error(text || "Failed to stream chat");
     }
 
     const body = res.body;
     if (!body) {
-      throw new Error('Streaming body is not supported in this environment');
+      throw new Error("Streaming body is not supported in this environment");
     }
 
     const reader = body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer = "";
     let completed = false;
 
     try {
@@ -1737,44 +1755,44 @@ export const api = {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let newlineIndex: number;
-        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
           const line = buffer.slice(0, newlineIndex);
           buffer = buffer.slice(newlineIndex + 1);
           const trimmed = line.trim();
           if (!trimmed) continue;
-          if (trimmed.startsWith(':')) continue;
-          if (!trimmed.startsWith('data:')) continue;
+          if (trimmed.startsWith(":")) continue;
+          if (!trimmed.startsWith("data:")) continue;
           const payloadText = trimmed.slice(5).trim();
           if (!payloadText) continue;
           try {
             const event = JSON.parse(payloadText) as ChatStreamEvent;
             switch (event.type) {
-              case 'chat.delta': {
-                if (typeof event.text === 'string') {
+              case "chat.delta": {
+                if (typeof event.text === "string") {
                   handlers.onDelta?.(event.text);
                 }
                 break;
               }
-              case 'chat.complete': {
+              case "chat.complete": {
                 completed = true;
                 handlers.onComplete?.(event);
                 break;
               }
-              case 'chat.error': {
+              case "chat.error": {
                 const message =
-                  typeof event.message === 'string'
+                  typeof event.message === "string"
                     ? event.message
-                    : 'Chat stream error';
+                    : "Chat stream error";
                 handlers.onError?.(message);
                 throw new Error(message);
               }
-              case 'chat.end':
+              case "chat.end":
                 break;
               default:
                 break;
             }
           } catch (err) {
-            console.warn('[api] failed to parse chat stream event', err);
+            console.warn("[api] failed to parse chat stream event", err);
           }
         }
       }
@@ -1783,7 +1801,7 @@ export const api = {
     }
 
     if (!completed) {
-      throw new Error('Chat stream ended without completion event');
+      throw new Error("Chat stream ended without completion event");
     }
   },
 
@@ -1842,26 +1860,18 @@ export const api = {
     }
     if (!res.body) return;
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newlineIndex;
-      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (!line) continue;
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          onEvent?.(event);
-        } catch (err) {
-          console.warn("[api] failed to parse proofreading event", err);
-        }
-      }
-    }
+    await streamNdjson<Record<string, unknown>>(
+      res,
+      (event) => {
+        onEvent?.(event);
+      },
+      (error, payload) => {
+        console.warn("[api] failed to parse proofreading event", {
+          error,
+          payload,
+        });
+      },
+    );
   },
 
   async applyProofreading(
@@ -1911,8 +1921,13 @@ export const api = {
     jobId?: string | null;
     translationFileId?: string | null;
   }): Promise<TranslationStageDraftResponse> {
-    const { token, projectId, stage, jobId = null, translationFileId = null } =
-      config;
+    const {
+      token,
+      projectId,
+      stage,
+      jobId = null,
+      translationFileId = null,
+    } = config;
     const search = new URLSearchParams({ stage });
     if (jobId) search.set("jobId", jobId);
     if (translationFileId) search.set("translationFileId", translationFileId);
@@ -1933,8 +1948,13 @@ export const api = {
     payload: ProofreadEditorPatchPayload;
   }): Promise<ProofreadEditorPatchResponse> {
     const { token, projectId, payload } = config;
-    const { translationFileId, documentVersion, segments, jobId, clientMutationId } =
-      payload;
+    const {
+      translationFileId,
+      documentVersion,
+      segments,
+      jobId,
+      clientMutationId,
+    } = payload;
     const bodyPayload = {
       translationFileId,
       documentVersion,
@@ -2002,7 +2022,9 @@ export const api = {
         }
         const body = res.body;
         if (!body) {
-          throw new Error("Streaming body is not supported in this environment");
+          throw new Error(
+            "Streaming body is not supported in this environment",
+          );
         }
         const reader = body.getReader();
         const decoder = new TextDecoder();
@@ -2019,7 +2041,7 @@ export const api = {
             if (!trimmed) {
               continue;
             }
-            if (trimmed.startsWith(':')) {
+            if (trimmed.startsWith(":")) {
               continue;
             }
             if (trimmed.startsWith("data:")) {
@@ -2135,7 +2157,9 @@ export const api = {
     } catch (err) {
       if (!streamError) {
         streamError =
-          err instanceof Error ? err : new Error(String(err ?? "Unknown error"));
+          err instanceof Error
+            ? err
+            : new Error(String(err ?? "Unknown error"));
       }
     }
 

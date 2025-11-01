@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
-import type { ChatAction } from '../types/domain';
+import { useCallback, useRef, useState } from "react";
+import type { ChatAction } from "../types/domain";
 
-export type ChatMessageTone = 'default' | 'success' | 'error';
-export type ChatMessageRole = 'assistant' | 'user' | 'system';
+export type ChatMessageTone = "default" | "success" | "error";
+export type ChatMessageRole = "assistant" | "user" | "system";
 
 export interface ChatMessageBadge {
   label: string;
@@ -33,17 +33,14 @@ interface AppendOptions {
 }
 
 export interface HistoryMessage
-  extends Omit<ChatMessage, 'optimistic' | 'clientId' | 'serverId'> {
+  extends Omit<ChatMessage, "optimistic" | "clientId" | "serverId"> {
   id: string;
   serverId?: string | null;
   createdAt?: string | null;
 }
 
 const normalizeText = (value: string) =>
-  value
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
+  value.trim().replace(/\s+/g, " ").toLowerCase();
 
 export const useChatMessages = () => {
   const orderRef = useRef<number>(0);
@@ -103,9 +100,9 @@ export const useChatMessages = () => {
           ...message,
           actions: message.actions ?? [],
           optimistic,
-          serverId: serverId ?? (optimistic ? null : message.serverId ?? null),
-          clientId:
-            message.clientId ?? (optimistic ? message.id : undefined),
+          serverId:
+            serverId ?? (optimistic ? null : (message.serverId ?? null)),
+          clientId: message.clientId ?? (optimistic ? message.id : undefined),
           createdAt,
           order: nextOrder(createdAt),
         };
@@ -134,19 +131,16 @@ export const useChatMessages = () => {
             }
             const actions = Object.prototype.hasOwnProperty.call(
               updated,
-              'actions',
+              "actions",
             )
               ? updated.actions
               : record.actions;
-            const badge = Object.prototype.hasOwnProperty.call(
-              updated,
-              'badge',
-            )
+            const badge = Object.prototype.hasOwnProperty.call(updated, "badge")
               ? updated.badge
               : record.badge;
             const optimistic = Object.prototype.hasOwnProperty.call(
               updated,
-              'optimistic',
+              "optimistic",
             )
               ? updated.optimistic
               : record.optimistic;
@@ -157,8 +151,8 @@ export const useChatMessages = () => {
               id: updated.id ?? record.id,
               clientId: updated.clientId ?? record.clientId,
               serverId:
-                typeof updated.serverId === 'undefined'
-                  ? record.serverId ?? null
+                typeof updated.serverId === "undefined"
+                  ? (record.serverId ?? null)
                   : updated.serverId,
               optimistic,
               createdAt: updated.createdAt ?? record.createdAt ?? null,
@@ -184,8 +178,12 @@ export const useChatMessages = () => {
       if (!historyMessages.length) return;
 
       const orderedHistory = [...historyMessages].sort((a, b) => {
-        const aTs = a.createdAt ? Date.parse(a.createdAt) : Number.POSITIVE_INFINITY;
-        const bTs = b.createdAt ? Date.parse(b.createdAt) : Number.POSITIVE_INFINITY;
+        const aTs = a.createdAt
+          ? Date.parse(a.createdAt)
+          : Number.POSITIVE_INFINITY;
+        const bTs = b.createdAt
+          ? Date.parse(b.createdAt)
+          : Number.POSITIVE_INFINITY;
         return aTs - bTs;
       });
 

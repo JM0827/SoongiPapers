@@ -78,7 +78,10 @@ const renderInlineNodes = (
         );
       } else {
         elements.push(
-          <span key={`${keyPrefix}-action-${tokenIndex}`} className="font-medium">
+          <span
+            key={`${keyPrefix}-action-${tokenIndex}`}
+            className="font-medium"
+          >
             {linkLabel}
           </span>,
         );

@@ -212,7 +212,8 @@ const IssueCard = ({
     typeof issue.confidence === "number" || Boolean(issue.tags?.length);
   const guardFindings = Array.isArray(issue.notes?.guardFindings)
     ? issue.notes!.guardFindings.filter(
-        (finding) => typeof finding?.summary === "string" && finding.summary.length > 0,
+        (finding) =>
+          typeof finding?.summary === "string" && finding.summary.length > 0,
       )
     : [];
 
@@ -269,7 +270,8 @@ const IssueCard = ({
           {issue.guardStatusLabel && (
             <span
               className={
-                guardStatusClasses[issue.guardStatus ?? "default"] ?? guardStatusClasses.default
+                guardStatusClasses[issue.guardStatus ?? "default"] ??
+                guardStatusClasses.default
               }
             >
               {issue.guardStatusLabel}
@@ -309,12 +311,13 @@ const IssueCard = ({
       {guardFindings.length > 0 && (
         <div className="mt-2 space-y-1 text-[11px]">
           <p className="font-medium text-amber-700">
-            QA 단계 가드가 아래 항목을 점검했습니다. 검토 후 적용 여부를 결정해 주세요.
+            QA 단계 가드가 아래 항목을 점검했습니다. 검토 후 적용 여부를 결정해
+            주세요.
           </p>
           <div className="flex flex-wrap gap-2">
             {guardFindings.map((finding, index) => {
               const tone = finding.severity
-                ? guardBadgeTone[finding.severity] ?? guardBadgeTone.default
+                ? (guardBadgeTone[finding.severity] ?? guardBadgeTone.default)
                 : guardBadgeTone.default;
               return (
                 <span
@@ -376,64 +379,70 @@ const IssueCard = ({
               <p className="mt-1 whitespace-pre-wrap text-slate-700">
                 {issue.recommendation_en}
               </p>
+            </div>
           </div>
-        </div>
 
-        {Array.isArray(issue.evidence) && issue.evidence.length > 0 && (
-          <div className="mt-3 space-y-2 text-xs">
-            <h4 className="font-semibold uppercase text-slate-500">Evidence</h4>
-            <ul className="space-y-1">
-              {issue.evidence.map((entry, idx) => (
-                <li
-                  key={`${issue.id}-evidence-${idx}`}
-                  className="rounded border border-slate-100 bg-slate-50 p-2 text-slate-700"
-                >
-                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500">
-                    <span>{evidenceReferenceLabel(entry.reference)}</span>
-                    {entry.note && <span className="font-normal text-slate-400">{entry.note}</span>}
-                  </div>
-                  <p className="mt-1 whitespace-pre-wrap">{entry.quote}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          {Array.isArray(issue.evidence) && issue.evidence.length > 0 && (
+            <div className="mt-3 space-y-2 text-xs">
+              <h4 className="font-semibold uppercase text-slate-500">
+                Evidence
+              </h4>
+              <ul className="space-y-1">
+                {issue.evidence.map((entry, idx) => (
+                  <li
+                    key={`${issue.id}-evidence-${idx}`}
+                    className="rounded border border-slate-100 bg-slate-50 p-2 text-slate-700"
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                      <span>{evidenceReferenceLabel(entry.reference)}</span>
+                      {entry.note && (
+                        <span className="font-normal text-slate-400">
+                          {entry.note}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap">{entry.quote}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-        {sourceText && (
-          <div className="mt-2 text-xs">
-            <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-              Origin
-          </h4>
-          <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
-            {sourceText}
-          </p>
-        </div>
-      )}
-
-      {(translationText || issue.after) && (
-        <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
-          {translationText && (
-            <div>
+          {sourceText && (
+            <div className="mt-2 text-xs">
               <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-                Current Translation
+                Origin
               </h4>
               <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
-                {translationText}
+                {sourceText}
               </p>
             </div>
           )}
-          {issue.after && (
-            <div>
-              <h4 className="text-[11px] font-semibold uppercase text-slate-500">
-                After
-              </h4>
-              <p className="mt-1 whitespace-pre-wrap rounded border border-emerald-100 bg-emerald-50 p-2 text-slate-700">
-                {issue.after}
-              </p>
+
+          {(translationText || issue.after) && (
+            <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
+              {translationText && (
+                <div>
+                  <h4 className="text-[11px] font-semibold uppercase text-slate-500">
+                    Current Translation
+                  </h4>
+                  <p className="mt-1 whitespace-pre-wrap rounded border border-slate-100 bg-slate-50 p-2 text-slate-700">
+                    {translationText}
+                  </p>
+                </div>
+              )}
+              {issue.after && (
+                <div>
+                  <h4 className="text-[11px] font-semibold uppercase text-slate-500">
+                    After
+                  </h4>
+                  <p className="mt-1 whitespace-pre-wrap rounded border border-emerald-100 bg-emerald-50 p-2 text-slate-700">
+                    {issue.after}
+                  </p>
+                </div>
+              )}
             </div>
           )}
-        </div>
-      )}
 
           <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
             <div>
@@ -576,7 +585,12 @@ export const ProofList = ({ agentState }: ProofListProps) => {
 
   useEffect(() => {
     setCollapsedIssueIds(new Set(proofread?.appliedIssueIds ?? []));
-  }, [proofread?.id, proofread?.timestamp, proofread?.appliedIssueIds, appliedKey]);
+  }, [
+    proofread?.id,
+    proofread?.timestamp,
+    proofread?.appliedIssueIds,
+    appliedKey,
+  ]);
 
   const proofStage = providerStage ?? null;
   const rawStage = proofread?.stage ?? proofStage ?? "none";
@@ -586,16 +600,21 @@ export const ProofList = ({ agentState }: ProofListProps) => {
   const normalizedStage = (rawStage ?? "none").toLowerCase();
   const tierSummaries = agentState?.tierSummaries ?? {};
   const completionSummary = agentState?.completionSummary ?? null;
-  const heartbeatSource = agentState?.lastHeartbeatAt ?? proofread?.timestamp ?? null;
+  const heartbeatSource =
+    agentState?.lastHeartbeatAt ?? proofread?.timestamp ?? null;
   const heartbeatRelative = formatRelativeTime(heartbeatSource);
-  const heartbeatExact = heartbeatSource ? formatDateTime(heartbeatSource) : "기록 없음";
+  const heartbeatExact = heartbeatSource
+    ? formatDateTime(heartbeatSource)
+    : "기록 없음";
   const isStalled = agentState?.isStalled ?? false;
   const deepTierSummary = tierSummaries?.deep ?? undefined;
   const hasDeepResults = Boolean(deepTierSummary);
   const deepInProgress = inflightStages.some(
     (entry) =>
       (entry.tier ?? "") === "deep" &&
-      !String(entry.status ?? "").toLowerCase().includes("done"),
+      !String(entry.status ?? "")
+        .toLowerCase()
+        .includes("done"),
   );
 
   const handleRunDeep = useCallback(async () => {
@@ -648,8 +667,11 @@ export const ProofList = ({ agentState }: ProofListProps) => {
     () =>
       completionSummary
         ? Object.entries(completionSummary.countsBySubfeature ?? {})
-            .filter(([, value]) =>
-              typeof value === "number" && Number.isFinite(value) && value > 0,
+            .filter(
+              ([, value]) =>
+                typeof value === "number" &&
+                Number.isFinite(value) &&
+                value > 0,
             )
             .sort((a, b) => b[1] - a[1])
             .slice(0, 4)
@@ -922,7 +944,8 @@ export const ProofList = ({ agentState }: ProofListProps) => {
                       {tier}
                     </span>
                     <span>
-                      {info.itemCount}건 · {formatRelativeTime(info.completedAt)} 완료
+                      {info.itemCount}건 ·{" "}
+                      {formatRelativeTime(info.completedAt)} 완료
                     </span>
                   </span>
                 ))}
@@ -930,11 +953,18 @@ export const ProofList = ({ agentState }: ProofListProps) => {
             )}
             {completionSummary && completionTopSubfeatures.length > 0 && (
               <div className="mt-3 rounded border border-slate-200 bg-white p-3 text-[11px] text-slate-600">
-                <p className="font-semibold text-slate-500">주요 서브피처 이슈</p>
+                <p className="font-semibold text-slate-500">
+                  주요 서브피처 이슈
+                </p>
                 <ul className="mt-1 space-y-1">
                   {completionTopSubfeatures.map(([subfeature, count]) => (
-                    <li key={subfeature} className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-slate-700">{subfeature}</span>
+                    <li
+                      key={subfeature}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span className="font-medium text-slate-700">
+                        {subfeature}
+                      </span>
                       <span>{count}건</span>
                     </li>
                   ))}
@@ -943,7 +973,8 @@ export const ProofList = ({ agentState }: ProofListProps) => {
             )}
             {isStalled && (
               <p className="mt-3 rounded border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700">
-                ⚠️ 최근 2분 동안 교정 이벤트가 수신되지 않았습니다. 작업이 중단된 것 같다면 다시 요청하거나 관리자에게 문의해 주세요.
+                ⚠️ 최근 2분 동안 교정 이벤트가 수신되지 않았습니다. 작업이
+                중단된 것 같다면 다시 요청하거나 관리자에게 문의해 주세요.
               </p>
             )}
             <p className={summaryMetaClass}>
@@ -969,7 +1000,8 @@ export const ProofList = ({ agentState }: ProofListProps) => {
       <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
         {!showAllIssues && hiddenIssueCount > 0 && (
           <span>
-            중요 이슈 {displayedIssueCount}건 표시 중 · 낮은 중요도 {hiddenIssueCount}건 숨김
+            중요 이슈 {displayedIssueCount}건 표시 중 · 낮은 중요도{" "}
+            {hiddenIssueCount}건 숨김
           </span>
         )}
         {showAllIssues && hiddenIssueCount > 0 && (
@@ -1016,7 +1048,7 @@ export const ProofList = ({ agentState }: ProofListProps) => {
           총 이슈 {totalIssues}건
           {!showAllIssues && hiddenIssueCount > 0
             ? ` · 핵심 ${displayedIssueCount}건 표시`
-            : ''}
+            : ""}
           {severityCounts.critical > 0
             ? ` · Critical ${severityCounts.critical}건`
             : ""}
@@ -1116,7 +1148,7 @@ export const ProofList = ({ agentState }: ProofListProps) => {
           <p className="rounded border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
             {hiddenIssueCount > 0
               ? '핵심 이슈가 없습니다. "모든 이슈 보기"를 눌러 추가 결과를 확인하세요.'
-              : '교정 이슈가 감지되지 않았습니다.'}
+              : "교정 이슈가 감지되지 않았습니다."}
           </p>
         )}
       </div>

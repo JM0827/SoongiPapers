@@ -1,15 +1,15 @@
-import DocumentProfile from '../models/DocumentProfile';
-import OriginFile from '../models/OriginFile';
-import { query } from '../db';
+import DocumentProfile from "../models/DocumentProfile";
+import OriginFile from "../models/OriginFile";
+import { query } from "../db";
 
-export type OriginPrepUploadStatus = 'missing' | 'uploaded';
+export type OriginPrepUploadStatus = "missing" | "uploaded";
 export type OriginPrepAnalysisStatus =
-  | 'missing'
-  | 'running'
-  | 'stale'
-  | 'complete';
-export type OriginPrepNotesStatus = 'missing' | 'stale' | 'complete';
-export type TranslationPrereq = 'analysis' | 'notes';
+  | "missing"
+  | "running"
+  | "stale"
+  | "complete";
+export type OriginPrepNotesStatus = "missing" | "stale" | "complete";
+export type TranslationPrereq = "analysis" | "notes";
 
 export interface OriginProfileJobInfo {
   jobId: string;
@@ -41,7 +41,7 @@ export interface OriginPrepSnapshot {
     hasContent: boolean;
   };
   blockingReasons: Array<{
-    step: 'upload' | 'analysis' | 'notes';
+    step: "upload" | "analysis" | "notes";
     status:
       | OriginPrepUploadStatus
       | OriginPrepAnalysisStatus
@@ -75,12 +75,12 @@ interface BuildSnapshotInput {
   latestProfileJob?: OriginProfileJobInfo | null;
 }
 
-const RUNNING_JOB_STATUSES = new Set(['queued', 'running', 'pending']);
+const RUNNING_JOB_STATUSES = new Set(["queued", "running", "pending"]);
 
 const toIso = (value?: Date | string | null): string | null => {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
   }
@@ -96,8 +96,8 @@ const toMillis = (value?: Date | string | null): number | null => {
 
 const toId = (value: unknown): string | null => {
   if (!value) return null;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'object' && value && 'toString' in value) {
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value && "toString" in value) {
     try {
       return (value as { toString(): string }).toString();
     } catch (err) {
@@ -120,16 +120,22 @@ export function buildOriginPrepSnapshot({
 }: BuildSnapshotInput): OriginPrepSnapshot {
   const originFileId = originDoc ? toId((originDoc as any)._id) : null;
   const uploadUpdatedAt = toIso(originDoc?.updated_at ?? null);
-  const uploadStatus: OriginPrepUploadStatus = originDoc ? 'uploaded' : 'missing';
+  const uploadStatus: OriginPrepUploadStatus = originDoc
+    ? "uploaded"
+    : "missing";
 
   const profileId = originProfile ? toId((originProfile as any)._id) : null;
-  const profileUpdatedAt = toIso(originProfile?.updated_at ?? originProfile?.created_at ?? null);
+  const profileUpdatedAt = toIso(
+    originProfile?.updated_at ?? originProfile?.created_at ?? null,
+  );
   const profileOriginFileId = originProfile?.origin_file_id
     ? toId(originProfile.origin_file_id as any)
     : null;
 
   const originUpdatedMs = toMillis(originDoc?.updated_at ?? null);
-  const profileUpdatedMs = toMillis(originProfile?.updated_at ?? originProfile?.created_at ?? null);
+  const profileUpdatedMs = toMillis(
+    originProfile?.updated_at ?? originProfile?.created_at ?? null,
+  );
 
   let isStale = false;
   if (originDoc && originProfile) {
@@ -153,45 +159,49 @@ export function buildOriginPrepSnapshot({
 
   let analysisStatus: OriginPrepAnalysisStatus;
   if (!originProfile) {
-    analysisStatus = jobRunning ? 'running' : 'missing';
+    analysisStatus = jobRunning ? "running" : "missing";
   } else if (jobRunning) {
-    analysisStatus = 'running';
+    analysisStatus = "running";
   } else if (isStale) {
-    analysisStatus = 'stale';
+    analysisStatus = "stale";
   } else {
-    analysisStatus = 'complete';
+    analysisStatus = "complete";
   }
 
   let notesStatus: OriginPrepNotesStatus;
   if (!originProfile) {
-    notesStatus = 'missing';
+    notesStatus = "missing";
   } else if (isStale || jobRunning) {
-    notesStatus = 'stale';
+    notesStatus = "stale";
   } else {
-    notesStatus = 'complete';
+    notesStatus = "complete";
   }
 
   const hasNotesContent = Boolean(originProfile?.translation_notes);
 
-  const blockingReasons: OriginPrepSnapshot['blockingReasons'] = [];
-  if (uploadStatus !== 'uploaded') {
+  const blockingReasons: OriginPrepSnapshot["blockingReasons"] = [];
+  if (uploadStatus !== "uploaded") {
     blockingReasons.push({
-      step: 'upload',
+      step: "upload",
       status: uploadStatus,
       updatedAt: uploadUpdatedAt,
     });
   }
-  if (analysisStatus !== 'complete') {
+  if (analysisStatus !== "complete") {
     blockingReasons.push({
-      step: 'analysis',
+      step: "analysis",
       status: analysisStatus,
-      updatedAt: profileUpdatedAt ?? activeJob?.updatedAt ?? activeJob?.createdAt ?? null,
+      updatedAt:
+        profileUpdatedAt ??
+        activeJob?.updatedAt ??
+        activeJob?.createdAt ??
+        null,
       jobId: activeJob?.jobId ?? null,
     });
   }
-  if (notesStatus !== 'complete') {
+  if (notesStatus !== "complete") {
     blockingReasons.push({
-      step: 'notes',
+      step: "notes",
       status: notesStatus,
       updatedAt: profileUpdatedAt,
     });
@@ -235,8 +245,11 @@ async function loadLatestOriginProfileJob(
       [projectId],
     );
     for (const row of rows) {
-      const payload = typeof row.document_id === 'string' ? safeParsePayload(row.document_id) : null;
-      if (payload?.variant === 'origin') {
+      const payload =
+        typeof row.document_id === "string"
+          ? safeParsePayload(row.document_id)
+          : null;
+      if (payload?.variant === "origin") {
         return {
           jobId: row.id,
           status: row.status ?? null,
@@ -247,7 +260,7 @@ async function loadLatestOriginProfileJob(
       }
     }
   } catch (err) {
-    console.warn('[originPrep] Failed to load profile job', err);
+    console.warn("[originPrep] Failed to load profile job", err);
   }
   return null;
 }
@@ -255,7 +268,7 @@ async function loadLatestOriginProfileJob(
 const safeParsePayload = (raw: string): { variant?: string } | null => {
   try {
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed || typeof parsed !== "object") return null;
     return parsed as { variant?: string };
   } catch (err) {
     return null;
@@ -288,7 +301,7 @@ export async function loadOriginPrepSnapshot({
     try {
       resolvedOriginProfile = await DocumentProfile.findOne({
         project_id: projectId,
-        type: 'origin',
+        type: "origin",
       })
         .sort({ version: -1 })
         .lean()
@@ -312,11 +325,11 @@ export function evaluateTranslationPrereqs(
   snapshot: OriginPrepSnapshot,
 ): TranslationPrereq[] {
   const unmet: TranslationPrereq[] = [];
-  if (snapshot.analysis.status !== 'complete') {
-    unmet.push('analysis');
+  if (snapshot.analysis.status !== "complete") {
+    unmet.push("analysis");
   }
-  if (snapshot.notes.status !== 'complete') {
-    unmet.push('notes');
+  if (snapshot.notes.status !== "complete") {
+    unmet.push("notes");
   }
   return unmet;
 }

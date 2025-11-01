@@ -176,7 +176,8 @@ export const handleIntentRouting = async (
         }
 
         acc.actions.push({ type: config.followupAction });
-        acc.resolvedLabel = result.run.label ?? desiredLabel ?? acc.resolvedLabel;
+        acc.resolvedLabel =
+          result.run.label ?? desiredLabel ?? acc.resolvedLabel;
       } else {
         const failureKey = (() => {
           if (result.reason === "already_running") {
@@ -213,10 +214,9 @@ export const handleIntentRouting = async (
   const llmContext = llmLines.join("\n");
   const uniqueActions = dedupeActions(acc.actions);
   if (!uniqueActions.length) {
-    const defaultFollowup =
-      routableActions[0]?.type
-        ? INTENT_RESPONSE_CONFIG[routableActions[0].type].followupAction
-        : "viewTranslationStatus";
+    const defaultFollowup = routableActions[0]?.type
+      ? INTENT_RESPONSE_CONFIG[routableActions[0].type].followupAction
+      : "viewTranslationStatus";
     uniqueActions.push({ type: defaultFollowup });
   }
 

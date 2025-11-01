@@ -61,7 +61,10 @@ const buildPairsFromDraft = (
   };
 };
 
-const buildPairsFallback = (source: string, translated: string): AlignedPairSet => {
+const buildPairsFallback = (
+  source: string,
+  translated: string,
+): AlignedPairSet => {
   const koSentences = splitSentencesByLang(source, "ko");
   const enSentences = splitSentencesByLang(translated, "en");
   const count = Math.max(koSentences.length, enSentences.length);

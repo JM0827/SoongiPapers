@@ -1,11 +1,13 @@
 # Ebook Export Tab Refresh – Implementation Plan
 
 ## 1. Context
+
 - We are replacing the existing multi-section ExportPanel with a single-page "출간 준비(필수)" + "독자에게 알리기(선택)" layout.
 - All backend integrations (ebook generation, cover regeneration/streaming, polling, downloads, translation selection) must stay intact; the change focuses on presentation and UX enhancements such as cover upload preview, clearer multi-format feedback, and consistent copy.
 - No feature flags; the refreshed UI will become the default experience once merged.
 
 ## 2. Objectives
+
 - Surface the required publishing checklist (translation, metadata, rights, format selection) in one concise card with clear gating rules and localized labels/aria attributes.
 - Add an optional promotion section with tabs (표지 management + future marketing mock flows) without breaking existing cover workflows.
 - Allow selecting both PDF and EPUB while the current backend still accepts only one format request at a time; provide sequential status chips so users see PDF → EPUB progress when both are chosen.
@@ -14,12 +16,14 @@
 - Map backend error codes to friendly Korean copy inside the essentials card.
 
 ## 3. Out of Scope
+
 - Backend schema or endpoint changes (e.g., true multi-format generation in a single call).
 - Persistent storage for manually uploaded covers (object URL only for now).
 - Copy/locale updates outside the scope of labels touched in this refresh.
 - Final UX for the translation picker modal (we reuse the existing implementation; deeper redesign deferred).
 
 ## 4. Milestones
+
 1. **Scaffolding & Types**
    - Add new type helpers (`ebookTypes.ts`) and shared utilities (`canGenerate`, `langToCode`, error mappers, generation queues).
    - Create presentational components (`ExportEssentialsCard`, `CoverPreview`, `PromotionPanel`) with i18n-ready labels/aria.
@@ -36,6 +40,7 @@
    - Run web unit tests (`npm test --prefix web`) and perform manual smoke (generate, download, cover regenerate, translation selection, telemetry logs).
 
 ## 5. Work Breakdown
+
 - **Type Layer & Utilities**
   - `web/src/components/export/ebookTypes.ts`: define `TranslationSummary`, `MetadataDraft`, `EssentialsSnapshot`, `PromoState`, helper guards.
   - `web/src/components/export/errorMap.ts`: provide `mapGenerationError` mapping backend codes (e.g., `translation_missing`, `rights_missing`, `cover_generation_pending`).
@@ -60,12 +65,14 @@
   - Check telemetry console output in dev.
 
 ## 6. Dependencies & Assumptions
+
 - Tailwind, shadcn/ui, and lucide-react are already configured; new components reuse existing style tokens.
 - Translation picker modal logic is accessible (e.g., via `openTranslationPickerModal` or existing state toggles) and can be wrapped for the new card.
 - Telemetry dispatcher can remain console-based until a real tracker is injected via `setTelemetry`.
 - Backend endpoints remain unchanged and accessible in the dev environment.
 
 ## 7. Testing Strategy
+
 - Automated: `npm test --prefix web` to ensure component and hook tests still pass.
 - Manual smoke checklist:
   - Load export tab with/without translation; confirm gating messages and badge text.
@@ -76,6 +83,7 @@
   - Validate error mapping by forcing representative backend error codes.
 
 ## 8. Risks & Mitigations
+
 - **State drift between snapshot and legacy state** → centralize updates in `setSnap`, document mapping clearly.
 - **Sequential generate double-submission** → guard queue (skip empty), await each call before continuing, update progress chips accordingly.
 - **Object URL leaks** → revoke previous preview URL when setting or clearing cover uploads.
@@ -83,6 +91,7 @@
 - **Copy/i18n drift** → store all new labels under existing localization utilities for future translation review.
 
 ## 9. Definition of Done
+
 - 출간 준비 카드 shows translation badge (`{언어코드} 준비됨/누락`), red highlighting and helper text for missing required fields, localized labels/aria, and telemetry on generate.
 - Generate button only enables when translation+metadata+rights are satisfied; PDF default on, EPUB optional, sequential status chips reflect progress for each selected format.
 - 독자에게 알리기 카드: 기본(표지) tab supports upload/create/regenerate/remove with preview, object URL cleanup, telemetry, and i18n labels; 확장 홍보 tab allows scene → video → SNS mock transitions.
@@ -90,13 +99,14 @@
 - Error messages map backend codes to user-friendly Korean copy within the essentials card.
 
 ## 10. Open Questions
+
 - Do we want to persist uploaded cover assets beyond the session in this iteration (still assumed "no")?
 - Should telemetry events include additional context (projectId, format selection) from the outset?
 - Any additional i18n review or translation support needed before shipping?
 
 ## 11. Implementation Notes (confirmed during planning)
+
 - Telemetry helper lives in `web/src/lib/telemetry.ts`; production trackers can inject via `setTelemetry`.
 - `onOpenTranslation` should wrap the existing translation picker modal (e.g., `openTranslationPickerModal()` or equivalent) so v4 UX can change the selected translation.
 - Error mapping should start with the observed codes (`file_missing`, `translation_missing`, `rights_missing`, `cover_generation_pending`, `summary_unavailable`, `rate_limited`, `unauthorized`, fallback), and expand as new codes appear.
 - Multi-format generation currently triggers sequential API calls (PDF first, then EPUB); future backend support for batch generation can replace the queue util without UI changes.
-

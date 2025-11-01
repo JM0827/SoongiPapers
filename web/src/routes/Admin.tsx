@@ -41,13 +41,7 @@ export const Admin = () => {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: [
-      "admin",
-      "proofreadingLogs",
-      projectFilter,
-      limit,
-      token,
-    ],
+    queryKey: ["admin", "proofreadingLogs", projectFilter, limit, token],
     enabled: Boolean(token),
     queryFn: async () => {
       if (!token) throw new Error("Missing authentication token");
@@ -68,13 +62,7 @@ export const Admin = () => {
     refetch: refetchDrafts,
     isFetching: isFetchingDrafts,
   } = useQuery({
-    queryKey: [
-      "admin",
-      "translationDrafts",
-      projectFilter,
-      limit,
-      token,
-    ],
+    queryKey: ["admin", "translationDrafts", projectFilter, limit, token],
     enabled: Boolean(token),
     queryFn: async () => {
       if (!token) throw new Error("Missing authentication token");
@@ -102,7 +90,9 @@ export const Admin = () => {
     const avgTokens =
       logs.reduce((acc, entry) => acc + (entry.usageTotalTokens ?? 0), 0) /
       logs.length;
-    const fallbackCount = logs.filter((entry) => entry.model !== 'gpt-5').length;
+    const fallbackCount = logs.filter(
+      (entry) => entry.model !== "gpt-5",
+    ).length;
     const avgAttemptsRaw =
       logs.reduce((acc, entry) => acc + (entry.attempts ?? 0), 0) / logs.length;
 
@@ -195,7 +185,9 @@ export const Admin = () => {
         </div>
         <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
           <dt className="font-semibold text-slate-600">Fallback (mini) runs</dt>
-          <dd className="text-slate-700">{summary.fallback.toLocaleString()}</dd>
+          <dd className="text-slate-700">
+            {summary.fallback.toLocaleString()}
+          </dd>
         </div>
         <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
           <dt className="font-semibold text-slate-600">Avg attempts</dt>
@@ -326,7 +318,9 @@ export const Admin = () => {
                     <th className="px-3 py-2 text-left">Tier</th>
                     <th className="px-3 py-2 text-left">Subfeature</th>
                     <th className="px-3 py-2 text-left">Model</th>
-                    <th className="px-3 py-2 text-left">Tokens (prompt / completion / total)</th>
+                    <th className="px-3 py-2 text-left">
+                      Tokens (prompt / completion / total)
+                    </th>
                     <th className="px-3 py-2 text-left">Attempts</th>
                     <th className="px-3 py-2 text-left">Truncated</th>
                     <th className="px-3 py-2 text-left">Guard seg.</th>
@@ -352,8 +346,8 @@ export const Admin = () => {
                         {entry.model}
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-600">
-                        {formatTokens(entry.usagePromptTokens)} / {" "}
-                        {formatTokens(entry.usageCompletionTokens)} / {" "}
+                        {formatTokens(entry.usagePromptTokens)} /{" "}
+                        {formatTokens(entry.usageCompletionTokens)} /{" "}
                         {formatTokens(entry.usageTotalTokens)}
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-600">
@@ -422,7 +416,9 @@ export const Admin = () => {
                     <th className="px-3 py-2 text-left">Retry count</th>
                     <th className="px-3 py-2 text-left">Truncated</th>
                     <th className="px-3 py-2 text-left">Fallback</th>
-                    <th className="px-3 py-2 text-left">Tokens (prompt / output)</th>
+                    <th className="px-3 py-2 text-left">
+                      Tokens (prompt / output)
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -474,7 +470,7 @@ export const Admin = () => {
                           </span>
                         </td>
                         <td className="px-3 py-2 text-xs text-slate-600">
-                          {formatTokens(run.usageInputTokens)} / {" "}
+                          {formatTokens(run.usageInputTokens)} /{" "}
                           {formatTokens(run.usageOutputTokens)}
                         </td>
                       </tr>
@@ -486,7 +482,8 @@ export const Admin = () => {
                         colSpan={10}
                         className="px-3 py-6 text-center text-xs text-slate-500"
                       >
-                        No translation draft runs were found for the current filters.
+                        No translation draft runs were found for the current
+                        filters.
                       </td>
                     </tr>
                   ) : null}

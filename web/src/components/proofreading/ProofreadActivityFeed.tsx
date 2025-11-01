@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   useWorkflowStore,
   type ProofreadingAgentState,
-} from '../../store/workflow.store';
+} from "../../store/workflow.store";
 
 const formatTimestamp = (value: string) => {
   const date = new Date(value);
@@ -12,11 +12,11 @@ const formatTimestamp = (value: string) => {
 };
 
 const formatRelativeTime = (value: string | null) => {
-  if (!value) return '기록 없음';
+  if (!value) return "기록 없음";
   const ts = Date.parse(value);
-  if (Number.isNaN(ts)) return '알 수 없음';
+  if (Number.isNaN(ts)) return "알 수 없음";
   const diff = Date.now() - ts;
-  if (diff < 0) return '방금 전';
+  if (diff < 0) return "방금 전";
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return `${seconds}초 전`;
   const minutes = Math.floor(seconds / 60);
@@ -27,71 +27,71 @@ const formatRelativeTime = (value: string | null) => {
 
 const statusLabel = (status: string) => {
   switch (status) {
-    case 'queued':
-      return '대기 중';
-    case 'running':
-      return '진행 중';
-    case 'done':
-      return '완료';
-    case 'failed':
-      return '실패';
+    case "queued":
+      return "대기 중";
+    case "running":
+      return "진행 중";
+    case "done":
+      return "완료";
+    case "failed":
+      return "실패";
     default:
-      return '대기';
+      return "대기";
   }
 };
 
 const stageTone = (status?: string) => {
   switch (status) {
-    case 'done':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'error':
-      return 'border-rose-200 bg-rose-50 text-rose-700';
-    case 'in_progress':
+    case "done":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "error":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+    case "in_progress":
     default:
-      return 'border-slate-200 bg-slate-50 text-slate-500';
+      return "border-slate-200 bg-slate-50 text-slate-500";
   }
 };
 
 const EVENT_TYPE_TONE: Record<string, string> = {
-  queued: 'bg-slate-200 text-slate-600',
-  workflow: 'bg-slate-200 text-slate-600',
-  progress: 'bg-indigo-100 text-indigo-700',
-  stage: 'bg-indigo-50 text-indigo-600',
-  heartbeat: 'bg-slate-100 text-slate-600',
-  duplicate: 'bg-amber-100 text-amber-700',
-  tier_complete: 'bg-emerald-100 text-emerald-700',
-  complete: 'bg-emerald-200 text-emerald-800',
-  error: 'bg-rose-100 text-rose-700',
-  stalled: 'bg-rose-100 text-rose-700',
-  resumed: 'bg-emerald-100 text-emerald-700',
+  queued: "bg-slate-200 text-slate-600",
+  workflow: "bg-slate-200 text-slate-600",
+  progress: "bg-indigo-100 text-indigo-700",
+  stage: "bg-indigo-50 text-indigo-600",
+  heartbeat: "bg-slate-100 text-slate-600",
+  duplicate: "bg-amber-100 text-amber-700",
+  tier_complete: "bg-emerald-100 text-emerald-700",
+  complete: "bg-emerald-200 text-emerald-800",
+  error: "bg-rose-100 text-rose-700",
+  stalled: "bg-rose-100 text-rose-700",
+  resumed: "bg-emerald-100 text-emerald-700",
 };
 
 const formatEventLabel = (value: string) =>
   value
-    .replace(/_/g, ' ')
-    .split(' ')
+    .replace(/_/g, " ")
+    .split(" ")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+    .join(" ");
 
 const resolveEventTone = (type: string) =>
-  EVENT_TYPE_TONE[type] ?? 'bg-slate-100 text-slate-600';
+  EVENT_TYPE_TONE[type] ?? "bg-slate-100 text-slate-600";
 
 const formatMetaValue = (value: unknown) => {
-  if (value === null || value === undefined) return '—';
-  if (typeof value === 'object') {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") {
     try {
       return JSON.stringify(value);
     } catch {
-      return '[object]';
+      return "[object]";
     }
   }
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isFinite(value)) {
     return value.toString();
   }
   return String(value);
 };
 
-type ActivityEntry = ProofreadingAgentState['activityLog'][number];
+type ActivityEntry = ProofreadingAgentState["activityLog"][number];
 
 export const ProofreadActivityFeed = () => {
   const proofreading = useWorkflowStore((state) => state.proofreading);
@@ -103,8 +103,14 @@ export const ProofreadActivityFeed = () => {
     return [...list].reverse();
   }, [proofreading.activityLog]);
 
-  const stageStatuses = useMemo(() => proofreading.stageStatuses ?? [], [proofreading.stageStatuses]);
-  const tierSummaries = useMemo(() => proofreading.tierSummaries ?? {}, [proofreading.tierSummaries]);
+  const stageStatuses = useMemo(
+    () => proofreading.stageStatuses ?? [],
+    [proofreading.stageStatuses],
+  );
+  const tierSummaries = useMemo(
+    () => proofreading.tierSummaries ?? {},
+    [proofreading.tierSummaries],
+  );
   const completionSummary = proofreading.completionSummary;
   const completionNotes =
     completionSummary?.notesKo ?? completionSummary?.notesEn ?? null;
@@ -121,29 +127,27 @@ export const ProofreadActivityFeed = () => {
     };
     const serialized = JSON.stringify(payload, null, 2);
     try {
-      const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+      const nav = typeof navigator !== "undefined" ? navigator : undefined;
       if (nav?.clipboard?.writeText) {
         await nav.clipboard.writeText(serialized);
-      } else if (typeof document !== 'undefined') {
-        const textarea = document.createElement('textarea');
+      } else if (typeof document !== "undefined") {
+        const textarea = document.createElement("textarea");
         textarea.value = serialized;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'absolute';
-        textarea.style.left = '-9999px';
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "absolute";
+        textarea.style.left = "-9999px";
         document.body.appendChild(textarea);
         textarea.select();
-        document.execCommand('copy');
+        document.execCommand("copy");
         document.body.removeChild(textarea);
       } else {
-        throw new Error('Clipboard API not available');
+        throw new Error("Clipboard API not available");
       }
       setCopyError(null);
       setCopiedEntryId(entry.id);
     } catch (err) {
       setCopiedEntryId(null);
-      setCopyError(
-        err instanceof Error ? err.message : '복사에 실패했습니다.',
-      );
+      setCopyError(err instanceof Error ? err.message : "복사에 실패했습니다.");
     }
   }, []);
 
@@ -167,7 +171,9 @@ export const ProofreadActivityFeed = () => {
     <div className="rounded border border-slate-200 bg-white">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-700">Activity Feed</h3>
+          <h3 className="text-sm font-semibold text-slate-700">
+            Activity Feed
+          </h3>
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
             <span className="rounded-full border border-slate-200 px-2 py-0.5">
               {statusLabel(proofreading.status)}
@@ -192,16 +198,16 @@ export const ProofreadActivityFeed = () => {
           <div className="flex flex-wrap gap-2">
             {stageStatuses.map((stage) => (
               <span
-                key={`${stage.tier ?? 'tier'}:${stage.key ?? stage.label ?? 'stage'}`}
+                key={`${stage.tier ?? "tier"}:${stage.key ?? stage.label ?? "stage"}`}
                 className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${stageTone(stage.status)}`}
               >
-                {stage.label ?? stage.key ?? stage.tier ?? '단계'}
+                {stage.label ?? stage.key ?? stage.tier ?? "단계"}
                 <span className="text-[10px] uppercase tracking-wide text-slate-400">
-                  {stage.status === 'done'
-                    ? 'done'
-                    : stage.status === 'error'
-                    ? 'error'
-                    : 'running'}
+                  {stage.status === "done"
+                    ? "done"
+                    : stage.status === "error"
+                      ? "error"
+                      : "running"}
                 </span>
               </span>
             ))}
@@ -218,7 +224,8 @@ export const ProofreadActivityFeed = () => {
                     {tier}
                   </span>
                   <span className="text-slate-500">
-                    {info.itemCount}건 · {formatRelativeTime(info.completedAt)} 완료
+                    {info.itemCount}건 · {formatRelativeTime(info.completedAt)}{" "}
+                    완료
                   </span>
                 </li>
               ))}
@@ -234,7 +241,10 @@ export const ProofreadActivityFeed = () => {
               {Object.entries(completionSummary.tierIssueCounts)
                 .filter(([, count]) => count > 0)
                 .map(([tier, count]) => (
-                  <span key={tier} className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">
+                  <span
+                    key={tier}
+                    className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700"
+                  >
                     {tier}: {count}건
                   </span>
                 ))}
@@ -244,7 +254,10 @@ export const ProofreadActivityFeed = () => {
                 {Object.entries(completionSummary.countsBySubfeature)
                   .slice(0, 4)
                   .map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between gap-2">
+                    <div
+                      key={key}
+                      className="flex items-center justify-between gap-2"
+                    >
                       <span className="font-medium text-slate-700">{key}</span>
                       <span>{value}건</span>
                     </div>
@@ -264,7 +277,9 @@ export const ProofreadActivityFeed = () => {
             <ul className="space-y-2">
               {entries.map((entry) => {
                 const metaEntries = entry.meta
-                  ? Object.entries(entry.meta).filter(([, value]) => value !== undefined)
+                  ? Object.entries(entry.meta).filter(
+                      ([, value]) => value !== undefined,
+                    )
                   : [];
                 const toneClass = resolveEventTone(entry.type);
                 return (

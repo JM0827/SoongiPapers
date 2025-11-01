@@ -1,17 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
-import { X, Loader2, ShieldCheck } from 'lucide-react';
-import type { ProjectContent } from '../../types/domain';
-import { QualityPanel } from './QualityPanel';
-import { useWorkflowStore } from '../../store/workflow.store';
-import { useChatActionStore } from '../../store/chatAction.store';
-import { useUILocale } from '../../hooks/useUILocale';
-import { translate } from '../../lib/locale';
+import { useCallback, useEffect, useState } from "react";
+import { X, Loader2, ShieldCheck } from "lucide-react";
+import type { ProjectContent } from "../../types/domain";
+import { QualityPanel } from "./QualityPanel";
+import { useWorkflowStore } from "../../store/workflow.store";
+import { useChatActionStore } from "../../store/chatAction.store";
+import { useUILocale } from "../../hooks/useUILocale";
+import { translate } from "../../lib/locale";
 
 interface QualityAssessmentDialogProps {
   open: boolean;
   onClose: () => void;
   stage?: string;
-  latest?: ProjectContent['qualityAssessment'] | null;
+  latest?: ProjectContent["qualityAssessment"] | null;
 }
 
 export const QualityAssessmentDialog = ({
@@ -22,48 +22,54 @@ export const QualityAssessmentDialog = ({
 }: QualityAssessmentDialogProps) => {
   const qualityState = useWorkflowStore((state) => state.quality);
   const chatActionExecute = useChatActionStore((state) => state.execute);
-  const chatExecutorReady = useChatActionStore((state) => Boolean(state.executor));
+  const chatExecutorReady = useChatActionStore((state) =>
+    Boolean(state.executor),
+  );
   const [localError, setLocalError] = useState<string | null>(null);
   const { locale } = useUILocale();
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
     [locale],
   );
 
-  const isRunning = qualityState.status === 'running';
+  const isRunning = qualityState.status === "running";
   const hasAssessment = Boolean(latest);
   const errorMessage = localError ?? qualityState.lastError ?? null;
-  const dialogTitle = localize('quality_dialog_title', 'Quality Assessment');
+  const dialogTitle = localize("quality_dialog_title", "Quality Assessment");
   const runInitialLabel = localize(
-    'quality_dialog_run_initial',
-    'Run Quality Assessment',
+    "quality_dialog_run_initial",
+    "Run Quality Assessment",
   );
   const runRerunLabel = localize(
-    'quality_dialog_run_rerun',
-    'Re-run Quality Assessment',
+    "quality_dialog_run_rerun",
+    "Re-run Quality Assessment",
   );
   const runRunningLabel = localize(
-    'quality_dialog_run_running',
-    'Running assessment…',
+    "quality_dialog_run_running",
+    "Running assessment…",
   );
   const closeLabel = localize(
-    'quality_dialog_close_label',
-    'Close quality assessment',
+    "quality_dialog_close_label",
+    "Close quality assessment",
   );
   const pendingMessage = localize(
-    'quality_dialog_run_pending',
-    'Quality assessment is still initializing. Please try again shortly.',
+    "quality_dialog_run_pending",
+    "Quality assessment is still initializing. Please try again shortly.",
   );
   const unavailableTooltip = localize(
-    'quality_dialog_run_unavailable',
-    'The quality assessment engine is preparing. Please try again shortly.',
+    "quality_dialog_run_unavailable",
+    "The quality assessment engine is preparing. Please try again shortly.",
   );
   const genericErrorMessage = localize(
-    'quality_dialog_run_error',
-    'Unable to start quality assessment. Please try again shortly.',
+    "quality_dialog_run_error",
+    "Unable to start quality assessment. Please try again shortly.",
   );
 
   const handleRunQuality = useCallback(async () => {
@@ -75,15 +81,24 @@ export const QualityAssessmentDialog = ({
     }
     try {
       await chatActionExecute({
-        type: 'startQuality',
+        type: "startQuality",
         allowParallel: false,
-        reason: 'Run quality assessment from dialog',
+        reason: "Run quality assessment from dialog",
       });
     } catch (error) {
-      console.error('[quality-dialog] Failed to trigger quality assessment', error);
+      console.error(
+        "[quality-dialog] Failed to trigger quality assessment",
+        error,
+      );
       setLocalError(genericErrorMessage);
     }
-  }, [chatActionExecute, chatExecutorReady, genericErrorMessage, isRunning, pendingMessage]);
+  }, [
+    chatActionExecute,
+    chatExecutorReady,
+    genericErrorMessage,
+    isRunning,
+    pendingMessage,
+  ]);
 
   const buttonLabel = isRunning
     ? runRunningLabel
@@ -92,13 +107,14 @@ export const QualityAssessmentDialog = ({
       : runInitialLabel;
 
   useEffect(() => {
-    if (qualityState.status === 'running') {
+    if (qualityState.status === "running") {
       setLocalError(null);
     }
   }, [qualityState.status]);
 
   const buttonDisabled = isRunning || !chatExecutorReady;
-  const runButtonTitle = buttonDisabled && !isRunning ? unavailableTooltip : undefined;
+  const runButtonTitle =
+    buttonDisabled && !isRunning ? unavailableTooltip : undefined;
   const progressPercent = qualityState.chunksTotal
     ? Math.min(
         100,
@@ -138,8 +154,8 @@ export const QualityAssessmentDialog = ({
               title={runButtonTitle}
               className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition ${
                 buttonDisabled
-                  ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100'
+                  ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100"
               }`}
             >
               {isRunning ? (
@@ -168,7 +184,7 @@ export const QualityAssessmentDialog = ({
                       qualityState.chunksCompleted + 1,
                       qualityState.chunksTotal,
                     )}/${qualityState.chunksTotal} 평가 중…`
-                  : '청크 준비 중…'}
+                  : "청크 준비 중…"}
               </span>
               {qualityState.chunksTotal ? (
                 <span className="text-[11px] text-slate-400">

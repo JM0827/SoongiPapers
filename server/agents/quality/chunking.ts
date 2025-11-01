@@ -95,7 +95,11 @@ const determineOverlapStart = (
   let tokens = 0;
   let start = chunkStart;
 
-  for (let index = chunkStart - 1; index >= 0 && tokens < overlapBudget; index -= 1) {
+  for (
+    let index = chunkStart - 1;
+    index >= 0 && tokens < overlapBudget;
+    index -= 1
+  ) {
     tokens += pairs[index].maxTokens;
     start = index;
   }

@@ -1,5 +1,5 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
 const template = `"use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -39,33 +39,36 @@ exports.UpdateSearchIndexOperation = UpdateSearchIndexOperation;
 `;
 
 const bases = [
-  path.join(__dirname, '..', 'node_modules'),
-  path.join(__dirname, '..', '..', 'node_modules'),
+  path.join(__dirname, "..", "node_modules"),
+  path.join(__dirname, "..", "..", "node_modules"),
 ];
 
 let fixedAny = false;
 
 for (const base of bases) {
-  const mongodbDir = path.join(base, 'mongodb');
+  const mongodbDir = path.join(base, "mongodb");
   if (!fs.existsSync(mongodbDir)) {
     continue;
   }
   const targetPath = path.join(
     mongodbDir,
-    'lib',
-    'operations',
-    'search_indexes',
-    'update.js',
+    "lib",
+    "operations",
+    "search_indexes",
+    "update.js",
   );
   if (fs.existsSync(targetPath)) {
     continue;
   }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, template, 'utf8');
+  fs.writeFileSync(targetPath, template, "utf8");
   fixedAny = true;
-  console.log('[postinstall] Restored mongodb search index update operation at', targetPath);
+  console.log(
+    "[postinstall] Restored mongodb search index update operation at",
+    targetPath,
+  );
 }
 
 if (!fixedAny) {
-  console.log('[postinstall] MongoDB search index patch already present');
+  console.log("[postinstall] MongoDB search index patch already present");
 }

@@ -89,16 +89,16 @@ export async function finalizeSequentialJob(
     literalEntries.map((row) => [row.segment_id, row.text_source ?? ""]),
   );
 
-  const qaMap = new Map(
-    qaEntries.map((row) => [row.segment_index, row]),
-  );
+  const qaMap = new Map(qaEntries.map((row) => [row.segment_index, row]));
 
   const originSegments: OriginSegment[] = literalEntries.map((row) => ({
     id: row.segment_id,
     index: row.segment_index,
     text: row.text_source ?? "",
     paragraphIndex:
-      paragraphIndexMap.get(row.segment_id) ?? paragraphIndexMap.get(String(row.segment_index)) ?? 0,
+      paragraphIndexMap.get(row.segment_id) ??
+      paragraphIndexMap.get(String(row.segment_index)) ??
+      0,
     sentenceIndex: null,
   }));
 
@@ -180,10 +180,9 @@ export async function finalizeSequentialJob(
     }),
   );
 
-  const statusBefore = await query(
-    `SELECT status FROM jobs WHERE id = $1`,
-    [job.jobId],
-  );
+  const statusBefore = await query(`SELECT status FROM jobs WHERE id = $1`, [
+    job.jobId,
+  ]);
   const wasDone = (statusBefore.rows?.[0]?.status ?? "") === "done";
 
   await query(
@@ -195,8 +194,9 @@ export async function finalizeSequentialJob(
     [job.jobId],
   );
 
-  const needsReviewCount = qaEntries.filter((row) => row.needs_review === true)
-    .length;
+  const needsReviewCount = qaEntries.filter(
+    (row) => row.needs_review === true,
+  ).length;
 
   const sceneSummaries = resultSegments.reduce<Record<string, string>>(
     (acc, segment) => {
@@ -211,10 +211,13 @@ export async function finalizeSequentialJob(
       scene_summaries: sceneSummaries,
     });
   } catch (error) {
-    console.warn("[TRANSLATION] Failed to merge scene summaries into project memory", {
-      error,
-      projectId: job.projectId,
-    });
+    console.warn(
+      "[TRANSLATION] Failed to merge scene summaries into project memory",
+      {
+        error,
+        projectId: job.projectId,
+      },
+    );
   }
 
   return {
@@ -225,7 +228,9 @@ export async function finalizeSequentialJob(
   };
 }
 
-async function loadParagraphIndexMap(jobId: string): Promise<Map<string, number>> {
+async function loadParagraphIndexMap(
+  jobId: string,
+): Promise<Map<string, number>> {
   const map = new Map<string, number>();
 
   try {

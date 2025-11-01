@@ -175,9 +175,7 @@ export async function loadDraftsByIds(
   if (options?.jobId) {
     filter.job_id = options.jobId;
   }
-  return TranslationDraft.find(filter)
-    .sort({ run_order: 1 })
-    .lean();
+  return TranslationDraft.find(filter).sort({ run_order: 1 }).lean();
 }
 
 export interface TranslationDraftRunSummary {
@@ -234,10 +232,13 @@ export async function listRecentDraftRuns(config: {
     .lean();
 
   return docs.map((doc) => {
-    const analysisMeta = (
-      (doc.metadata as { analysis_meta?: { attempts?: unknown } } | null | undefined)?.analysis_meta ??
-      null
-    );
+    const analysisMeta =
+      (
+        doc.metadata as
+          | { analysis_meta?: { attempts?: unknown } }
+          | null
+          | undefined
+      )?.analysis_meta ?? null;
 
     const attempts =
       analysisMeta && typeof analysisMeta.attempts === "number"

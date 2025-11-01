@@ -1,4 +1,4 @@
-import type { ProofreadingLogEntry } from '../db/proofreadingLog';
+import type { ProofreadingLogEntry } from "../db/proofreadingLog";
 
 const MAX_ENTRIES = 2000;
 const telemetry: ProofreadingLogEntry[] = [];

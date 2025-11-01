@@ -43,14 +43,18 @@ interface ExportEssentialsCardProps {
 
 const statusIconByState = {
   idle: <Circle className="h-3 w-3 text-slate-400" aria-hidden />,
-  running: <Loader2 className="h-3 w-3 animate-spin text-indigo-500" aria-hidden />,
+  running: (
+    <Loader2 className="h-3 w-3 animate-spin text-indigo-500" aria-hidden />
+  ),
   done: <Check className="h-3 w-3 text-emerald-500" aria-hidden />,
   error: <AlertTriangle className="h-3 w-3 text-rose-500" aria-hidden />,
 };
 
 const progressIcon = {
   pending: <Circle className="h-3 w-3 text-slate-300" aria-hidden />,
-  running: <Loader2 className="h-3 w-3 animate-spin text-indigo-500" aria-hidden />,
+  running: (
+    <Loader2 className="h-3 w-3 animate-spin text-indigo-500" aria-hidden />
+  ),
   done: <Check className="h-3 w-3 text-emerald-500" aria-hidden />,
   error: <AlertTriangle className="h-3 w-3 text-rose-500" aria-hidden />,
 };
@@ -103,10 +107,7 @@ export function ExportEssentialsCard({
     };
   }, [errorCode, errorMessage]);
 
-  const toggleMeta = (
-    key: keyof EssentialsSnapshot["meta"],
-    value: string,
-  ) => {
+  const toggleMeta = (key: keyof EssentialsSnapshot["meta"], value: string) => {
     setSnap({
       ...snap,
       meta: {
@@ -336,7 +337,9 @@ export function ExportEssentialsCard({
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   checked={snap.wantPDF}
-                  onChange={(event) => onToggleFormat("pdf", event.target.checked)}
+                  onChange={(event) =>
+                    onToggleFormat("pdf", event.target.checked)
+                  }
                   aria-label={t("export.essentials.format.pdf.aria")}
                 />
               </label>
@@ -346,7 +349,9 @@ export function ExportEssentialsCard({
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   checked={snap.wantEPUB}
-                  onChange={(event) => onToggleFormat("epub", event.target.checked)}
+                  onChange={(event) =>
+                    onToggleFormat("epub", event.target.checked)
+                  }
                   aria-label={t("export.essentials.format.epub.aria")}
                 />
               </label>
@@ -396,7 +401,9 @@ function renderField({
 }) {
   return (
     <label htmlFor={id} className="space-y-1">
-      <span className={`text-sm font-medium ${invalid ? "text-rose-600" : "text-slate-700"}`}>
+      <span
+        className={`text-sm font-medium ${invalid ? "text-rose-600" : "text-slate-700"}`}
+      >
         {label}
       </span>
       <input

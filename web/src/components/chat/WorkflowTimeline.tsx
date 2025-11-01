@@ -38,17 +38,25 @@ const toneClass = (tone: "info" | "success" | "danger") => {
   }
 };
 
-const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProps) => (
+const WorkflowTimeline = ({
+  stages,
+  footer,
+  onStageClick,
+}: WorkflowTimelineProps) => (
   <div className="rounded border border-slate-200 bg-white p-2">
     <ul className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
       {stages.map((stage, index) => {
-        const handleClick = onStageClick ? () => onStageClick(stage.key) : undefined;
+        const handleClick = onStageClick
+          ? () => onStageClick(stage.key)
+          : undefined;
         const content = (
           <div className="flex flex-col gap-0.5 text-left">
             <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-slate-800">{stage.label}</span>
-              {stage.status && (
-                stage.status.tone === "success" ? (
+              <span className="font-semibold text-slate-800">
+                {stage.label}
+              </span>
+              {stage.status &&
+                (stage.status.tone === "success" ? (
                   <span
                     className="inline-flex items-center text-emerald-600"
                     title={stage.status.label}
@@ -68,8 +76,7 @@ const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProp
                     ) : null}
                     {stage.status.label}
                   </span>
-                )
-              )}
+                ))}
             </div>
             {stage.detail ? (
               <div className="text-[11px] text-slate-500">{stage.detail}</div>
@@ -97,7 +104,9 @@ const WorkflowTimeline = ({ stages, footer, onStageClick }: WorkflowTimelineProp
         );
       })}
     </ul>
-    {footer ? <div className="mt-2 text-[11px] text-slate-500">{footer}</div> : null}
+    {footer ? (
+      <div className="mt-2 text-[11px] text-slate-500">{footer}</div>
+    ) : null}
   </div>
 );
 

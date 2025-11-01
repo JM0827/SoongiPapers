@@ -28,7 +28,9 @@ export async function evaluateGuards(
   stageResults: SequentialStageResult[],
   segments: SequentialStageJobSegment[],
 ): Promise<SequentialStageResult[]> {
-  const segmentById = new Map(segments.map((segment) => [segment.segmentId, segment]));
+  const segmentById = new Map(
+    segments.map((segment) => [segment.segmentId, segment]),
+  );
 
   return stageResults.map((result) => {
     const segment = segmentById.get(result.segmentId);
@@ -38,7 +40,8 @@ export async function evaluateGuards(
     const findings: GuardFindingDetail[] = [];
 
     const lengthRatio = computeLengthRatio(source, target);
-    const parityOk = lengthRatio >= LENGTH_RATIO_MIN && lengthRatio <= LENGTH_RATIO_MAX;
+    const parityOk =
+      lengthRatio >= LENGTH_RATIO_MIN && lengthRatio <= LENGTH_RATIO_MAX;
     if (!parityOk) {
       findings.push({
         type: "length-parity",
@@ -46,7 +49,11 @@ export async function evaluateGuards(
         summary: `Length ratio ${lengthRatio.toFixed(2)} outside ${LENGTH_RATIO_MIN}-${LENGTH_RATIO_MAX}.`,
         severity: "warn",
         segmentId: segment?.segmentId,
-        details: { lengthRatio, sourceLength: source.length, targetLength: target.length },
+        details: {
+          lengthRatio,
+          sourceLength: source.length,
+          targetLength: target.length,
+        },
       });
     }
 
@@ -152,18 +159,26 @@ function evaluateEntityGuard(params: {
 
   const missing: string[] = [];
   for (const entity of memory.named_entities) {
-    const sourceLabel = direction === "ko→en" ? entity.label?.source : entity.label?.target;
-    const expectedLabel = direction === "ko→en" ? entity.label?.target : entity.label?.source;
+    const sourceLabel =
+      direction === "ko→en" ? entity.label?.source : entity.label?.target;
+    const expectedLabel =
+      direction === "ko→en" ? entity.label?.target : entity.label?.source;
     if (!sourceLabel || !expectedLabel) continue;
 
     const includesSource = includesLoose(source, sourceLabel);
     if (!includesSource) continue;
 
     const alternateTargets = [expectedLabel]
-      .concat(entity.aliases?.map((alias) => (direction === "ko→en" ? alias.target : alias.source)) ?? [])
+      .concat(
+        entity.aliases?.map((alias) =>
+          direction === "ko→en" ? alias.target : alias.source,
+        ) ?? [],
+      )
       .filter((value): value is string => Boolean(value));
 
-    const hasTarget = alternateTargets.some((candidate) => includesLoose(normalizedTarget, candidate));
+    const hasTarget = alternateTargets.some((candidate) =>
+      includesLoose(normalizedTarget, candidate),
+    );
     if (!hasTarget) {
       missing.push(expectedLabel);
     }
@@ -266,10 +281,14 @@ function evaluateRegisterGuard(params: {
     finding: {
       type: "register",
       ok: false,
-      summary: "Honorific density suggests incorrect register for target audience.",
+      summary:
+        "Honorific density suggests incorrect register for target audience.",
       severity: "warn",
       segmentId,
-      details: { honorificCount: honorificMarkers.length, targetLength: target.length },
+      details: {
+        honorificCount: honorificMarkers.length,
+        targetLength: target.length,
+      },
     },
   };
 }
@@ -285,7 +304,10 @@ function evaluateBackTranslationGuard(params: {
     return { ok: true };
   }
 
-  const similarity = computeSimilarity(normalizeForMatch(source), normalizeForMatch(backTranslation));
+  const similarity = computeSimilarity(
+    normalizeForMatch(source),
+    normalizeForMatch(backTranslation),
+  );
   if (similarity >= BACKTRANSLATION_MIN_SIMILARITY) {
     return { ok: true };
   }
@@ -320,7 +342,9 @@ function includesLoose(haystack: string, needle: string): boolean {
   const haystackTokens = new Set(splitTokens(normalizedHaystack));
   const needleTokens = splitTokens(normalizedNeedle);
   if (!needleTokens.length) return false;
-  const matches = needleTokens.filter((token) => haystackTokens.has(token)).length;
+  const matches = needleTokens.filter((token) =>
+    haystackTokens.has(token),
+  ).length;
   return matches >= Math.max(1, Math.floor(needleTokens.length * 0.6));
 }
 

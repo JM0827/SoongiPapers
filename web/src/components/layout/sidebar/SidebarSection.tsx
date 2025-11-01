@@ -51,7 +51,11 @@ export const SidebarSection = ({
             <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
           ) : null}
         </div>
-        {action ? <div className="pt-0.5" data-sidebar-action>{action}</div> : null}
+        {action ? (
+          <div className="pt-0.5" data-sidebar-action>
+            {action}
+          </div>
+        ) : null}
       </header>
       {isOpen ? (
         <div
