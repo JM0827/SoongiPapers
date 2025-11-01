@@ -6,18 +6,20 @@ import type {
   OriginPrepSnapshot,
 } from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
-import type { TranslationAgentState } from "../store/workflow.store";
+import type {
+  AgentRunState,
+  TranslationAgentState,
+} from "../store/workflow.store";
 import {
   getOriginPrepGuardMessage,
   isOriginPrepReady,
 } from "../lib/originPrep";
 
-const LEGACY_STAGE_ORDER = [
-  "literal",
-  "style",
-  "emotion",
-  "qa",
-] as const;
+type TranslationAgentPatch = Partial<
+  Omit<TranslationAgentState, "run">
+> & { run?: Partial<AgentRunState> };
+
+const LEGACY_STAGE_ORDER = ["literal", "style", "emotion", "qa"] as const;
 
 const V2_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
 
@@ -37,6 +39,16 @@ const getStageLabelSequence = (pipelineStages: string[]) =>
     .map((stage) => STAGE_LABELS[stage] ?? stage)
     .join(" -> ");
 
+const createRunState = (
+  status: AgentRunState["status"],
+  overrides?: Partial<AgentRunState>,
+): AgentRunState => ({
+  status,
+  heartbeatAt: overrides?.heartbeatAt ?? Date.now(),
+  willRetry: overrides?.willRetry ?? false,
+  nextRetryDelayMs: overrides?.nextRetryDelayMs ?? null,
+});
+
 const extractWorkflowConflict = (
   payload: unknown,
 ): {
@@ -54,8 +66,7 @@ const extractWorkflowConflict = (
 
   if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
-    const reason =
-      typeof record.reason === "string" ? record.reason : null;
+    const reason = typeof record.reason === "string" ? record.reason : null;
     const projectStatus =
       typeof record.projectStatus === "string" ? record.projectStatus : null;
     return { reason, projectStatus };
@@ -64,14 +75,8 @@ const extractWorkflowConflict = (
   return { reason: null, projectStatus: null };
 };
 
-const deriveActiveTranslationJob = (
-  jobs: JobSummary[],
-): JobSummary | null => {
-  const preferredStatuses = new Set([
-    "running",
-    "queued",
-    "pending",
-  ]);
+const deriveActiveTranslationJob = (jobs: JobSummary[]): JobSummary | null => {
+  const preferredStatuses = new Set(["running", "queued", "pending"]);
 
   for (const job of jobs) {
     if (job.type !== "translate") continue;
@@ -179,6 +184,7 @@ export const useTranslationAgent = ({
       translation.status === "idle"
     ) {
       setTranslation(projectId, {
+        run: createRunState("running"),
         status: "running",
         jobId: lifecycle.jobId ?? translation.jobId,
         progressCompleted:
@@ -192,6 +198,7 @@ export const useTranslationAgent = ({
       translation.status === "idle"
     ) {
       setTranslation(projectId, {
+        run: createRunState("failed"),
         status: "failed",
         lastError: "이전 번역 작업이 실패했습니다.",
       });
@@ -205,17 +212,17 @@ export const useTranslationAgent = ({
       finalizingRef.current = false;
       lastStageRef.current = null;
       setTranslation(projectId, {
+        run: createRunState("done"),
         status: "done",
         jobId: null,
         lastMessage:
-        translation.needsReviewCount > 0
+          translation.needsReviewCount > 0
             ? "QA 점검이 필요한 항목이 있습니다."
             : "번역이 완료되었습니다.",
         lastError: null,
         progressCompleted:
           lifecycle.batchesCompleted ?? translation.progressCompleted,
-        progressTotal:
-          lifecycle.batchesTotal ?? translation.progressTotal,
+        progressTotal: lifecycle.batchesTotal ?? translation.progressTotal,
         updatedAt:
           lifecycle.lastUpdatedAt ??
           translation.updatedAt ??
@@ -227,6 +234,7 @@ export const useTranslationAgent = ({
       !stageIncludes("fail")
     ) {
       setTranslation(projectId, {
+        run: createRunState("done"),
         status: "done",
         jobId: lifecycle.jobId ?? translation.jobId,
         lastMessage:
@@ -236,8 +244,7 @@ export const useTranslationAgent = ({
         lastError: null,
         progressCompleted:
           lifecycle.batchesCompleted ?? translation.progressCompleted,
-        progressTotal:
-          lifecycle.batchesTotal ?? translation.progressTotal,
+        progressTotal: lifecycle.batchesTotal ?? translation.progressTotal,
         updatedAt:
           lifecycle.lastUpdatedAt ??
           translation.updatedAt ??
@@ -297,6 +304,7 @@ export const useTranslationAgent = ({
         });
 
         setTranslation(projectId, {
+          run: createRunState("cancelled"),
           status: "cancelled",
           jobId: null,
           lastMessage: "번역 작업이 중지되었습니다.",
@@ -332,9 +340,7 @@ export const useTranslationAgent = ({
         await refreshContent?.();
       } catch (err) {
         const message =
-          err instanceof Error
-            ? err.message
-            : "번역 중지 요청이 실패했습니다.";
+          err instanceof Error ? err.message : "번역 중지 요청이 실패했습니다.";
         pushAssistant(message, {
           label: "Cancel failed",
           tone: "error",
@@ -352,13 +358,11 @@ export const useTranslationAgent = ({
   );
 
   const startTranslation = useCallback(
-    async (
-      options?: {
-        label?: string | null;
-        allowParallel?: boolean;
-        originPrep?: OriginPrepSnapshot | null;
-      },
-    ) => {
+    async (options?: {
+      label?: string | null;
+      allowParallel?: boolean;
+      originPrep?: OriginPrepSnapshot | null;
+    }) => {
       if (translation.status === "running" || translation.status === "queued") {
         pushAssistant("이미 번역 작업이 진행 중입니다.", {
           label: "Translation in progress",
@@ -381,12 +385,12 @@ export const useTranslationAgent = ({
         const guardMessage =
           getOriginPrepGuardMessage(prepSnapshot, localize) ??
           localize(
-            'origin_prep_guard_generic',
-            'Finish the manuscript prep steps before translating.',
+            "origin_prep_guard_generic",
+            "Finish the manuscript prep steps before translating.",
           );
         pushAssistant(guardMessage, {
-          label: localize('origin_prep_guard_label', 'Prep needed'),
-          tone: 'default',
+          label: localize("origin_prep_guard_label", "Prep needed"),
+          tone: "default",
         });
         return;
       }
@@ -398,6 +402,7 @@ export const useTranslationAgent = ({
       }
 
       setTranslation(projectId, {
+        run: createRunState("queued"),
         status: "queued",
         jobId: null,
         lastError: null,
@@ -426,12 +431,11 @@ export const useTranslationAgent = ({
             ? response.totalPasses
             : 0;
         const pipelineStagesForJob =
-          response.pipeline === 'v2'
+          response.pipeline === "v2"
             ? Array.from(V2_STAGE_ORDER)
             : Array.from(LEGACY_STAGE_ORDER);
         const isLegacyMultipass =
-          totalPassesRaw > 0 &&
-          totalPassesRaw !== pipelineStagesForJob.length;
+          totalPassesRaw > 0 && totalPassesRaw !== pipelineStagesForJob.length;
         const stageProgressTotal = isLegacyMultipass
           ? totalPassesRaw
           : pipelineStagesForJob.length;
@@ -442,6 +446,7 @@ export const useTranslationAgent = ({
         const sequentialDetailedMessage = sequentialBaseMessage;
 
         setTranslation(projectId, {
+          run: createRunState("queued"),
           status: "queued",
           jobId: response.jobId,
           lastMessage: sequentialDetailedMessage,
@@ -463,8 +468,8 @@ export const useTranslationAgent = ({
           const payload = err.payload as Record<string, unknown> | undefined;
           if (
             payload &&
-            typeof payload === 'object' &&
-            payload.error === 'translation_prereq_incomplete'
+            typeof payload === "object" &&
+            payload.error === "translation_prereq_incomplete"
           ) {
             const prepFromServer =
               (payload.originPrep as OriginPrepSnapshot | undefined) ?? null;
@@ -477,12 +482,12 @@ export const useTranslationAgent = ({
                 localize,
               ) ??
               localize(
-                'origin_prep_guard_generic',
-                'Finish the manuscript prep steps before translating.',
+                "origin_prep_guard_generic",
+                "Finish the manuscript prep steps before translating.",
               );
             pushAssistant(guardMessage, {
-              label: localize('origin_prep_guard_label', 'Prep needed'),
-              tone: 'default',
+              label: localize("origin_prep_guard_label", "Prep needed"),
+              tone: "default",
             });
             await refreshContent?.();
             return;
@@ -511,9 +516,11 @@ export const useTranslationAgent = ({
                   const flaggedSegments = sequential?.flaggedSegments ?? [];
                   const totalSegments = sequential?.totalSegments ?? 0;
                   const needsReviewCount = sequential?.needsReviewCount ?? 0;
-                  const syncedPipelineStages = sequential?.pipelineStages?.length
+                  const syncedPipelineStages = sequential?.pipelineStages
+                    ?.length
                     ? sequential.pipelineStages
-                    : sequential?.stageCounts?.draft || sequential?.stageCounts?.["micro-check"]
+                    : sequential?.stageCounts?.draft ||
+                        sequential?.stageCounts?.["micro-check"]
                       ? Array.from(V2_STAGE_ORDER)
                       : Array.from(LEGACY_STAGE_ORDER);
                   const progressTotal = syncedPipelineStages.length;
@@ -528,6 +535,9 @@ export const useTranslationAgent = ({
                     null;
 
                   setTranslation(projectId, {
+                    run: createRunState(
+                      activeJob.status === "running" ? "running" : "queued",
+                    ),
                     status:
                       activeJob.status === "running" ? "running" : "queued",
                     jobId: activeJob.id,
@@ -597,6 +607,7 @@ export const useTranslationAgent = ({
         }
 
         setTranslation(projectId ?? null, {
+          run: createRunState("failed"),
           status: "failed",
           jobId: null,
           lastError: fallbackMessage,
@@ -676,13 +687,14 @@ export const useTranslationAgent = ({
         const sequential = job.sequential ?? null;
 
         if (sequential) {
-        const inferredPipelineStages = sequential.pipelineStages?.length
-          ? sequential.pipelineStages
-          : sequential.stageCounts?.draft || sequential.stageCounts?.["micro-check"]
-            ? Array.from(V2_STAGE_ORDER)
-            : Array.from(LEGACY_STAGE_ORDER);
-        const totalStages = inferredPipelineStages.length;
-        const stageCounts = sequential.stageCounts ?? {};
+          const inferredPipelineStages = sequential.pipelineStages?.length
+            ? sequential.pipelineStages
+            : sequential.stageCounts?.draft ||
+                sequential.stageCounts?.["micro-check"]
+              ? Array.from(V2_STAGE_ORDER)
+              : Array.from(LEGACY_STAGE_ORDER);
+          const totalStages = inferredPipelineStages.length;
+          const stageCounts = sequential.stageCounts ?? {};
           const completedStages = sequential.completedStages ?? [];
           const guardFailures = sequential.guardFailures ?? {};
           const flaggedSegments = sequential.flaggedSegments ?? [];
@@ -694,12 +706,14 @@ export const useTranslationAgent = ({
           const totalSegments = sequential.totalSegments ?? 0;
           const needsReviewCount = sequential.needsReviewCount ?? 0;
 
-        const stageIndex = Math.min(progressCompleted, totalStages - 1);
-        const inferredStage =
-          sequential.currentStage ?? inferredPipelineStages[stageIndex] ?? null;
+          const stageIndex = Math.min(progressCompleted, totalStages - 1);
+          const inferredStage =
+            sequential.currentStage ??
+            inferredPipelineStages[stageIndex] ??
+            null;
           const currentStage = inferredStage ?? null;
           const stageLabel = currentStage
-            ? STAGE_LABELS[currentStage] ?? currentStage
+            ? (STAGE_LABELS[currentStage] ?? currentStage)
             : null;
 
           const jobStatus =
@@ -715,9 +729,7 @@ export const useTranslationAgent = ({
 
           const nowIso = new Date().toISOString();
 
-          const updateState = (
-            patch: Partial<TranslationAgentState>,
-          ) =>
+          const updateState = (patch: TranslationAgentPatch) =>
             setTranslation(projectId, (current) => {
               const nextJobId =
                 patch.jobId !== undefined
@@ -726,7 +738,23 @@ export const useTranslationAgent = ({
                       patch.status === "failed" ||
                       patch.status === "cancelled"
                     ? null
-                    : current.jobId ?? job.id;
+                    : (current.jobId ?? job.id);
+              const nextStatus = (patch.status ??
+                current.status) as AgentRunState["status"];
+              const runOverrides = patch.run ?? {};
+              const shouldRebuildRun =
+                patch.run !== undefined || nextStatus !== current.run.status;
+              const runState = shouldRebuildRun
+                ? createRunState(runOverrides.status ?? nextStatus, {
+                    ...runOverrides,
+                    willRetry:
+                      runOverrides.willRetry ?? current.run.willRetry ?? false,
+                    nextRetryDelayMs:
+                      runOverrides.nextRetryDelayMs ??
+                      current.run.nextRetryDelayMs ??
+                      null,
+                  })
+                : current.run;
               return {
                 ...patch,
                 stageCounts,
@@ -741,6 +769,7 @@ export const useTranslationAgent = ({
                 progressTotal,
                 updatedAt: nowIso,
                 jobId: nextJobId,
+                run: runState,
               };
             });
 
@@ -817,11 +846,11 @@ export const useTranslationAgent = ({
               if (cancelled) return;
 
               if (ready) {
-              updateState({
-                status: "done",
-                jobId: null,
-                lastMessage: needsReviewCount
-                  ? "QA 점검이 필요한 항목이 있습니다."
+                updateState({
+                  status: "done",
+                  jobId: null,
+                  lastMessage: needsReviewCount
+                    ? "QA 점검이 필요한 항목이 있습니다."
                     : "번역이 완료되었습니다.",
                   lastError: null,
                   guardFailures,
@@ -926,12 +955,16 @@ export const useTranslationAgent = ({
         const completedPasses = drafts.filter(
           (draft) => draft.status === "succeeded",
         ).length;
-        const failedDraft = drafts.find((draft) => draft.status === "failed") ?? null;
+        const failedDraft =
+          drafts.find((draft) => draft.status === "failed") ?? null;
         const plannedPasses = drafts.length;
         const knownTotalPasses =
           plannedPasses || currentTranslation.progressTotal || 0;
         const runStatusMessage = (() => {
-          if (job.status === "succeeded" || completedPasses >= knownTotalPasses) {
+          if (
+            job.status === "succeeded" ||
+            completedPasses >= knownTotalPasses
+          ) {
             return "번역이 완료되었습니다.";
           }
           if (job.status === "failed" || failedDraft) {
@@ -959,6 +992,7 @@ export const useTranslationAgent = ({
               true,
             );
             setTranslation(projectId, {
+              run: createRunState("running"),
               status: "running",
               lastMessage: runStatusMessage,
               lastError: null,
@@ -969,14 +1003,12 @@ export const useTranslationAgent = ({
             }
 
             setTranslation(projectId, {
+              run: createRunState("running"),
               status: "running",
               lastMessage: "번역 결과를 정리하고 있습니다.",
               lastError: null,
               jobId: null,
-              progressCompleted: Math.max(
-                completedPasses,
-                knownTotalPasses,
-              ),
+              progressCompleted: Math.max(completedPasses, knownTotalPasses),
               progressTotal: Math.max(knownTotalPasses, completedPasses),
             });
             pushAssistant(
@@ -996,6 +1028,7 @@ export const useTranslationAgent = ({
 
               if (ready) {
                 setTranslation(projectId, {
+                  run: createRunState("done"),
                   status: "done",
                   lastMessage: "번역이 완료되었습니다.",
                   lastError: null,
@@ -1027,6 +1060,10 @@ export const useTranslationAgent = ({
               }
 
               setTranslation(projectId, {
+                run: createRunState("recovering", {
+                  willRetry: true,
+                  nextRetryDelayMs: Math.min(2000 * (attempt + 1), 10000),
+                }),
                 status: "running",
                 lastMessage:
                   "번역 결과를 불러오는 중입니다. 잠시 후 다시 확인해 주세요.",
@@ -1075,6 +1112,7 @@ export const useTranslationAgent = ({
               true,
             );
             setTranslation(projectId, {
+              run: createRunState("failed"),
               status: "failed",
               lastMessage: failureMessage,
               lastError: failureMessage,
@@ -1095,6 +1133,7 @@ export const useTranslationAgent = ({
               true,
             );
             setTranslation(projectId, {
+              run: createRunState("cancelled"),
               status: "cancelled",
               lastMessage: "번역 작업이 중지되었습니다.",
               lastError: null,

@@ -17,12 +17,21 @@ describe("statusSummaryBuilder", () => {
           currentRunId: "run-1",
           updatedAt: "2024-01-02T00:00:00Z",
         },
-        { type: "quality", status: "idle", label: null, currentRunId: null, updatedAt: null },
+        {
+          type: "quality",
+          status: "idle",
+          label: null,
+          currentRunId: null,
+          updatedAt: null,
+        },
       ],
       recentRuns: [],
     } as any);
 
-    assert.strictEqual(snapshot.translation, "translation: running (실험 번역)");
+    assert.strictEqual(
+      snapshot.translation,
+      "translation: running (실험 번역)",
+    );
     assert.strictEqual(snapshot.quality, "quality: idle");
     assert.strictEqual(snapshot.anyRunning, true);
   });

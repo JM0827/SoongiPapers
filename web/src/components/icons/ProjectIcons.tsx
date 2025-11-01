@@ -1,11 +1,14 @@
-import React from 'react';
+import React from "react";
 
 interface IconProps {
   size?: number;
   className?: string;
 }
 
-export const NewProjectIcon: React.FC<IconProps> = ({ size = 16, className = "" }) => (
+export const NewProjectIcon: React.FC<IconProps> = ({
+  size = 16,
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -42,8 +45,10 @@ export const NewProjectIcon: React.FC<IconProps> = ({ size = 16, className = "" 
   </svg>
 );
 
-
-export const FolderIcon: React.FC<IconProps> = ({ size = 16, className = "" }) => (
+export const FolderIcon: React.FC<IconProps> = ({
+  size = 16,
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -64,7 +69,10 @@ export const FolderIcon: React.FC<IconProps> = ({ size = 16, className = "" }) =
   </svg>
 );
 
-export const OpenFolderIcon: React.FC<IconProps> = ({ size = 16, className = "" }) => (
+export const OpenFolderIcon: React.FC<IconProps> = ({
+  size = 16,
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}

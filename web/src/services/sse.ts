@@ -1,28 +1,23 @@
+import { NdjsonBuffer } from "../lib/ndjsonBuffer";
+
 export type NDJSONCallback<T> = (event: T) => void;
 
 export const streamNdjson = async <T>(
   response: Response,
   onEvent: NDJSONCallback<T>,
+  onError?: (error: Error, payload: string) => void,
 ) => {
   if (!response.body) throw new Error("Streaming body is not supported");
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const buffer = new NdjsonBuffer<T>(onEvent, onError);
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newlineIndex: number;
-    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      if (!line) continue;
-      try {
-        onEvent(JSON.parse(line));
-      } catch (err) {
-        console.warn("[streamNdjson] Failed to parse chunk", err);
-      }
+    if (value) {
+      buffer.append(value);
     }
   }
+
+  buffer.flush();
 };

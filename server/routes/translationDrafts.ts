@@ -36,8 +36,11 @@ const translationDraftRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
-      const { stage, jobId = null, translationFileId = null } =
-        request.query as StageDraftQuery;
+      const {
+        stage,
+        jobId = null,
+        translationFileId = null,
+      } = request.query as StageDraftQuery;
 
       if (!stage || !VALID_STAGES.has(stage)) {
         return reply.status(400).send({
@@ -46,9 +49,8 @@ const translationDraftRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      let targetJobId = typeof jobId === "string" && jobId.trim().length
-        ? jobId.trim()
-        : null;
+      let targetJobId =
+        typeof jobId === "string" && jobId.trim().length ? jobId.trim() : null;
       let resolvedTranslationFileId: string | null = null;
 
       if (!targetJobId && translationFileId) {
@@ -113,8 +115,9 @@ const translationDraftRoutes: FastifyPluginAsync = async (fastify) => {
         .filter((value): value is string => Boolean(value && value.length))
         .join("\n\n");
 
-      const needsReviewCount = segments.filter((segment) => segment.needsReview)
-        .length;
+      const needsReviewCount = segments.filter(
+        (segment) => segment.needsReview,
+      ).length;
 
       return reply.send({
         projectId,

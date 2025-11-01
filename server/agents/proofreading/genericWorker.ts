@@ -1,17 +1,24 @@
-import { OpenAI } from 'openai';
-import pLimit from 'p-limit';
-import type { GuardFindingDetail, ProjectMemory } from '@bookko/translation-types';
+import { OpenAI } from "openai";
+import type { Response } from "openai/resources/responses/responses";
+import pLimit from "p-limit";
+import type {
+  GuardFindingDetail,
+  ProjectMemory,
+} from "@bookko/translation-types";
 
-import { safeExtractOpenAIResponse, estimateTokens } from '../../services/llm';
-import { runResponsesWithRetry } from '../../services/openaiResponses';
-import { getProofreadModelSequence } from '../../config/modelDefaults';
-import type { TranslationNotes } from '../../models/DocumentProfile';
-import type { IssueItem, GuardFinding } from './config';
+import { safeExtractOpenAIResponse, estimateTokens } from "../../services/llm";
+import {
+  runResponsesWithRetry,
+  type ResponsesRetryAttemptContext,
+} from "../../services/openaiResponses";
+import { getProofreadModelSequence } from "../../config/modelDefaults";
+import type { TranslationNotes } from "../../models/DocumentProfile";
+import type { IssueItem, GuardFinding } from "./config";
 
-export type ResponseVerbosity = 'low' | 'medium' | 'high';
-export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+export type ResponseVerbosity = "low" | "medium" | "high";
+export type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
-type Tier = 'quick' | 'deep';
+type Tier = "quick" | "deep";
 
 type LLMUsageSnapshot = {
   promptTokens: number | null;
@@ -78,10 +85,11 @@ type GenericWorkerParams = {
   reasoningEffort?: ResponseReasoningEffort;
   maxOutputTokens?: number;
   retryLimit?: number;
+  allowSegmentRetry?: boolean;
 };
 
 type ProofreadingEvidence = {
-  reference: 'source' | 'target' | 'memory' | 'other';
+  reference: "source" | "target" | "memory" | "other";
   quote: string;
   note?: string;
 };
@@ -99,6 +107,8 @@ export type GenericWorkerMeta = {
   usage: LLMUsageSnapshot;
   guardSegments: number;
   memoryContextVersion: number | null;
+  jsonRepairApplied: boolean;
+  attemptHistory: ResponsesRetryAttemptContext[];
 };
 
 export type GenericWorkerResult = {
@@ -106,168 +116,182 @@ export type GenericWorkerResult = {
   meta: GenericWorkerMeta;
 };
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 const limit = pLimit(Number(process.env.MAX_WORKERS || 4));
 
-const GLOBAL_MAX_OUTPUT_TOKENS = process.env.PROOFREADING_MAX_OUTPUT_TOKENS
-  ? Number(process.env.PROOFREADING_MAX_OUTPUT_TOKENS)
-  : process.env.PROOFREAD_MAX_OUTPUT_TOKENS
-    ? Number(process.env.PROOFREAD_MAX_OUTPUT_TOKENS)
-    : undefined;
-const DEFAULT_MAX_OUTPUT_TOKENS_QUICK = Number(
-  process.env.PROOFREAD_QUICK_MAX_OUTPUT_TOKENS ?? GLOBAL_MAX_OUTPUT_TOKENS ?? 800,
-);
-const DEFAULT_MAX_OUTPUT_TOKENS_DEEP = Number(
-  process.env.PROOFREAD_DEEP_MAX_OUTPUT_TOKENS ?? GLOBAL_MAX_OUTPUT_TOKENS ?? 1200,
-);
-const MAX_OUTPUT_TOKENS_CAP = Number(
+const toPositiveInteger = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const MAX_OUTPUT_TOKENS_CAP = toPositiveInteger(
   process.env.PROOFREADING_MAX_OUTPUT_TOKENS_CAP ??
-    process.env.PROOFREAD_MAX_OUTPUT_TOKENS_CAP ??
-    2400,
+    process.env.PROOFREAD_MAX_OUTPUT_TOKENS_CAP,
+  4200,
 );
 const GLOBAL_VERBOSITY =
-  (process.env.PROOFREADING_VERBOSITY as ResponseVerbosity | undefined) ?? undefined;
+  (process.env.PROOFREADING_VERBOSITY as ResponseVerbosity | undefined) ??
+  undefined;
 const DEFAULT_VERBOSITY_QUICK =
   (process.env.PROOFREAD_QUICK_VERBOSITY as ResponseVerbosity | undefined) ??
   GLOBAL_VERBOSITY ??
-  'low';
+  "low";
 const DEFAULT_VERBOSITY_DEEP =
   (process.env.PROOFREAD_DEEP_VERBOSITY as ResponseVerbosity | undefined) ??
   GLOBAL_VERBOSITY ??
-  'medium';
+  "medium";
 const GLOBAL_EFFORT =
-  (process.env.PROOFREADING_REASONING_EFFORT as ResponseReasoningEffort | undefined) ??
-  undefined;
+  (process.env.PROOFREADING_REASONING_EFFORT as
+    | ResponseReasoningEffort
+    | undefined) ?? undefined;
 const DEFAULT_EFFORT_QUICK =
   (process.env.PROOFREAD_QUICK_EFFORT as ResponseReasoningEffort | undefined) ??
   GLOBAL_EFFORT ??
-  'minimal';
+  "minimal";
 const DEFAULT_EFFORT_DEEP =
   (process.env.PROOFREAD_DEEP_EFFORT as ResponseReasoningEffort | undefined) ??
   GLOBAL_EFFORT ??
-  'medium';
+  "medium";
 const DEFAULT_RETRY_LIMIT = Number(
   process.env.PROOFREAD_RESPONSES_MAX_RETRIES ?? 3,
 );
 
-const PROOFREAD_RESPONSE_SCHEMA_NAME = 'proofreading_items_schema_v1';
+const QUICK_MAX_OUTPUT_TOKENS = toPositiveInteger(
+  process.env.PROOFREAD_QUICK_MAX_OUTPUT_TOKENS,
+  2400,
+);
+
+const DEEP_MAX_OUTPUT_TOKENS = toPositiveInteger(
+  process.env.PROOFREAD_DEEP_MAX_OUTPUT_TOKENS,
+  3600,
+);
+
+const MIN_TEXT_SPLIT_LENGTH = 400;
+
+const PROOFREAD_RESPONSE_SCHEMA_NAME = "proofreading_items_schema_v1";
 const PROOFREAD_RESPONSE_SCHEMA = {
-  type: 'object',
+  type: "object",
   additionalProperties: false,
-  required: ['items'],
+  required: ["items"],
   properties: {
     items: {
-      type: 'array',
+      type: "array",
       items: {
-        type: 'object',
+        type: "object",
         additionalProperties: false,
         required: [
-          'id',
-          'kr_sentence_id',
-          'en_sentence_id',
-          'issue_ko',
-          'issue_en',
-          'recommendation_ko',
-          'recommendation_en',
-          'before',
-          'after',
-          'alternatives',
-          'rationale_ko',
-          'rationale_en',
-          'spans',
-          'confidence',
-          'severity',
-          'source',
-          'tags',
-          'sourceExcerpt',
-          'translationExcerpt',
-          'evidence',
-          'guardStatus',
-          'guardStatusLabel',
-          'notes',
+          "id",
+          "kr_sentence_id",
+          "en_sentence_id",
+          "issue_ko",
+          "issue_en",
+          "recommendation_ko",
+          "recommendation_en",
+          "before",
+          "after",
+          "alternatives",
+          "rationale_ko",
+          "rationale_en",
+          "spans",
+          "confidence",
+          "severity",
+          "source",
+          "tags",
+          "sourceExcerpt",
+          "translationExcerpt",
+          "evidence",
+          "guardStatus",
+          "guardStatusLabel",
+          "notes",
         ],
         properties: {
-          id: { type: 'string' },
-          kr_sentence_id: { type: ['number', 'null'] },
-          en_sentence_id: { type: ['number', 'null'] },
-          issue_ko: { type: 'string' },
-          issue_en: { type: 'string' },
-          recommendation_ko: { type: 'string' },
-          recommendation_en: { type: 'string' },
-          before: { type: ['string', 'null'] },
-          after: { type: ['string', 'null'] },
+          id: { type: "string" },
+          kr_sentence_id: { type: ["number", "null"] },
+          en_sentence_id: { type: ["number", "null"] },
+          issue_ko: { type: "string" },
+          issue_en: { type: "string" },
+          recommendation_ko: { type: "string" },
+          recommendation_en: { type: "string" },
+          before: { type: ["string", "null"] },
+          after: { type: ["string", "null"] },
           alternatives: {
-            type: 'array',
-            items: { type: 'string' },
+            type: "array",
+            items: { type: "string" },
           },
-          rationale_ko: { type: 'string' },
-          rationale_en: { type: 'string' },
+          rationale_ko: { type: "string" },
+          rationale_en: { type: "string" },
           spans: {
-            type: ['object', 'null'],
+            type: ["object", "null"],
             properties: {
-              start: { type: 'number' },
-              end: { type: 'number' },
+              start: { type: "number" },
+              end: { type: "number" },
             },
-            required: ['start', 'end'],
+            required: ["start", "end"],
             additionalProperties: false,
           },
-          confidence: { type: 'number', minimum: 0, maximum: 1 },
-          severity: { type: 'string' },
-          source: { type: ['string', 'null'] },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          severity: { type: "string" },
+          source: { type: ["string", "null"] },
           tags: {
-            type: 'array',
-            items: { type: 'string' },
+            type: "array",
+            items: { type: "string" },
           },
-          sourceExcerpt: { type: ['string', 'null'] },
-          translationExcerpt: { type: ['string', 'null'] },
+          sourceExcerpt: { type: ["string", "null"] },
+          translationExcerpt: { type: ["string", "null"] },
           evidence: {
-            type: 'array',
+            type: "array",
             minItems: 1,
             items: {
-              type: 'object',
+              type: "object",
               additionalProperties: false,
-              required: ['reference', 'quote', 'note'],
+              required: ["reference", "quote", "note"],
               properties: {
                 reference: {
-                  type: 'string',
-                  enum: ['source', 'target', 'memory', 'other'],
-                  default: 'source',
+                  type: "string",
+                  enum: ["source", "target", "memory", "other"],
+                  default: "source",
                 },
-                quote: { type: 'string' },
-                note: { type: ['string', 'null'] },
+                quote: { type: "string" },
+                note: { type: ["string", "null"] },
               },
             },
           },
           guardStatus: {
-            type: 'string',
-            enum: ['qa_also', 'llm_only', 'guard_only'],
+            type: "string",
+            enum: ["qa_also", "llm_only", "guard_only"],
           },
-          guardStatusLabel: { type: 'string' },
+          guardStatusLabel: { type: "string" },
           notes: {
-            type: 'object',
+            type: "object",
             additionalProperties: false,
-            required: ['styleGuard', 'references', 'guardFindings'],
+            required: ["styleGuard", "references", "guardFindings"],
             properties: {
               styleGuard: {
-                type: 'array',
-                items: { type: 'string' },
+                type: "array",
+                items: { type: "string" },
               },
               references: {
-                type: 'array',
-                items: { type: 'string' },
+                type: "array",
+                items: { type: "string" },
               },
               guardFindings: {
-                type: 'array',
+                type: "array",
                 items: {
-                  type: 'object',
+                  type: "object",
                   additionalProperties: false,
-                  required: ['type', 'summary', 'severity', 'segmentId', 'needsReview'],
+                  required: [
+                    "type",
+                    "summary",
+                    "severity",
+                    "segmentId",
+                    "needsReview",
+                  ],
                   properties: {
-                    type: { type: 'string' },
-                    summary: { type: 'string' },
-                    severity: { type: 'string' },
-                    segmentId: { type: 'string' },
-                    needsReview: { type: 'boolean' },
+                    type: { type: "string" },
+                    summary: { type: "string" },
+                    severity: { type: "string" },
+                    segmentId: { type: "string" },
+                    needsReview: { type: "boolean" },
                   },
                 },
               },
@@ -285,6 +309,54 @@ export async function runGenericWorker(
   return limit(() => callWithRetries(params));
 }
 
+function splitTextForRetry(text: string): [string, string] | null {
+  const trimmed = text.trim();
+  if (trimmed.length <= MIN_TEXT_SPLIT_LENGTH * 2) {
+    return null;
+  }
+
+  const midpoint = Math.floor(trimmed.length / 2);
+  const searchWindow = Math.floor(trimmed.length * 0.25);
+
+  const probe = (start: number, direction: -1 | 1) => {
+    const limit = direction === -1 ? 0 : trimmed.length;
+    let index = start;
+    while (direction === -1 ? index > limit : index < limit) {
+      const char = trimmed[index];
+      if (char === "\n") return index;
+      if (
+        (char === "." || char === "!" || char === "?" || char === "。") &&
+        index + 1 < trimmed.length &&
+        trimmed[index + 1] === " "
+      ) {
+        return index + 1;
+      }
+      if (Math.abs(index - start) > searchWindow) break;
+      index += direction;
+    }
+    return -1;
+  };
+
+  let pivot = probe(midpoint, -1);
+  if (pivot === -1) {
+    pivot = probe(midpoint, 1);
+  }
+  if (pivot === -1) {
+    pivot = midpoint;
+  }
+
+  if (pivot < MIN_TEXT_SPLIT_LENGTH || pivot > trimmed.length - MIN_TEXT_SPLIT_LENGTH) {
+    return null;
+  }
+
+  const left = trimmed.slice(0, pivot).trim();
+  const right = trimmed.slice(pivot).trim();
+  if (!left.length || !right.length) {
+    return null;
+  }
+  return [left, right];
+}
+
 async function callWithRetries(
   params: GenericWorkerParams,
 ): Promise<GenericWorkerResult> {
@@ -293,14 +365,138 @@ async function callWithRetries(
   const guardSegmentsCount = params.guardContext?.segments?.length ?? 0;
   const memoryVersion = params.memoryContext?.version ?? null;
 
+  const canSegmentRetry =
+    (params.allowSegmentRetry ?? true) &&
+    params.kr.trim().length > MIN_TEXT_SPLIT_LENGTH * 2 &&
+    params.en.trim().length > MIN_TEXT_SPLIT_LENGTH * 2;
+
+  const runSegmentRetry = async (
+    context: ResponsesRetryAttemptContext,
+  ): Promise<GenericWorkerResult | null> => {
+    const krSplit = splitTextForRetry(params.kr);
+    const enSplit = splitTextForRetry(params.en);
+    if (!krSplit || !enSplit || krSplit.length !== enSplit.length) {
+      return null;
+    }
+
+    const partialResults: GenericWorkerResult[] = [];
+    for (let index = 0; index < krSplit.length; index += 1) {
+      const subsetParams: GenericWorkerParams = {
+        ...params,
+        kr: krSplit[index],
+        en: enSplit[index],
+        allowSegmentRetry: false,
+      };
+      try {
+        const subsetResult = await callWithRetries(subsetParams);
+        partialResults.push(subsetResult);
+      } catch {
+        return null;
+      }
+    }
+
+    const sumUsageField = (
+      selector: (usage: LLMUsageSnapshot) => number | null,
+    ) => {
+      let sum = 0;
+      let counted = false;
+      for (const result of partialResults) {
+        const value = selector(result.meta.usage);
+        if (typeof value === "number" && Number.isFinite(value)) {
+          sum += value;
+          counted = true;
+        } else {
+          return null;
+        }
+      }
+      return counted ? sum : null;
+    };
+
+    const combinedUsage: LLMUsageSnapshot = {
+      promptTokens: sumUsageField((usage) => usage.promptTokens ?? null),
+      completionTokens: sumUsageField((usage) => usage.completionTokens ?? null),
+      totalTokens: sumUsageField((usage) => usage.totalTokens ?? null),
+    };
+
+    const combinedAttempts = partialResults.reduce(
+      (acc, result) => acc + result.meta.attempts,
+      0,
+    );
+    const combinedHistory = partialResults.flatMap(
+      (result) => result.meta.attemptHistory ?? [],
+    );
+
+    const primaryMeta = partialResults[0]?.meta;
+    if (!primaryMeta) return null;
+
+    const aggregateMeta: GenericWorkerMeta = {
+      model: primaryMeta.model,
+      requestId: primaryMeta.requestId,
+      maxOutputTokens: partialResults.reduce(
+        (acc, result) => Math.max(acc, result.meta.maxOutputTokens),
+        primaryMeta.maxOutputTokens,
+      ),
+      attempts: combinedAttempts,
+      truncated: false,
+      verbosity: primaryMeta.verbosity,
+      reasoningEffort: primaryMeta.reasoningEffort,
+      usage: combinedUsage,
+      guardSegments: guardSegmentsCount,
+      memoryContextVersion: memoryVersion,
+      jsonRepairApplied: partialResults.some(
+        (result) => result.meta.jsonRepairApplied,
+      ),
+      attemptHistory: [...combinedHistory, context],
+    };
+
+    return {
+      items: partialResults.flatMap((result) => result.items),
+      meta: aggregateMeta,
+    } satisfies GenericWorkerResult;
+  };
+
+  let segmentRetryItems: NormalizedLLMItem[] | null = null;
+  let segmentRetryMeta: GenericWorkerMeta | null = null;
+
+  const buildSegmentRetryResponse = (
+    aggregate: GenericWorkerResult,
+  ): Response => {
+    const normalized = aggregate.items.map((item) => ({
+      ...item,
+    }));
+    const payload = { items: normalized };
+    const payloadText = JSON.stringify(payload);
+    return {
+      id: `proof-segment-retry-${Date.now().toString(16)}`,
+      status: "completed",
+      model: aggregate.meta.model,
+      output_text: payloadText,
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "output_text", text: payloadText },
+            { type: "output_parsed", parsed_json: payload },
+          ],
+        },
+      ],
+      usage: {
+        prompt_tokens: aggregate.meta.usage.promptTokens ?? undefined,
+        completion_tokens: aggregate.meta.usage.completionTokens ?? undefined,
+        total_tokens: aggregate.meta.usage.totalTokens ?? undefined,
+      },
+    } as unknown as Response;
+  };
+
   const userPayload: Record<string, unknown> = {
     task: params.subKey,
     instruction:
       "Return a JSON object with shape {items:[{issue_ko,issue_en,recommendation_ko,recommendation_en,before,after,alternatives,rationale_ko,rationale_en,confidence,severity,tags,sourceExcerpt,translationExcerpt,evidence:[{reference,quote,note}],notes:{styleGuard,references,guardFindings}}]}",
     constraints: [
-      'Preserve semantic content and voice.',
-      'Minimize edits unless clearly better.',
-      'If no issues, return items:[]',
+      "Preserve semantic content and voice.",
+      "Minimize edits unless clearly better.",
+      "If no issues, return items:[]",
     ],
     source_text: params.kr,
     target_text: params.en,
@@ -316,12 +512,12 @@ async function callWithRetries(
   const serializedPayload = JSON.stringify(userPayload);
   const baseInput = [
     {
-      role: 'system' as const,
-      content: [{ type: 'input_text' as const, text: params.systemPrompt }],
+      role: "system" as const,
+      content: [{ type: "input_text" as const, text: params.systemPrompt }],
     },
     {
-      role: 'user' as const,
-      content: [{ type: 'input_text' as const, text: serializedPayload }],
+      role: "user" as const,
+      content: [{ type: "input_text" as const, text: serializedPayload }],
     },
   ];
 
@@ -329,16 +525,16 @@ async function callWithRetries(
 
   const verbosity =
     params.verbosity ??
-    (params.tier === 'deep' ? DEFAULT_VERBOSITY_DEEP : DEFAULT_VERBOSITY_QUICK);
+    (params.tier === "deep" ? DEFAULT_VERBOSITY_DEEP : DEFAULT_VERBOSITY_QUICK);
   const reasoningEffort =
     params.reasoningEffort ??
-    (params.tier === 'deep' ? DEFAULT_EFFORT_DEEP : DEFAULT_EFFORT_QUICK);
+    (params.tier === "deep" ? DEFAULT_EFFORT_DEEP : DEFAULT_EFFORT_QUICK);
   const retryLimit = Math.max(1, params.retryLimit ?? DEFAULT_RETRY_LIMIT);
 
   let modelSequence = getProofreadModelSequence(params.model);
-  if (params.tier === 'quick') {
-    const withoutMini = modelSequence.filter((model) => model !== 'gpt-5-mini');
-    modelSequence = ['gpt-5-mini', ...withoutMini];
+  if (params.tier === "quick") {
+    const withoutMini = modelSequence.filter((model) => model !== "gpt-5-mini");
+    modelSequence = ["gpt-5-mini", ...withoutMini];
   }
 
   let aggregateAttempts = 0;
@@ -347,7 +543,9 @@ async function callWithRetries(
 
   for (const modelName of modelSequence) {
     try {
-      const runResult = await runResponsesWithRetry({
+      segmentRetryItems = null;
+      segmentRetryMeta = null;
+      const runResult = await runResponsesWithRetry<Response>({
         client,
         initialMaxOutputTokens: baseMaxTokens,
         maxOutputTokensCap: MAX_OUTPUT_TOKENS_CAP,
@@ -359,7 +557,7 @@ async function callWithRetries(
             max_output_tokens: maxOutputTokens,
             text: {
               format: {
-                type: 'json_schema',
+                type: "json_schema",
                 name: PROOFREAD_RESPONSE_SCHEMA_NAME,
                 schema: PROOFREAD_RESPONSE_SCHEMA,
                 strict: true,
@@ -369,19 +567,36 @@ async function callWithRetries(
             reasoning: { effort: reasoningEffort },
             input: baseInput,
           }),
+        retrySegmentFn: canSegmentRetry
+          ? async (context) => {
+              const aggregate = await runSegmentRetry(context);
+              if (!aggregate) {
+                return null;
+              }
+              segmentRetryItems = aggregate.items;
+              segmentRetryMeta = aggregate.meta;
+              return buildSegmentRetryResponse(aggregate);
+            }
+          : undefined,
       });
 
       aggregateAttempts += runResult.attempts;
       truncatedEncountered = truncatedEncountered || runResult.truncated;
 
-      const { parsedJson, text, usage: responseUsage, requestId } =
-        safeExtractOpenAIResponse(runResult.response);
-      const payload =
-        (parsedJson as { items?: unknown[] }) ??
-        (text ? (JSON.parse(text) as { items?: unknown[] }) : null);
+      const {
+        parsedJson,
+        usage: responseUsage,
+        requestId,
+        repairApplied,
+      } = safeExtractOpenAIResponse(runResult.response);
 
-      if (!payload || !Array.isArray(payload.items)) {
-        throw new Error('Proofreading response missing items array');
+      if (!parsedJson || typeof parsedJson !== "object") {
+        throw new Error("Proofreading response missing items array");
+      }
+
+      const payload = parsedJson as { items?: unknown[] };
+      if (!Array.isArray(payload.items)) {
+        throw new Error("Proofreading response missing items array");
       }
 
       const items = normalizeItems(payload.items, params, {
@@ -396,6 +611,39 @@ async function callWithRetries(
 
       const resolvedModel = runResult.response.model ?? modelName;
 
+      const retryItems = segmentRetryItems as NormalizedLLMItem[] | null;
+      const retryMeta = segmentRetryMeta as GenericWorkerMeta | null;
+
+      if (retryItems && retryMeta) {
+        aggregateAttempts += retryMeta.attempts;
+        truncatedEncountered = false;
+        const combinedHistory = [
+          ...runResult.attemptHistory,
+          ...(retryMeta.attemptHistory ?? []),
+        ];
+        return {
+          items: retryItems,
+          meta: {
+            model: retryMeta.model ?? resolvedModel,
+            requestId:
+              retryMeta.requestId ?? requestId ?? runResult.response.id ?? null,
+            maxOutputTokens: Math.max(
+              runResult.maxOutputTokens,
+              retryMeta.maxOutputTokens,
+            ),
+            attempts: aggregateAttempts,
+            truncated: false,
+            verbosity,
+            reasoningEffort,
+            usage: retryMeta.usage ?? usageSnapshot,
+            guardSegments: guardSegmentsCount,
+            memoryContextVersion: memoryVersion,
+            jsonRepairApplied: retryMeta.jsonRepairApplied,
+            attemptHistory: combinedHistory,
+          },
+        } satisfies GenericWorkerResult;
+      }
+
       return {
         items,
         meta: {
@@ -409,6 +657,8 @@ async function callWithRetries(
           usage: usageSnapshot,
           guardSegments: guardSegmentsCount,
           memoryContextVersion: memoryVersion,
+          jsonRepairApplied: Boolean(repairApplied),
+          attemptHistory: runResult.attemptHistory,
         },
       } satisfies GenericWorkerResult;
     } catch (error) {
@@ -420,7 +670,7 @@ async function callWithRetries(
   if (lastError instanceof Error) {
     throw lastError;
   }
-  throw new Error('Proofreading run failed after trying all configured models');
+  throw new Error("Proofreading run failed after trying all configured models");
 }
 
 function normalizeItems(
@@ -468,7 +718,7 @@ function normalizeSingleItem(
   guardTarget: string | null,
   guardNotes: ReturnType<typeof buildGuardNotes>,
 ): IssueItem | null {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== "object") return null;
   const it = raw as Record<string, unknown>;
 
   const issueKo = toTrimmedString(it.issue_ko);
@@ -478,7 +728,14 @@ function normalizeSingleItem(
   const rationaleKo = toTrimmedString(it.rationale_ko);
   const rationaleEn = toTrimmedString(it.rationale_en);
 
-  if (!issueKo || !issueEn || !recKo || !recEn || !rationaleKo || !rationaleEn) {
+  if (
+    !issueKo ||
+    !issueEn ||
+    !recKo ||
+    !recEn ||
+    !rationaleKo ||
+    !rationaleEn
+  ) {
     return null;
   }
 
@@ -498,19 +755,26 @@ function normalizeSingleItem(
     sourceSelection.text ??
     (targetSelection.index >= 0
       ? sourceSentences[targetSelection.index]
-      : guardSource ?? sourceSentences[0] ?? params.kr);
- const fallbackTarget =
-   targetSelection.text ??
-   (sourceSelection.index >= 0
-     ? targetSentences[sourceSelection.index]
-     : guardTarget ?? translationFragment ?? targetSentences[0] ?? params.en);
+      : (guardSource ?? sourceSentences[0] ?? params.kr));
+  const fallbackTarget =
+    targetSelection.text ??
+    (sourceSelection.index >= 0
+      ? targetSentences[sourceSelection.index]
+      : (guardTarget ??
+        translationFragment ??
+        targetSentences[0] ??
+        params.en));
 
-  const guardStatus = guardNotes.length ? 'qa_also' : 'llm_only';
+  const guardStatus = guardNotes.length ? "qa_also" : "llm_only";
   const guardStatusLabel =
-    guardStatus === 'qa_also' ? '번역 QA에서도 확인' : '교정 AI만 발견';
+    guardStatus === "qa_also" ? "번역 QA에서도 확인" : "교정 AI만 발견";
 
   const spans = normalizeSpan(it.spans);
-  const evidence = normalizeEvidence(it.evidence, fallbackSource, fallbackTarget);
+  const evidence = normalizeEvidence(
+    it.evidence,
+    fallbackSource,
+    fallbackTarget,
+  );
   const notes = normalizeNotes(it.notes, guardNotes);
 
   return {
@@ -521,10 +785,12 @@ function normalizeSingleItem(
     issue_en: issueEn,
     recommendation_ko: recKo,
     recommendation_en: recEn,
-    before: toTrimmedString(it.before) ?? fallbackSource ?? '',
-    after: toTrimmedString(it.after) ?? fallbackTarget ?? '',
+    before: toTrimmedString(it.before) ?? fallbackSource ?? "",
+    after: toTrimmedString(it.after) ?? fallbackTarget ?? "",
     alternatives: Array.isArray(it.alternatives)
-      ? it.alternatives.filter((entry): entry is string => typeof entry === 'string')
+      ? it.alternatives.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
       : [],
     rationale_ko: rationaleKo,
     rationale_en: rationaleEn,
@@ -532,11 +798,11 @@ function normalizeSingleItem(
     confidence: clampConfidence(it.confidence),
     severity: normalizeSeverityValue(it.severity),
     tags: Array.isArray(it.tags)
-      ? it.tags.filter((entry): entry is string => typeof entry === 'string')
+      ? it.tags.filter((entry): entry is string => typeof entry === "string")
       : [],
-    source: toTrimmedString(it.source) ?? fallbackSource ?? '',
-    sourceExcerpt: toTrimmedString(it.sourceExcerpt) ?? fallbackSource ?? '',
-    translationExcerpt: translationFragment ?? fallbackTarget ?? '',
+    source: toTrimmedString(it.source) ?? fallbackSource ?? "",
+    sourceExcerpt: toTrimmedString(it.sourceExcerpt) ?? fallbackSource ?? "",
+    translationExcerpt: translationFragment ?? fallbackTarget ?? "",
     evidence,
     notes,
     guardStatus,
@@ -545,10 +811,10 @@ function normalizeSingleItem(
 }
 
 function normalizeSpan(value: unknown): { start: number; end: number } | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  const start = typeof record.start === 'number' ? record.start : null;
-  const end = typeof record.end === 'number' ? record.end : null;
+  const start = typeof record.start === "number" ? record.start : null;
+  const end = typeof record.end === "number" ? record.end : null;
   if (start === null || end === null) return null;
   return { start, end };
 }
@@ -572,16 +838,17 @@ function normalizeEvidence(
 }
 
 function normalizeSingleEvidence(value: unknown): ProofreadingEvidence | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const quote = toTrimmedString(record.quote);
   if (!quote) return null;
   const referenceRaw = toTrimmedString(record.reference);
-  const reference: ProofreadingEvidence['reference'] = (referenceRaw &&
-    ['source', 'target', 'memory', 'other'].includes(referenceRaw))
-    ? (referenceRaw as ProofreadingEvidence['reference'])
-    : 'source';
-  const noteValue = toTrimmedString(record.note) ?? '';
+  const reference: ProofreadingEvidence["reference"] =
+    referenceRaw &&
+    ["source", "target", "memory", "other"].includes(referenceRaw)
+      ? (referenceRaw as ProofreadingEvidence["reference"])
+      : "source";
+  const noteValue = toTrimmedString(record.note) ?? "";
   return { reference, quote, note: noteValue };
 }
 
@@ -589,24 +856,28 @@ function buildDefaultEvidence(
   fallbackSource: string | null,
   fallbackTarget: string | null,
 ): ProofreadingEvidence {
-  const quote = fallbackTarget || fallbackSource || '[context unavailable]';
-  return { reference: fallbackTarget ? 'target' : 'source', quote, note: '' };
+  const quote = fallbackTarget || fallbackSource || "[context unavailable]";
+  return { reference: fallbackTarget ? "target" : "source", quote, note: "" };
 }
 
 function normalizeNotes(
   value: unknown,
   guardNotes: ReturnType<typeof buildGuardNotes>,
-): IssueItem['notes'] {
+): IssueItem["notes"] {
   const styleGuard =
-    value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).styleGuard)
+    value &&
+    typeof value === "object" &&
+    Array.isArray((value as Record<string, unknown>).styleGuard)
       ? ((value as Record<string, unknown>).styleGuard as unknown[]).filter(
-          (entry): entry is string => typeof entry === 'string',
+          (entry): entry is string => typeof entry === "string",
         )
       : [];
   const references =
-    value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).references)
+    value &&
+    typeof value === "object" &&
+    Array.isArray((value as Record<string, unknown>).references)
       ? ((value as Record<string, unknown>).references as unknown[]).filter(
-          (entry): entry is string => typeof entry === 'string',
+          (entry): entry is string => typeof entry === "string",
         )
       : [];
   const guardFindings: GuardFinding[] = guardNotes.map((note) => ({
@@ -625,7 +896,7 @@ function normalizeNotes(
 }
 
 function clampConfidence(value: unknown): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
     return 0.7;
   }
   if (value < 0) return 0;
@@ -633,34 +904,48 @@ function clampConfidence(value: unknown): number {
   return value;
 }
 
-function normalizeSeverityValue(value: unknown): 'low' | 'medium' | 'high' {
-  if (typeof value === 'string') {
+function normalizeSeverityValue(value: unknown): "low" | "medium" | "high" {
+  if (typeof value === "string") {
     const lowered = value.trim().toLowerCase();
-    if (lowered === 'low' || lowered === 'medium' || lowered === 'high') {
+    if (lowered === "low" || lowered === "medium" || lowered === "high") {
       return lowered;
     }
   }
-  return 'low';
+  return "low";
 }
 
 function computeDynamicMaxTokens(
   params: GenericWorkerParams,
   guardSegmentsCount: number,
 ): number {
-  const manualCap = Math.min(params.maxOutputTokens ?? MAX_OUTPUT_TOKENS_CAP, MAX_OUTPUT_TOKENS_CAP);
   const sourceTokens = estimateTokens(params.kr);
   const targetTokens = estimateTokens(params.en);
   const guardPadding = guardSegmentsCount > 0 ? 150 : 0;
-  const baseEstimate = targetTokens + Math.ceil(sourceTokens * 0.35) + guardPadding;
-  const multiplier = params.tier === 'deep' ? 1.8 : 1.35;
-  const padding = params.tier === 'deep' ? 250 : 120;
-  const lowerBound = params.tier === 'deep' ? 1500 : 600;
-  const estimated = Math.round((baseEstimate + padding) * multiplier);
-  const upperCap = Math.max(lowerBound, manualCap);
-  return Math.max(lowerBound, Math.min(estimated, upperCap));
+  const baseEstimate =
+    targetTokens + Math.ceil(sourceTokens * 0.35) + guardPadding;
+  const multiplier = params.tier === "deep" ? 1.75 : 1.45;
+  const padding = params.tier === "deep" ? 260 : 160;
+  const lowerBound = params.tier === "deep" ? 1800 : 1200;
+
+  const requestedCapRaw = params.maxOutputTokens
+    ? Number(params.maxOutputTokens)
+    : params.tier === "deep"
+      ? DEEP_MAX_OUTPUT_TOKENS
+      : QUICK_MAX_OUTPUT_TOKENS;
+  const requestedCap = Number.isFinite(requestedCapRaw) && requestedCapRaw > 0
+    ? requestedCapRaw
+    : lowerBound;
+
+  const estimated = Math.max(
+    lowerBound,
+    Math.round((baseEstimate + padding) * multiplier),
+  );
+
+  const baseline = Math.max(estimated, requestedCap, lowerBound);
+  return Math.min(baseline, MAX_OUTPUT_TOKENS_CAP);
 }
 
-function buildGuardPayload(context?: GenericWorkerParams['guardContext']) {
+function buildGuardPayload(context?: GenericWorkerParams["guardContext"]) {
   if (!context?.segments?.length) return undefined;
   return {
     flagged_segments: context.segments.map((segment) => ({
@@ -681,7 +966,7 @@ function buildGuardPayload(context?: GenericWorkerParams['guardContext']) {
   };
 }
 
-function buildGuardNotes(context?: GenericWorkerParams['guardContext']) {
+function buildGuardNotes(context?: GenericWorkerParams["guardContext"]) {
   if (!context?.segments?.length) return [];
   const notes: Array<{
     type: string;
@@ -727,7 +1012,7 @@ function sanitizeMemoryContext(
 }
 
 function toTrimmedString(value: unknown): string | null {
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed.length ? trimmed : null;
   }
@@ -747,7 +1032,9 @@ function selectSentence(
   fragment?: string | null,
 ): { text: string | null; index: number } {
   if (fragment) {
-    const index = sentences.findIndex((sentence) => sentence.includes(fragment));
+    const index = sentences.findIndex((sentence) =>
+      sentence.includes(fragment),
+    );
     if (index >= 0) {
       return { text: sentences[index], index };
     }
@@ -778,7 +1065,9 @@ export function buildProofreadingMemoryContext(params: {
       gender: character.gender ?? null,
       age: character.age ?? null,
       traits: Array.isArray(character.traits)
-        ? character.traits.filter((entry): entry is string => typeof entry === 'string')
+        ? character.traits.filter(
+            (entry): entry is string => typeof entry === "string",
+          )
         : [],
     }));
   }
@@ -789,16 +1078,20 @@ export function buildProofreadingMemoryContext(params: {
     }));
   }
   if (Array.isArray(translationNotes?.measurementUnits)) {
-    context.measurementUnits = translationNotes.measurementUnits.map((entry) => ({
-      source: entry.source,
-      target: entry.target ?? null,
-    }));
+    context.measurementUnits = translationNotes.measurementUnits.map(
+      (entry) => ({
+        source: entry.source,
+        target: entry.target ?? null,
+      }),
+    );
   }
   if (Array.isArray(translationNotes?.linguisticFeatures)) {
-    context.linguisticFeatures = translationNotes.linguisticFeatures.map((entry) => ({
-      source: entry.source,
-      target: entry.target ?? null,
-    }));
+    context.linguisticFeatures = translationNotes.linguisticFeatures.map(
+      (entry) => ({
+        source: entry.source,
+        target: entry.target ?? null,
+      }),
+    );
   }
 
   return context;

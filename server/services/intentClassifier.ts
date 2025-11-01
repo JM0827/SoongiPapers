@@ -103,11 +103,11 @@ export async function classifyIntent(
       confidence,
       rerun: Boolean(parsed.rerun),
       label:
-        typeof parsed.label === 'string' && parsed.label.trim()
+        typeof parsed.label === "string" && parsed.label.trim()
           ? parsed.label.trim()
           : null,
       notes:
-        typeof parsed.notes === 'string' && parsed.notes.trim()
+        typeof parsed.notes === "string" && parsed.notes.trim()
           ? parsed.notes.trim()
           : null,
     } satisfies IntentClassification;

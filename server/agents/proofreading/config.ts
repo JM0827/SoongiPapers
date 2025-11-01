@@ -85,7 +85,7 @@ export const SpecSchema = z.object({
       maxWorkers: z.number().int().min(1).max(64).default(4),
       maxCharsPerChunk: z.number().int().min(500).max(8000).default(2000),
       aligner: z.enum(["greedy", "simple", "embeddings"]).default("greedy"),
-      quickChunkSize: z.number().int().min(1).max(12).default(4),
+      quickChunkSize: z.number().int().min(1).max(12).default(2),
       deepChunkSize: z.number().int().min(1).max(12).default(2),
       debugLogging: z.boolean().optional(),
     })
@@ -93,7 +93,7 @@ export const SpecSchema = z.object({
       maxWorkers: 4,
       maxCharsPerChunk: 2000,
       aligner: "greedy",
-      quickChunkSize: 4,
+      quickChunkSize: 2,
       deepChunkSize: 2,
       debugLogging: false,
     }),

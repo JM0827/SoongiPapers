@@ -68,44 +68,46 @@ interface EditingCommandState {
   clearSuggestions: () => void;
 }
 
-export const useEditingCommandStore = create<EditingCommandState>((set, get) => ({
-  selection: null,
-  pendingAction: null,
-  activeAction: null,
-  editorAdapter: null,
-  suggestions: {},
-  setSelection: (selection) =>
-    set((state) => ({
-      selection,
-      activeAction: selection ? state.activeAction : null,
-    })),
-  triggerAction: (type) => {
-    const { selection } = get();
-    if (!selection) return;
-    set({ pendingAction: { type, selection } });
-  },
-  clearPendingAction: () => set({ pendingAction: null }),
-  setActiveAction: (action) => set({ activeAction: action }),
-  registerEditorAdapter: (adapter) => set({ editorAdapter: adapter }),
-  addSuggestion: (suggestion) =>
-    set((state) => ({
-      suggestions: { ...state.suggestions, [suggestion.id]: suggestion },
-    })),
-  updateSuggestion: (id, updater) =>
-    set((state) => {
-      const current = state.suggestions[id];
-      if (!current) return state;
-      const next = updater(current);
-      return {
-        suggestions: { ...state.suggestions, [id]: next },
-      };
-    }),
-  removeSuggestion: (id) =>
-    set((state) => {
-      if (!state.suggestions[id]) return state;
-      const next = { ...state.suggestions };
-      delete next[id];
-      return { suggestions: next };
-    }),
-  clearSuggestions: () => set({ suggestions: {} }),
-}));
+export const useEditingCommandStore = create<EditingCommandState>(
+  (set, get) => ({
+    selection: null,
+    pendingAction: null,
+    activeAction: null,
+    editorAdapter: null,
+    suggestions: {},
+    setSelection: (selection) =>
+      set((state) => ({
+        selection,
+        activeAction: selection ? state.activeAction : null,
+      })),
+    triggerAction: (type) => {
+      const { selection } = get();
+      if (!selection) return;
+      set({ pendingAction: { type, selection } });
+    },
+    clearPendingAction: () => set({ pendingAction: null }),
+    setActiveAction: (action) => set({ activeAction: action }),
+    registerEditorAdapter: (adapter) => set({ editorAdapter: adapter }),
+    addSuggestion: (suggestion) =>
+      set((state) => ({
+        suggestions: { ...state.suggestions, [suggestion.id]: suggestion },
+      })),
+    updateSuggestion: (id, updater) =>
+      set((state) => {
+        const current = state.suggestions[id];
+        if (!current) return state;
+        const next = updater(current);
+        return {
+          suggestions: { ...state.suggestions, [id]: next },
+        };
+      }),
+    removeSuggestion: (id) =>
+      set((state) => {
+        if (!state.suggestions[id]) return state;
+        const next = { ...state.suggestions };
+        delete next[id];
+        return { suggestions: next };
+      }),
+    clearSuggestions: () => set({ suggestions: {} }),
+  }),
+);

@@ -1,13 +1,22 @@
-import { OpenAI } from 'openai';
+import { OpenAI } from "openai";
+import type { Response } from "openai/resources/responses/responses";
 
-import type { TranslationNotes } from '../../models/DocumentProfile';
-import type { OriginSegment } from './segmentationAgent';
-import { buildDraftSystemPrompt } from './promptBuilder';
-import { safeExtractOpenAIResponse } from '../../services/llm';
-import { runResponsesWithRetry } from '../../services/openaiResponses';
+import type { TranslationNotes } from "../../models/DocumentProfile";
+import type { OriginSegment } from "./segmentationAgent";
+import { buildDraftSystemPrompt } from "./promptBuilder";
+import { safeExtractOpenAIResponse } from "../../services/llm";
+import {
+  runResponsesWithRetry,
+  type ResponsesRetryAttemptContext,
+} from "../../services/openaiResponses";
+import {
+  mergeAgentMeta,
+  mergeDraftSegmentResults,
+  splitOriginSegmentForRetry,
+} from "./segmentRetryHelpers";
 
-export type ResponseVerbosity = 'low' | 'medium' | 'high';
-export type ResponseReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+export type ResponseVerbosity = "low" | "medium" | "high";
+export type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 export interface TranslationDraftAgentOptions {
   projectId: string;
@@ -28,6 +37,7 @@ export interface TranslationDraftAgentOptions {
   verbosity?: ResponseVerbosity;
   reasoningEffort?: ResponseReasoningEffort;
   maxOutputTokens?: number;
+  allowSegmentRetry?: boolean;
 }
 
 export interface DraftSpanPair {
@@ -65,6 +75,8 @@ export interface TranslationDraftAgentResultMeta {
   retryCount: number;
   truncated: boolean;
   fallbackModelUsed: boolean;
+  jsonRepairApplied: boolean;
+  attemptHistory: ResponsesRetryAttemptContext[];
 }
 
 export interface TranslationDraftAgentResult {
@@ -91,17 +103,15 @@ interface DraftCandidate {
 }
 
 const DEFAULT_TRANSLATION_MODEL =
-  process.env.TRANSLATION_DRAFT_MODEL_V2?.trim() ||
-  'gpt-5-mini';
+  process.env.TRANSLATION_DRAFT_MODEL_V2?.trim() || "gpt-5-mini";
 const FALLBACK_TRANSLATION_MODEL =
-  process.env.TRANSLATION_DRAFT_VALIDATION_MODEL_V2?.trim() ||
-  'gpt-5-mini';
+  process.env.TRANSLATION_DRAFT_VALIDATION_MODEL_V2?.trim() || "gpt-5-mini";
 const DEFAULT_JUDGE_MODEL =
   process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2?.trim() ||
   FALLBACK_TRANSLATION_MODEL ||
-  'gpt-5-mini';
+  "gpt-5-mini";
 const parsedCandidateEnv = Number(
-  process.env.TRANSLATION_DRAFT_CANDIDATES ?? '1',
+  process.env.TRANSLATION_DRAFT_CANDIDATES ?? "1",
 );
 const DEFAULT_CANDIDATE_COUNT = Number.isFinite(parsedCandidateEnv)
   ? Math.max(1, Math.min(3, parsedCandidateEnv))
@@ -126,14 +136,14 @@ const JUDGE_MAX_OUTPUT_TOKENS = normalizePositiveInteger(
 );
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '',
+  apiKey: process.env.OPENAI_API_KEY || "",
 });
 
 function isTranslationDebugEnabled(): boolean {
   const flag = process.env.TRANSLATION_V2_DEBUG;
   if (!flag) return false;
   const normalized = flag.trim().toLowerCase();
-  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
 interface DraftSegmentNormalized {
@@ -148,166 +158,114 @@ interface RawDraftResponse {
 }
 
 const draftResponseSchema = {
-  name: 'translation_draft_segments',
+  name: "translation_draft_segments",
   schema: {
-    type: 'object',
-    required: ['segments', 'commentary'],
+    type: "object",
+    required: ["segments", "commentary"],
     additionalProperties: false,
     properties: {
       segments: {
-        type: 'array',
+        type: "array",
         minItems: 1,
         items: {
-          type: 'object',
+          type: "object",
           additionalProperties: false,
           properties: {
-            segmentId: { type: 'string' },
-            translation: { type: 'string' },
+            segmentId: { type: "string" },
+            translation: { type: "string" },
             notes: {
-              type: 'array',
-              items: { type: 'string' },
+              type: "array",
+              items: { type: "string" },
               default: [],
             },
           },
-          required: ['segmentId', 'translation', 'notes'],
+          required: ["segmentId", "translation", "notes"],
         },
       },
-      commentary: { type: ['string', 'null'], default: null },
+      commentary: { type: ["string", "null"], default: null },
     },
   },
 };
 
 const deliberationResponseSchema = {
-  name: 'draft_candidate_judgement',
+  name: "draft_candidate_judgement",
   schema: {
-    type: 'object',
-    required: ['bestCandidateId', 'analysis', 'rationale'],
+    type: "object",
+    required: ["bestCandidateId", "analysis", "rationale"],
     additionalProperties: false,
     properties: {
-      bestCandidateId: { type: 'string' },
-      rationale: { type: ['string', 'null'], default: null },
+      bestCandidateId: { type: "string" },
+      rationale: { type: ["string", "null"], default: null },
       analysis: {
-        type: 'array',
+        type: "array",
         minItems: 1,
         items: {
-          type: 'object',
+          type: "object",
           additionalProperties: false,
           properties: {
-            candidateId: { type: 'string' },
-            summary: { type: 'string' },
-            score: { type: ['number', 'null'], default: null },
+            candidateId: { type: "string" },
+            summary: { type: "string" },
+            score: { type: ["number", "null"], default: null },
           },
-          required: ['candidateId', 'summary', 'score'],
+          required: ["candidateId", "summary", "score"],
         },
       },
     },
   },
 };
 
-function normalizeVerbosity(value: string | undefined | null): ResponseVerbosity {
-  if (!value) return 'medium';
+function normalizeVerbosity(
+  value: string | undefined | null,
+): ResponseVerbosity {
+  if (!value) return "medium";
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
     return normalized;
   }
-  return 'low';
+  return "low";
 }
 
 function normalizeReasoningEffort(
   value: string | undefined | null,
 ): ResponseReasoningEffort {
-  if (!value) return 'medium';
+  if (!value) return "medium";
   const normalized = value.trim().toLowerCase();
   if (
-    normalized === 'minimal' ||
-    normalized === 'low' ||
-    normalized === 'medium' ||
-    normalized === 'high'
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
   ) {
     return normalized;
   }
-  return 'low';
+  return "low";
 }
 
 function normalizePositiveInteger(
   value: string | undefined | null,
   fallback: number,
 ): number {
-  const parsed = Number.parseInt((value ?? '').trim(), 10);
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
   if (Number.isFinite(parsed) && parsed > 0) {
     return parsed;
   }
   return fallback;
 }
 
-const VERBOSITY_ORDER: ResponseVerbosity[] = ['low', 'medium', 'high'];
-const EFFORT_ORDER: ResponseReasoningEffort[] = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-];
-
-function escalateVerbosity(current: ResponseVerbosity): ResponseVerbosity {
-  const index = VERBOSITY_ORDER.indexOf(current);
-  return VERBOSITY_ORDER[Math.min(VERBOSITY_ORDER.length - 1, index + 1)];
-}
-
-function escalateReasoningEffort(
-  current: ResponseReasoningEffort,
-): ResponseReasoningEffort {
-  const index = EFFORT_ORDER.indexOf(current);
-  return EFFORT_ORDER[Math.min(EFFORT_ORDER.length - 1, index + 1)];
-}
-
-function coerceSegments(value: unknown): DraftSegmentNormalized[] | null {
-  if (!value) return null;
-
-  const visitQueue: unknown[] = [value];
-  const seen = new Set<unknown>();
-
-  while (visitQueue.length) {
-    const current = visitQueue.shift();
-    if (!current || typeof current !== 'object') continue;
-    if (seen.has(current)) continue;
-    seen.add(current);
-
-    if (Array.isArray(current)) {
-      const normalized = current
-        .map((entry) => normalizeSegment(entry))
-        .filter((entry): entry is DraftSegmentNormalized => entry !== null);
-      if (normalized.length === current.length && normalized.length > 0) {
-        return normalized;
-      }
-      visitQueue.push(...current);
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    if (record.segments) {
-      const normalized = coerceSegments(record.segments);
-      if (normalized) return normalized;
-    }
-    for (const entry of Object.values(record)) {
-      if (entry && typeof entry === 'object') {
-        visitQueue.push(entry);
-      }
-    }
-  }
-
-  return null;
-}
-
 function normalizeSegment(value: unknown): DraftSegmentNormalized | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const segmentId = record.segmentId ?? record.segment_id;
   const translation = record.translation ?? record.translation_segment;
-  if (typeof segmentId !== 'string' || typeof translation !== 'string') {
+  if (typeof segmentId !== "string" || typeof translation !== "string") {
     return null;
   }
   const notes = Array.isArray(record.notes)
-    ? record.notes.filter((entry): entry is string => typeof entry === 'string')
+    ? record.notes.filter((entry): entry is string => typeof entry === "string")
     : [];
   return { segmentId, translation, notes };
 }
@@ -319,7 +277,7 @@ function buildUserPromptPayload(options: TranslationDraftAgentOptions) {
     runOrder: options.runOrder,
     sourceHash: options.sourceHash,
     originLanguage: options.originLanguage ?? null,
-    targetLanguage: options.targetLanguage ?? 'English',
+    targetLanguage: options.targetLanguage ?? "English",
     segments: options.originSegments.map((segment) => ({
       segmentId: segment.id,
       text: segment.text,
@@ -335,7 +293,7 @@ function validateDraftResponse(
   expectedIds: string[],
 ) {
   if (!response?.segments || !Array.isArray(response.segments)) {
-    throw new Error('Draft response did not include any segments');
+    throw new Error("Draft response did not include any segments");
   }
 
   const providedIds = new Set(
@@ -348,7 +306,7 @@ function validateDraftResponse(
   const missing = expectedIds.filter((id) => !providedIds.has(id));
   if (missing.length) {
     throw new Error(
-      `Draft response missing segments: ${missing.slice(0, 5).join(', ')}`,
+      `Draft response missing segments: ${missing.slice(0, 5).join(", ")}`,
     );
   }
 }
@@ -357,17 +315,18 @@ export async function generateTranslationDraft(
   options: TranslationDraftAgentOptions,
 ): Promise<TranslationDraftAgentResult> {
   if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is required for translation draft agent');
+    throw new Error("OPENAI_API_KEY is required for translation draft agent");
   }
   if (!options.originSegments?.length) {
-    throw new Error('originSegments are required for translation draft agent');
+    throw new Error("originSegments are required for translation draft agent");
   }
 
   const baseModel = options.model?.trim() || DEFAULT_TRANSLATION_MODEL;
   const fallbackModel = FALLBACK_TRANSLATION_MODEL || baseModel;
   const baseVerbosity = options.verbosity || DEFAULT_VERBOSITY;
   const baseEffort = options.reasoningEffort || DEFAULT_REASONING_EFFORT;
-  const baseMaxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const baseMaxOutputTokens =
+    options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   const systemPrompt = buildDraftSystemPrompt({
     projectTitle: options.projectTitle ?? null,
@@ -379,7 +338,6 @@ export async function generateTranslationDraft(
     translationNotes: options.translationNotes ?? null,
   });
 
-  const userPayload = buildUserPromptPayload(options);
   const candidateCount = Math.max(
     1,
     Math.min(3, options.candidateCount ?? DEFAULT_CANDIDATE_COUNT),
@@ -393,18 +351,20 @@ export async function generateTranslationDraft(
   );
 
   const candidates: DraftCandidate[] = [];
-  let aggregateUsage = { inputTokens: 0, outputTokens: 0 };
+  const aggregateUsage = { inputTokens: 0, outputTokens: 0 };
 
   for (let index = 0; index < candidateCount; index += 1) {
     const candidate = await requestDraftCandidate({
       systemPrompt,
-      userPayload,
+      baseOptions: options,
       originSegments: options.originSegments,
       attempts: attemptsBase.map((attempt) => ({ ...attempt })),
       maxOutputTokens: baseMaxOutputTokens,
+      allowSegmentRetry: options.allowSegmentRetry ?? true,
     });
 
-    const candidateId = candidateCount === 1 ? 'candidate-1' : `candidate-${index + 1}`;
+    const candidateId =
+      candidateCount === 1 ? "candidate-1" : `candidate-${index + 1}`;
     candidates.push({
       id: candidateId,
       ...candidate,
@@ -414,7 +374,8 @@ export async function generateTranslationDraft(
   }
 
   let selectedCandidate = candidates[0];
-  const candidateAnalyses: Record<string, { summary: string; score?: number }> = {};
+  const candidateAnalyses: Record<string, { summary: string; score?: number }> =
+    {};
 
   if (candidates.length > 1) {
     const deliberation = await deliberateDraftCandidates({
@@ -444,11 +405,16 @@ export async function generateTranslationDraft(
     }
   }
 
-  const candidateSegmentMap = new Map<string, Map<string, TranslationDraftAgentSegmentResult>>();
+  const candidateSegmentMap = new Map<
+    string,
+    Map<string, TranslationDraftAgentSegmentResult>
+  >();
   candidates.forEach((candidate) => {
     candidateSegmentMap.set(
       candidate.id,
-      new Map(candidate.segments.map((segment) => [segment.segment_id, segment])),
+      new Map(
+        candidate.segments.map((segment) => [segment.segment_id, segment]),
+      ),
     );
   });
 
@@ -510,16 +476,16 @@ function buildDraftAttemptConfigs(
     },
     {
       model: baseModel,
-      verbosity: 'low',
-      effort: 'minimal',
+      verbosity: "low",
+      effort: "minimal",
     },
   ];
 
   if (fallbackModel && fallbackModel !== baseModel) {
     attempts.push({
       model: fallbackModel,
-      verbosity: 'low',
-      effort: 'minimal',
+      verbosity: "low",
+      effort: "minimal",
     });
   }
 
@@ -528,7 +494,7 @@ function buildDraftAttemptConfigs(
 
 interface RequestCandidateParams {
   systemPrompt: string;
-  userPayload: Record<string, unknown>;
+  baseOptions: TranslationDraftAgentOptions;
   originSegments: OriginSegment[];
   attempts: Array<{
     model: string;
@@ -536,18 +502,30 @@ interface RequestCandidateParams {
     effort: ResponseReasoningEffort;
   }>;
   maxOutputTokens: number;
+  allowSegmentRetry?: boolean;
 }
 
-async function requestDraftCandidate(
-  params: RequestCandidateParams,
-): Promise<{
+async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
   segments: TranslationDraftAgentSegmentResult[];
   mergedText: string;
   model: string;
   usage: { inputTokens: number; outputTokens: number };
   meta: TranslationDraftAgentResultMeta;
 }> {
-  const { systemPrompt, userPayload, originSegments, attempts, maxOutputTokens } = params;
+  const {
+    systemPrompt,
+    baseOptions,
+    originSegments,
+    attempts,
+    maxOutputTokens,
+    allowSegmentRetry = true,
+  } = params;
+
+  const payloadOptions: TranslationDraftAgentOptions = {
+    ...baseOptions,
+    originSegments,
+  };
+  const userPayload = buildUserPromptPayload(payloadOptions);
 
   const expectedIds = originSegments.map((segment) => segment.id);
   const attemptConfigs = attempts.length
@@ -555,130 +533,360 @@ async function requestDraftCandidate(
     : [
         {
           model: DEFAULT_TRANSLATION_MODEL,
-          verbosity: 'medium' as ResponseVerbosity,
-          effort: 'medium' as ResponseReasoningEffort,
+          verbosity: "medium" as ResponseVerbosity,
+          effort: "medium" as ResponseReasoningEffort,
         },
       ];
 
-  const resolveAttemptConfig = (
+  const fallbackAttemptConfig =
+    attemptConfigs.length > 1 &&
+    attemptConfigs[attemptConfigs.length - 1].model !== attemptConfigs[0].model
+      ? attemptConfigs[attemptConfigs.length - 1]
+      : null;
+
+  const primaryAttemptConfigs = fallbackAttemptConfig
+    ? attemptConfigs.slice(0, Math.max(1, attemptConfigs.length - 1))
+    : attemptConfigs;
+
+  const canSegmentRetry = allowSegmentRetry && originSegments.length > 1;
+  let segmentRetrySegments: TranslationDraftAgentSegmentResult[] | null = null;
+  let segmentRetryUsage: { inputTokens: number; outputTokens: number } | null = null;
+  let segmentRetryMeta: TranslationDraftAgentResultMeta | null = null;
+  let segmentRetryModel: string | null = null;
+
+  const pickPrimaryAttemptConfig = (
     attemptIndex: number,
   ): {
     model: string;
     verbosity: ResponseVerbosity;
     effort: ResponseReasoningEffort;
   } => {
+    if (!primaryAttemptConfigs.length) {
+      return fallbackAttemptConfig ?? attemptConfigs[0];
+    }
     const boundedIndex = Math.min(
       Math.max(0, attemptIndex),
-      Math.max(0, attemptConfigs.length - 1),
+      primaryAttemptConfigs.length - 1,
     );
-    const baseConfig = attemptConfigs[boundedIndex];
-    if (attemptIndex < attemptConfigs.length) {
-      return baseConfig;
-    }
-    return {
-      verbosity: 'low',
-      effort: 'minimal',
-      model: baseConfig.model,
-    };
+    return primaryAttemptConfigs[boundedIndex];
   };
 
-  const runResult = await runResponsesWithRetry({
+  const describeAttempt = (
+    context: ResponsesRetryAttemptContext,
+    config: { model: string; verbosity: ResponseVerbosity; effort: ResponseReasoningEffort },
+  ) => ({
+    attempt: context.attemptIndex + 1,
+    model: config.model,
+    verbosity: config.verbosity,
+    effort: config.effort,
+    maxOutputTokens: context.maxOutputTokens,
+    stage: context.stage,
+    reason: context.reason,
+    usingFallback: context.usingFallback,
+    usingSegmentRetry: context.usingSegmentRetry,
+  });
+
+  const executeRequest = async (
+    context: ResponsesRetryAttemptContext,
+    config: { model: string; verbosity: ResponseVerbosity; effort: ResponseReasoningEffort },
+  ) => {
+    try {
+      return await openai.responses.create({
+        model: config.model,
+        max_output_tokens: context.maxOutputTokens,
+        text: {
+          format: {
+            type: "json_schema",
+            name: draftResponseSchema.name,
+            schema: draftResponseSchema.schema,
+            strict: true,
+          },
+          verbosity: config.verbosity,
+        },
+        reasoning: { effort: config.effort },
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: systemPrompt }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Translate each segment faithfully. Return JSON matching the schema. Do not add commentary or additional fields.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: JSON.stringify(userPayload) }],
+          },
+        ],
+      });
+    } catch (error) {
+      if (isTranslationDebugEnabled()) {
+        console.debug("[TRANSLATION] draft run attempt failed", {
+          ...describeAttempt(context, config),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      throw error;
+    }
+  };
+
+  const buildSyntheticResponse = (
+    aggregate: TranslationDraftAgentResult,
+  ): Response => {
+    const normalized = aggregate.segments.map((segment) => ({
+      segmentId: segment.segment_id,
+      translation: segment.translation_segment,
+      notes: segment.notes ?? [],
+    }));
+    const payload = { segments: normalized, commentary: null };
+    const payloadText = JSON.stringify(payload);
+    return {
+      id: `segment-retry-${Date.now().toString(16)}`,
+      status: "completed",
+      model: aggregate.model,
+      output_text: payloadText,
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "output_text", text: payloadText },
+            { type: "output_parsed", parsed_json: payload },
+          ],
+        },
+      ],
+      usage: {
+        prompt_tokens: aggregate.usage.inputTokens,
+        completion_tokens: aggregate.usage.outputTokens,
+        total_tokens:
+          aggregate.usage.inputTokens + aggregate.usage.outputTokens,
+      },
+    } as unknown as Response;
+  };
+
+  const draftSegmentsWithSplit = async (
+    segmentsToProcess: OriginSegment[],
+    context: ResponsesRetryAttemptContext,
+  ): Promise<TranslationDraftAgentResult | null> => {
+    if (!segmentsToProcess.length) return null;
+
+    if (segmentsToProcess.length <= 1) {
+      const original = segmentsToProcess[0];
+      const subdivisions = splitOriginSegmentForRetry(original);
+      if (subdivisions.length <= 1) {
+        return null;
+      }
+
+      const partialResults: TranslationDraftAgentResult[] = [];
+      for (const subdivision of subdivisions) {
+        const subsetOptions: TranslationDraftAgentOptions = {
+          ...baseOptions,
+          originSegments: [subdivision],
+          candidateCount: 1,
+          allowSegmentRetry,
+          maxOutputTokens,
+        };
+        const subset = await requestDraftCandidate({
+          systemPrompt,
+          baseOptions: subsetOptions,
+          originSegments: [subdivision],
+          attempts: attempts.map((attempt) => ({ ...attempt })),
+          maxOutputTokens: context.maxOutputTokens,
+          allowSegmentRetry,
+        });
+        partialResults.push(subset);
+      }
+
+      const combinedUsage = partialResults.reduce(
+        (acc, current) => ({
+          inputTokens: acc.inputTokens + current.usage.inputTokens,
+          outputTokens: acc.outputTokens + current.usage.outputTokens,
+        }),
+        { inputTokens: 0, outputTokens: 0 },
+      );
+
+      let combinedMeta = partialResults[0].meta;
+      for (let index = 1; index < partialResults.length; index += 1) {
+        combinedMeta = mergeAgentMeta(combinedMeta, partialResults[index].meta);
+      }
+      combinedMeta.truncated = false;
+      combinedMeta.attemptHistory = [
+        ...(combinedMeta.attemptHistory ?? []),
+        context,
+      ];
+
+      const mergedSegment = mergeDraftSegmentResults(
+        original,
+        partialResults.flatMap((result) => result.segments),
+      );
+
+      return {
+        segments: [mergedSegment],
+        mergedText: mergedSegment.translation_segment,
+        usage: combinedUsage,
+        meta: combinedMeta,
+        model: partialResults[0].model,
+      } satisfies TranslationDraftAgentResult;
+    }
+
+    const midpoint = Math.max(1, Math.floor(segmentsToProcess.length / 2));
+    const leftSegments = segmentsToProcess.slice(0, midpoint);
+    const rightSegments = segmentsToProcess.slice(midpoint);
+
+    const leftOptions: TranslationDraftAgentOptions = {
+      ...baseOptions,
+      originSegments: leftSegments,
+      candidateCount: 1,
+      allowSegmentRetry,
+      maxOutputTokens,
+    };
+    const rightOptions: TranslationDraftAgentOptions = {
+      ...baseOptions,
+      originSegments: rightSegments,
+      candidateCount: 1,
+      allowSegmentRetry,
+      maxOutputTokens,
+    };
+
+    const leftResult = await requestDraftCandidate({
+      systemPrompt,
+      baseOptions: leftOptions,
+      originSegments: leftSegments,
+      attempts: attempts.map((attempt) => ({ ...attempt })),
+      maxOutputTokens: context.maxOutputTokens,
+      allowSegmentRetry,
+    });
+    const rightResult = await requestDraftCandidate({
+      systemPrompt,
+      baseOptions: rightOptions,
+      originSegments: rightSegments,
+      attempts: attempts.map((attempt) => ({ ...attempt })),
+      maxOutputTokens: context.maxOutputTokens,
+      allowSegmentRetry,
+    });
+
+    const combinedUsage = {
+      inputTokens:
+        leftResult.usage.inputTokens + rightResult.usage.inputTokens,
+      outputTokens:
+        leftResult.usage.outputTokens + rightResult.usage.outputTokens,
+    };
+
+    const combinedMeta = mergeAgentMeta(leftResult.meta, rightResult.meta);
+    combinedMeta.truncated = false;
+    combinedMeta.attemptHistory = [
+      ...(combinedMeta.attemptHistory ?? []),
+      context,
+    ];
+
+    const mergedSegments = [...leftResult.segments, ...rightResult.segments];
+    const mergedText = mergeSegmentsToText(
+      [...leftSegments, ...rightSegments],
+      mergedSegments,
+    );
+
+    return {
+      segments: mergedSegments,
+      mergedText,
+      usage: combinedUsage,
+      meta: combinedMeta,
+      model: leftResult.model,
+    } satisfies TranslationDraftAgentResult;
+  };
+
+  segmentRetrySegments = null;
+  segmentRetryUsage = null;
+  segmentRetryMeta = null;
+  segmentRetryModel = null;
+  const runResult = await runResponsesWithRetry<Response>({
     client: openai,
     initialMaxOutputTokens: maxOutputTokens,
     maxOutputTokensCap: MAX_OUTPUT_TOKENS_CAP,
     maxAttempts: Math.max(attemptConfigs.length + 2, 3),
     minOutputTokens: 200,
-    onAttempt: ({ attemptIndex, maxOutputTokens: requestTokens }) => {
+    onAttempt: ({
+      attemptIndex,
+      maxOutputTokens: requestTokens,
+      stage,
+      reason,
+      usingFallback,
+      usingSegmentRetry,
+    }) => {
       if (!isTranslationDebugEnabled()) {
         return;
       }
-      const attemptConfig = resolveAttemptConfig(attemptIndex);
-      console.debug('[TRANSLATION] draft run attempt', {
-        attempt: attemptIndex + 1,
-        model: attemptConfig.model,
-        verbosity: attemptConfig.verbosity,
-        effort: attemptConfig.effort,
+      const attemptContext: ResponsesRetryAttemptContext = {
+        attemptIndex,
         maxOutputTokens: requestTokens,
+        stage,
+        reason,
+        usingFallback,
+        usingSegmentRetry,
+      };
+      const attemptConfig = usingFallback && fallbackAttemptConfig
+        ? fallbackAttemptConfig
+        : pickPrimaryAttemptConfig(attemptIndex);
+      console.debug("[TRANSLATION] draft run attempt", {
+        ...describeAttempt(attemptContext, attemptConfig),
       });
     },
-    buildRequest: async ({ maxOutputTokens: requestTokens, attemptIndex }) => {
-      const attemptConfig = resolveAttemptConfig(attemptIndex);
-      try {
-        return await openai.responses.create({
-          model: attemptConfig.model,
-          max_output_tokens: requestTokens,
-          text: {
-            format: {
-              type: 'json_schema',
-              name: draftResponseSchema.name,
-              schema: draftResponseSchema.schema,
-              strict: true,
-            },
-            verbosity: attemptConfig.verbosity,
-          },
-          reasoning: { effort: attemptConfig.effort },
-          input: [
-            {
-              role: 'system',
-              content: [{ type: 'input_text', text: systemPrompt }],
-            },
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'input_text',
-                  text:
-                    'Translate each segment faithfully. Return JSON matching the schema. Do not add commentary or additional fields.',
-                },
-              ],
-            },
-            {
-              role: 'user',
-              content: [{ type: 'input_text', text: JSON.stringify(userPayload) }],
-            },
-          ],
-        });
-      } catch (error) {
-        if (isTranslationDebugEnabled()) {
-          console.debug('[TRANSLATION] draft run attempt failed', {
-            attempt: attemptIndex + 1,
-            model: attemptConfig.model,
-            error: error instanceof Error ? error.message : String(error),
-          });
+    buildRequest: async (context) =>
+      executeRequest(context, pickPrimaryAttemptConfig(context.attemptIndex)),
+    buildFallbackRequest: fallbackAttemptConfig
+      ? async (context) => executeRequest(context, fallbackAttemptConfig)
+      : undefined,
+    retrySegmentFn: canSegmentRetry
+      ? async (context) => {
+          const aggregate = await draftSegmentsWithSplit(
+            originSegments,
+            context,
+          );
+          if (!aggregate) {
+            return null;
+          }
+          segmentRetrySegments = aggregate.segments;
+          segmentRetryUsage = aggregate.usage;
+          segmentRetryMeta = aggregate.meta;
+          segmentRetryModel = aggregate.model;
+          return buildSyntheticResponse(aggregate);
         }
-        throw error;
-      }
-    },
+      : undefined,
   });
 
-  const { parsedJson, text: rawText, usage: responseUsage } = safeExtractOpenAIResponse(
-    runResult.response,
-  );
+  const {
+    parsedJson,
+    usage: responseUsage,
+    repairApplied,
+  } = safeExtractOpenAIResponse(runResult.response);
 
-  let payload: RawDraftResponse | null = null;
-  if (parsedJson && typeof parsedJson === 'object') {
-    payload = parsedJson as RawDraftResponse;
-  } else if (rawText && rawText.trim().length) {
-    payload = JSON.parse(rawText) as RawDraftResponse;
+  if (!parsedJson || typeof parsedJson !== "object") {
+    throw new Error("Draft response returned empty payload");
   }
 
-  if (!payload) {
-    throw new Error('Draft response returned empty payload');
-  }
+  const payload = parsedJson as RawDraftResponse;
 
   validateDraftResponse(payload, expectedIds);
 
-  const usage = {
+  const baseUsage = {
     inputTokens: responseUsage?.prompt_tokens ?? 0,
     outputTokens: responseUsage?.completion_tokens ?? 0,
   };
 
-  const normalizedSegments = (Array.isArray(payload.segments) ? payload.segments : [])
+  const extractedSegments = (
+    Array.isArray(payload.segments) ? payload.segments : []
+  )
     .map((entry) => normalizeSegment(entry))
     .filter((entry): entry is DraftSegmentNormalized => entry !== null)
     .map((segment) => {
-      const origin = originSegments.find((item) => item.id === segment.segmentId);
-      const originalText = origin?.text ?? '';
+      const origin = originSegments.find(
+        (item) => item.id === segment.segmentId,
+      );
+      const originalText = origin?.text ?? "";
       const translation = segment.translation.trim();
       const safeTranslation = translation.length ? translation : originalText;
       return {
@@ -686,37 +894,88 @@ async function requestDraftCandidate(
         origin_segment: originalText,
         translation_segment: safeTranslation,
         notes: segment.notes,
-        spanPairs: buildSpanPairs(segment.segmentId, originalText, safeTranslation),
+        spanPairs: buildSpanPairs(
+          segment.segmentId,
+          originalText,
+          safeTranslation,
+        ),
       } satisfies TranslationDraftAgentSegmentResult;
     });
 
-  const mergedText = mergeSegmentsToText(originSegments, normalizedSegments);
-  const finalAttemptIndex = Math.max(0, runResult.attempts - 1);
-  const finalAttemptConfig = resolveAttemptConfig(finalAttemptIndex);
-  const rootAttemptConfig = resolveAttemptConfig(0);
+  const retrySegments = segmentRetrySegments as
+    | TranslationDraftAgentSegmentResult[]
+    | null;
+  const retryUsage = segmentRetryUsage as
+    | { inputTokens: number; outputTokens: number }
+    | null;
+  const retryMeta = segmentRetryMeta as TranslationDraftAgentResultMeta | null;
+  const retryModel = segmentRetryModel as string | null;
+
+  const finalSegments = retrySegments ?? extractedSegments;
+
+  const usage = retryUsage ? { ...retryUsage } : baseUsage;
+
+  const mergedText = mergeSegmentsToText(originSegments, finalSegments);
+  const lastAttemptContext =
+    runResult.attemptHistory[runResult.attemptHistory.length - 1] ?? null;
+  const finalAttemptConfig = lastAttemptContext
+    ? lastAttemptContext.usingFallback && fallbackAttemptConfig
+      ? fallbackAttemptConfig
+      : pickPrimaryAttemptConfig(lastAttemptContext.attemptIndex)
+    : pickPrimaryAttemptConfig(runResult.attempts - 1);
+  const rootAttemptConfig = pickPrimaryAttemptConfig(0);
+  let fallbackModelUsed =
+    Boolean(lastAttemptContext?.usingFallback) ||
+    finalAttemptConfig.model !== rootAttemptConfig.model;
+
+  const segmentMeta = retryMeta;
+  const segmentAttempts = segmentMeta?.attempts ?? 0;
+  const totalAttempts = runResult.attempts + segmentAttempts;
+  let attemptHistory = [...runResult.attemptHistory];
+  if (segmentMeta?.attemptHistory?.length) {
+    attemptHistory = attemptHistory.concat(segmentMeta.attemptHistory);
+  }
+
+  fallbackModelUsed = fallbackModelUsed || Boolean(segmentMeta?.fallbackModelUsed);
+  const jsonRepairFlag = Boolean(repairApplied) || Boolean(segmentMeta?.jsonRepairApplied);
+  const truncatedFlag = retrySegments ? false : runResult.truncated;
+  const maxTokensUsed = Math.max(
+    runResult.maxOutputTokens,
+    segmentMeta?.maxOutputTokens ?? runResult.maxOutputTokens,
+  );
+
+  const responseModel = runResult.response.model ?? null;
 
   if (isTranslationDebugEnabled()) {
-    console.debug('[TRANSLATION] draft run success', {
-      attempts: runResult.attempts,
-      truncated: runResult.truncated,
-      model: runResult.response.model ?? finalAttemptConfig.model,
-      maxOutputTokens: runResult.maxOutputTokens,
+    console.debug("[TRANSLATION] draft run success", {
+      attempts: totalAttempts,
+      truncated: truncatedFlag,
+      model:
+        retryModel ??
+        responseModel ??
+        finalAttemptConfig.model,
+      maxOutputTokens: maxTokensUsed,
     });
   }
 
   return {
-    segments: normalizedSegments,
+    segments: finalSegments,
     mergedText,
-    model: runResult.response.model || finalAttemptConfig.model,
+    model:
+      retryModel ??
+      responseModel ??
+      finalAttemptConfig.model,
     usage,
     meta: {
       verbosity: finalAttemptConfig.verbosity,
       reasoningEffort: finalAttemptConfig.effort,
-      maxOutputTokens: runResult.maxOutputTokens,
-      attempts: runResult.attempts,
-      retryCount: Math.max(0, runResult.attempts - 1),
-      truncated: runResult.truncated,
-      fallbackModelUsed: finalAttemptConfig.model !== rootAttemptConfig.model,
+      maxOutputTokens: maxTokensUsed,
+      attempts: totalAttempts,
+      retryCount: Math.max(0, totalAttempts - 1),
+      truncated: truncatedFlag,
+      fallbackModelUsed,
+      jsonRepairApplied: jsonRepairFlag,
+      attemptHistory,
     },
   };
 }
@@ -728,7 +987,7 @@ function mergeSegmentsToText(
   return originSegments
     .map((originSegment, index) => {
       const translated =
-        translatedSegments[index]?.translation_segment?.trim() ?? '';
+        translatedSegments[index]?.translation_segment?.trim() ?? "";
       return {
         translated,
         paragraphIndex: originSegment.paragraphIndex,
@@ -741,9 +1000,9 @@ function mergeSegmentsToText(
       const previous = index > 0 ? array[index - 1] : null;
       const needsParagraphBreak =
         previous !== null && previous.paragraphIndex !== current.paragraphIndex;
-      const separator = index === 0 ? '' : needsParagraphBreak ? '\n\n' : '\n';
+      const separator = index === 0 ? "" : needsParagraphBreak ? "\n\n" : "\n";
       return `${acc}${separator}${current.translated}`;
-    }, '')
+    }, "")
     .trim();
 }
 
@@ -815,44 +1074,45 @@ async function deliberateDraftCandidates(params: {
       max_output_tokens: JUDGE_MAX_OUTPUT_TOKENS,
       text: {
         format: {
-          type: 'json_schema',
+          type: "json_schema",
           name: deliberationResponseSchema.name,
           schema: deliberationResponseSchema.schema,
           strict: true,
         },
-        verbosity: 'low',
+        verbosity: "low",
       },
-      reasoning: { effort: 'minimal' },
+      reasoning: { effort: "minimal" },
       input: [
         {
-          role: 'system',
+          role: "system",
           content: [
             {
-              type: 'input_text',
-              text:
-                'You are an expert literary translation evaluator. Choose the candidate that best preserves meaning, glossary, and contractual tone. Respond with JSON only.',
+              type: "input_text",
+              text: "You are an expert literary translation evaluator. Choose the candidate that best preserves meaning, glossary, and contractual tone. Respond with JSON only.",
             },
           ],
         },
         {
-          role: 'user',
-          content: [{ type: 'input_text', text: JSON.stringify(inputPayload) }],
+          role: "user",
+          content: [{ type: "input_text", text: JSON.stringify(inputPayload) }],
         },
       ],
     });
 
-    const { parsedJson, text, usage } = safeExtractOpenAIResponse(response);
-    const payload = (parsedJson || (text ? JSON.parse(text) : null)) as
-      | {
-          bestCandidateId?: string;
-          rationale?: string | null;
-          analysis?: Array<{ candidateId: string; summary: string; score?: number }>;
-        }
-      | null;
-
-    if (!payload) {
+    const { parsedJson, usage } = safeExtractOpenAIResponse(response);
+    if (!parsedJson || typeof parsedJson !== "object") {
       return null;
     }
+
+    const payload = parsedJson as {
+      bestCandidateId?: string;
+      rationale?: string | null;
+      analysis?: Array<{
+        candidateId: string;
+        summary: string;
+        score?: number;
+      }>;
+    };
 
     return {
       bestCandidateId: payload.bestCandidateId ?? candidates[0].id,
@@ -864,8 +1124,7 @@ async function deliberateDraftCandidates(params: {
       },
     };
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn('[TRANSLATION] Candidate deliberation failed', {
+    console.warn("[TRANSLATION] Candidate deliberation failed", {
       error,
     });
     return null;

@@ -315,7 +315,7 @@ const resolveIssuesFromReport = (
   report: ProofreadingReport | null,
 ): ProofreadIssueEntry[] => {
   if (!report) return [];
-  const buckets = Array.isArray(report.results) ? report.results ?? [] : [];
+  const buckets = Array.isArray(report.results) ? (report.results ?? []) : [];
   return buckets
     .flatMap((bucket, bucketIndex) =>
       (bucket.items ?? []).map((issue, issueIndex) => ({
@@ -375,7 +375,9 @@ export const ProofreadIssuesProvider = ({
     translationText ?? "",
   );
   const translationRef = useRef(currentTranslation);
-  const upsertProofSummary = useChatInsightStore((state) => state.upsertProofSummary);
+  const upsertProofSummary = useChatInsightStore(
+    (state) => state.upsertProofSummary,
+  );
   const setProofIssueHandlers = useProofreadIssueActionStore(
     (state) => state.setHandlers,
   );
@@ -450,7 +452,9 @@ export const ProofreadIssuesProvider = ({
     if (showAllIssues) return allIssues;
     return allIssues.filter(({ issue }) => {
       const severity = normalizeSeverity(issue.severity) ?? "low";
-      return severity === "critical" || severity === "high" || severity === "medium";
+      return (
+        severity === "critical" || severity === "high" || severity === "medium"
+      );
     });
   }, [allIssues, showAllIssues]);
 
@@ -870,8 +874,7 @@ export const ProofreadIssuesProvider = ({
       severityOrder.map((key) => snapshot.counts[key]).join(","),
       snapshot.exampleIssues
         .map(
-          (item) =>
-            `${item.issueId}:${item.severity}:${item.location ?? ""}`,
+          (item) => `${item.issueId}:${item.severity}:${item.location ?? ""}`,
         )
         .join("|"),
     ].join(";");
@@ -918,7 +921,13 @@ export const ProofreadIssuesProvider = ({
     return () => {
       resetHandlers();
     };
-  }, [allIssues, handleApply, handleIgnore, setProofIssueHandlers, resetHandlers]);
+  }, [
+    allIssues,
+    handleApply,
+    handleIgnore,
+    setProofIssueHandlers,
+    resetHandlers,
+  ]);
 
   const value = useMemo<ProofreadIssuesContextValue>(
     () => ({

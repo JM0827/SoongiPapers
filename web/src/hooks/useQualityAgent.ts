@@ -3,7 +3,11 @@ import { api } from "../services/api";
 import type { QualityStreamEvent } from "../services/api";
 import type { ProjectSummary } from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
-import type { QualityAgentState } from "../store/workflow.store";
+import type {
+  AgentRunState,
+  AgentSubState,
+  QualityAgentState,
+} from "../store/workflow.store";
 import { useProjectStore } from "../store/project.store";
 
 interface UseQualityAgentParams {
@@ -45,6 +49,38 @@ const extractProjectModel = (
   return undefined;
 };
 
+const createRunState = (
+  status: AgentRunState["status"],
+  overrides?: Partial<AgentRunState>,
+): AgentRunState => ({
+  status,
+  heartbeatAt: overrides?.heartbeatAt ?? Date.now(),
+  willRetry: overrides?.willRetry ?? false,
+  nextRetryDelayMs: overrides?.nextRetryDelayMs ?? null,
+});
+
+const mapChunkSummariesToSubStates = (
+  summaries: QualityAgentState["chunkSummaries"],
+): AgentSubState[] =>
+  summaries.map((summary) => {
+    const normalized = summary.status;
+    const status: AgentSubState["status"] =
+      normalized === "completed"
+        ? "done"
+        : normalized === "error"
+          ? "failed"
+          : normalized === "partial" || normalized === "fallback"
+            ? "retrying"
+            : "running";
+    return {
+      id: `chunk-${summary.index}`,
+      status,
+      label: `청크 ${summary.index + 1}`,
+      error:
+        summary.status === "error" ? (summary.message ?? undefined) : undefined,
+    };
+  });
+
 export const useQualityAgent = ({
   token,
   projectId,
@@ -83,7 +119,11 @@ export const useQualityAgent = ({
     if (!stage) return;
     if (!projectId) return;
     if (stage.includes("run") && quality.status === "idle") {
-      setQualityForProject({ status: "running", lastError: null });
+      setQualityForProject({
+        status: "running",
+        lastError: null,
+        run: createRunState("running"),
+      });
     } else if (
       (stage.includes("done") || stage.includes("complete")) &&
       quality.status === "idle"
@@ -92,11 +132,13 @@ export const useQualityAgent = ({
         status: "done",
         score: lifecycle.score ?? quality.score,
         updatedAt: lifecycle.lastUpdatedAt ?? quality.updatedAt,
+        run: createRunState("done"),
       });
     } else if (stage.includes("fail") && quality.status === "idle") {
       setQualityForProject({
         status: "failed",
         lastError: "이전 품질 검토가 실패했습니다.",
+        run: createRunState("failed"),
       });
     }
   }, [
@@ -110,7 +152,7 @@ export const useQualityAgent = ({
 
   const runQuality = useCallback(
     async (options?: { label?: string | null; allowParallel?: boolean }) => {
-      if (quality.status === 'running') {
+      if (quality.status === "running") {
         return;
       }
       if (!token || !projectId) {
@@ -123,14 +165,16 @@ export const useQualityAgent = ({
       const startTimestamp = new Date().toISOString();
       setQualityForProject({
         projectId,
-        status: 'running',
+        status: "running",
         lastError: null,
         updatedAt: startTimestamp,
         chunksTotal: 0,
         chunksCompleted: 0,
         currentChunkIndex: null,
         chunkSummaries: [],
-        lastMessage: '품질 검토를 준비하는 중입니다…',
+        lastMessage: "품질 검토를 준비하는 중입니다…",
+        run: createRunState("running"),
+        subStates: [],
       });
 
       const activeProject =
@@ -139,39 +183,47 @@ export const useQualityAgent = ({
 
       const handleEvent = (event: QualityStreamEvent) => {
         switch (event.type) {
-          case 'start':
-            setQualityForProject({
-              projectId,
-              status: 'running',
-              lastError: null,
-              updatedAt: new Date().toISOString(),
-              chunksTotal: event.totalChunks,
-              chunksCompleted: 0,
-              currentChunkIndex: null,
-              chunkSummaries: Array.from({ length: event.totalChunks }, (_, index) => ({
-                index,
-                status: 'pending' as const,
-                score: null,
-                durationMs: null,
-                requestId: null,
-                maxOutputTokensUsed: null,
-                usage: null,
-                message: null,
-                fallbackApplied: false,
-                missingFields: [],
-                attempts: null,
-                preview: null,
-              })),
-              lastMessage: '청크 평가를 시작합니다…',
-            });
+          case "start":
+            (() => {
+              const initialSummaries = Array.from(
+                { length: event.totalChunks },
+                (_, index) => ({
+                  index,
+                  status: "pending" as const,
+                  score: null,
+                  durationMs: null,
+                  requestId: null,
+                  maxOutputTokensUsed: null,
+                  usage: null,
+                  message: null,
+                  fallbackApplied: false,
+                  missingFields: [],
+                  attempts: null,
+                  preview: null,
+                }),
+              );
+              setQualityForProject({
+                projectId,
+                status: "running",
+                lastError: null,
+                updatedAt: new Date().toISOString(),
+                chunksTotal: event.totalChunks,
+                chunksCompleted: 0,
+                currentChunkIndex: null,
+                chunkSummaries: initialSummaries,
+                lastMessage: "청크 평가를 시작합니다…",
+                run: createRunState("running"),
+                subStates: mapChunkSummariesToSubStates(initialSummaries),
+              });
+            })();
             break;
-          case 'chunk-start':
+          case "chunk-start":
             setQualityForProject((current) => {
               const summaries = current.chunkSummaries.length
                 ? [...current.chunkSummaries]
                 : Array.from({ length: event.total }, (_, index) => ({
                     index,
-                    status: 'pending' as const,
+                    status: "pending" as const,
                     score: null,
                     durationMs: null,
                     requestId: null,
@@ -186,7 +238,7 @@ export const useQualityAgent = ({
               summaries[event.index] = {
                 ...summaries[event.index],
                 index: event.index,
-                status: 'running',
+                status: "running",
                 message: `청크 ${event.index + 1}/${event.total} 평가 중…`,
                 fallbackApplied: false,
                 missingFields: [],
@@ -198,21 +250,27 @@ export const useQualityAgent = ({
                 chunksTotal: Math.max(current.chunksTotal, event.total),
                 currentChunkIndex: event.index,
                 lastMessage: `청크 ${event.index + 1}/${event.total} 평가 중…`,
+                run: createRunState("running"),
+                subStates: mapChunkSummariesToSubStates(summaries),
               };
             });
             break;
-          case 'chunk-retry':
-            setQualityForProject({
+          case "chunk-retry":
+            setQualityForProject((current) => ({
               lastMessage: `청크 ${event.index + 1} 토큰 한도 증가 (${event.from} → ${event.to})`,
-            });
+              run: createRunState("recovering", {
+                willRetry: true,
+              }),
+              subStates: mapChunkSummariesToSubStates(current.chunkSummaries),
+            }));
             break;
-          case 'chunk-partial':
+          case "chunk-partial":
             setQualityForProject((current) => {
               const summaries = current.chunkSummaries.length
                 ? [...current.chunkSummaries]
                 : Array.from({ length: event.total }, (_, index) => ({
                     index,
-                    status: 'pending' as const,
+                    status: "pending" as const,
                     score: null,
                     durationMs: null,
                     requestId: null,
@@ -226,7 +284,7 @@ export const useQualityAgent = ({
                   }));
               const summary = summaries[event.index] ?? {
                 index: event.index,
-                status: 'pending' as const,
+                status: "pending" as const,
                 score: null,
                 durationMs: null,
                 requestId: null,
@@ -239,11 +297,11 @@ export const useQualityAgent = ({
                 preview: null,
               };
               const messageBase = event.fallbackApplied
-                ? '필수 필드 누락으로 추정값을 적용했습니다.'
-                : `필수 필드 누락: ${event.missingFields.join(', ') || '알 수 없음'}`;
+                ? "필수 필드 누락으로 추정값을 적용했습니다."
+                : `필수 필드 누락: ${event.missingFields.join(", ") || "알 수 없음"}`;
               summaries[event.index] = {
                 ...summary,
-                status: event.fallbackApplied ? 'fallback' : 'partial',
+                status: event.fallbackApplied ? "fallback" : "partial",
                 message: messageBase,
                 fallbackApplied: event.fallbackApplied,
                 missingFields: event.missingFields,
@@ -255,16 +313,23 @@ export const useQualityAgent = ({
                 lastMessage: event.fallbackApplied
                   ? `청크 ${event.index + 1} 추정값으로 보정했습니다.`
                   : `청크 ${event.index + 1} 필드 누락 감지 (재시도 중)…`,
+                run: createRunState(
+                  event.fallbackApplied ? "running" : "recovering",
+                  {
+                    willRetry: !event.fallbackApplied,
+                  },
+                ),
+                subStates: mapChunkSummariesToSubStates(summaries),
               };
             });
             break;
-          case 'chunk-complete':
+          case "chunk-complete":
             setQualityForProject((current) => {
               const summaries = current.chunkSummaries.length
                 ? [...current.chunkSummaries]
                 : Array.from({ length: event.total }, (_, index) => ({
                     index,
-                    status: 'pending' as const,
+                    status: "pending" as const,
                     score: null,
                     durationMs: null,
                     requestId: null,
@@ -278,7 +343,7 @@ export const useQualityAgent = ({
                   }));
               summaries[event.index] = {
                 index: event.index,
-                status: event.fallbackApplied ? 'fallback' : 'completed',
+                status: event.fallbackApplied ? "fallback" : "completed",
                 score: event.result?.overallScore ?? null,
                 durationMs: event.durationMs,
                 requestId: event.requestId ?? null,
@@ -291,16 +356,19 @@ export const useQualityAgent = ({
                     }
                   : null,
                 message: event.fallbackApplied
-                  ? '누락된 필드가 있어 추정값으로 보정된 결과입니다.'
+                  ? "누락된 필드가 있어 추정값으로 보정된 결과입니다."
                   : null,
                 fallbackApplied: Boolean(event.fallbackApplied),
                 missingFields: event.missingFields ?? [],
-                attempts: event.attempts ?? summaries[event.index].attempts ?? null,
-                preview: event.preview ?? summaries[event.index].preview ?? null,
+                attempts:
+                  event.attempts ?? summaries[event.index].attempts ?? null,
+                preview:
+                  event.preview ?? summaries[event.index].preview ?? null,
               };
               const completed = summaries.filter(
                 (summary) =>
-                  summary.status === 'completed' || summary.status === 'fallback',
+                  summary.status === "completed" ||
+                  summary.status === "fallback",
               ).length;
               return {
                 chunkSummaries: summaries,
@@ -310,15 +378,19 @@ export const useQualityAgent = ({
                 ),
                 currentChunkIndex: null,
                 lastMessage: `청크 ${event.index + 1} 완료 (${completed}/${event.total})`,
+                run: createRunState("running"),
+                subStates: mapChunkSummariesToSubStates(summaries),
               };
             });
             break;
-          case 'progress':
-            setQualityForProject({
+          case "progress":
+            setQualityForProject((current) => ({
               chunksCompleted: Math.min(event.total, event.completed),
-            });
+              run: createRunState("running"),
+              subStates: mapChunkSummariesToSubStates(current.chunkSummaries),
+            }));
             break;
-          case 'chunk-error':
+          case "chunk-error":
             setQualityForProject((current) => {
               const summaries = current.chunkSummaries.length
                 ? [...current.chunkSummaries]
@@ -326,33 +398,40 @@ export const useQualityAgent = ({
               if (summaries[event.index]) {
                 summaries[event.index] = {
                   ...summaries[event.index],
-                  status: 'error',
+                  status: "error",
                   message: event.message,
                 };
               }
               return {
-                status: 'failed',
+                status: "failed",
                 lastError: event.message,
                 lastMessage: event.message,
                 currentChunkIndex: null,
                 chunkSummaries: summaries,
+                run: createRunState("failed"),
+                subStates: mapChunkSummariesToSubStates(summaries),
               };
             });
             break;
-          case 'complete':
+          case "complete":
             setQualityForProject((current) => ({
               chunksCompleted:
-                event.result.meta?.chunks ?? current.chunksTotal ?? current.chunksCompleted,
-              lastMessage: '품질 검토 결과를 집계하고 있습니다…',
+                event.result.meta?.chunks ??
+                current.chunksTotal ??
+                current.chunksCompleted,
+              lastMessage: "품질 검토 결과를 집계하고 있습니다…",
               score: event.result.overallScore ?? current.score,
+              run: createRunState("running"),
+              subStates: mapChunkSummariesToSubStates(current.chunkSummaries),
             }));
             break;
-          case 'error':
+          case "error":
             setQualityForProject({
-              status: 'failed',
+              status: "failed",
               lastError: event.message,
               lastMessage: event.message,
               currentChunkIndex: null,
+              run: createRunState("failed"),
             });
             break;
           default:
@@ -383,36 +462,41 @@ export const useQualityAgent = ({
           sourceText: originText,
           translatedText: translationText,
           qualityResult: finalResult,
-          translationMethod: 'auto',
+          translationMethod: "auto",
           modelUsed: finalResult.meta?.model,
         });
 
         setQualityForProject((current) => ({
-          status: 'done',
+          status: "done",
           score: finalResult.overallScore ?? current.score,
           lastError: null,
-          lastMessage: '품질 검토가 완료되었습니다.',
+          lastMessage: "품질 검토가 완료되었습니다.",
           updatedAt: new Date().toISOString(),
           chunksTotal:
-            current.chunksTotal || finalResult.meta?.chunks || current.chunksTotal,
+            current.chunksTotal ||
+            finalResult.meta?.chunks ||
+            current.chunksTotal,
           chunksCompleted:
             finalResult.meta?.chunks ??
             Math.max(current.chunksCompleted, current.chunksTotal),
           currentChunkIndex: null,
           chunkSummaries: current.chunkSummaries,
+          run: createRunState("done"),
+          subStates: mapChunkSummariesToSubStates(current.chunkSummaries),
         }));
 
         refreshContent?.();
         onCompleted?.();
         openQualityDialog?.();
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
+        const message = err instanceof Error ? err.message : "Unknown error";
         setQualityForProject({
-          status: 'failed',
+          status: "failed",
           lastError: message,
           lastMessage: message,
           updatedAt: new Date().toISOString(),
           currentChunkIndex: null,
+          run: createRunState("failed"),
         });
       }
     },

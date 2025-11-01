@@ -8,7 +8,15 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, Loader2, CheckCircle2, Circle, BookOpen, AlertTriangle } from "lucide-react";
+import {
+  Pencil,
+  X,
+  Loader2,
+  CheckCircle2,
+  Circle,
+  BookOpen,
+  AlertTriangle,
+} from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
 import type {
   RightPanelBaseTab,
@@ -198,13 +206,16 @@ const resolveStageStatusKey = (
   const stageOrder = getPipelineStageOrder(sequential);
   const guardStageKey = stageOrder.includes("qa")
     ? "qa"
-    : stageOrder[stageOrder.length - 1] ?? "qa";
+    : (stageOrder[stageOrder.length - 1] ?? "qa");
   const qaCount = pipelineStageCount[guardStageKey] ?? 0;
   const qaComplete =
     total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
 
   if (stageKey === "finalizing") {
-    if (normalizedJobStatus === "failed" || normalizedJobStatus === "cancelled") {
+    if (
+      normalizedJobStatus === "failed" ||
+      normalizedJobStatus === "cancelled"
+    ) {
       return "failed";
     }
     if (completedStages.has("finalizing") || translationDone) {
@@ -291,7 +302,7 @@ const formatSequentialStageStatus = (
   const stageOrder = getPipelineStageOrder(sequential);
   const guardStageKey = stageOrder.includes("qa")
     ? "qa"
-    : stageOrder[stageOrder.length - 1] ?? "qa";
+    : (stageOrder[stageOrder.length - 1] ?? "qa");
   const qaCount = sequential.stageCounts?.[guardStageKey] ?? 0;
   const qaComplete =
     total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
@@ -326,12 +337,7 @@ const formatSequentialStageStatus = (
     sequential.stageCounts?.[stageKey] ?? 0,
     total,
   );
-  const statusKey = resolveStageStatusKey(
-    job,
-    stageKey,
-    sequential,
-    total,
-  );
+  const statusKey = resolveStageStatusKey(job, stageKey, sequential, total);
   const statusMeta = STAGE_STATUS_META[statusKey];
   const statusLabel = localize(statusMeta.key, statusMeta.fallback);
 
@@ -488,7 +494,9 @@ const UserMenu = ({
                 setMenuOpen(false);
               }}
             >
-              {advancedProofreadEnabled ? 'Hide Advanced Proofread' : 'Advanced Proofread'}
+              {advancedProofreadEnabled
+                ? "Hide Advanced Proofread"
+                : "Advanced Proofread"}
             </button>
             <button
               className="rounded px-2.5 py-1.5 text-left text-rose-600 transition hover:bg-rose-50 focus:bg-rose-50 focus:outline-none"
@@ -552,7 +560,11 @@ export const RightPanel = ({
   );
 
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       if (resolved === key) {
         return applyParams(fallback, params);
@@ -576,15 +588,24 @@ export const RightPanel = ({
   const [isNotesModalOpen, setNotesModalOpen] = useState(false);
   const [isOriginModalOpen, setOriginModalOpen] = useState(false);
   const [isTranslationModalOpen, setTranslationModalOpen] = useState(false);
-  const [profileStatus, setProfileStatus] = useState<
-    { consent: boolean; requiredFilled: boolean; complete: boolean } | null
-  >(null);
+  const [profileStatus, setProfileStatus] = useState<{
+    consent: boolean;
+    requiredFilled: boolean;
+    complete: boolean;
+  } | null>(null);
   const profileStatusCacheRef = useRef<
-    Record<string, { consent: boolean; requiredFilled: boolean; complete: boolean }>
+    Record<
+      string,
+      { consent: boolean; requiredFilled: boolean; complete: boolean }
+    >
   >({});
 
   const handleProfileStatusChange = useCallback(
-    (status: { consent: boolean; requiredFilled: boolean; complete: boolean }) => {
+    (status: {
+      consent: boolean;
+      requiredFilled: boolean;
+      complete: boolean;
+    }) => {
       if (!activeProjectId) {
         setProfileStatus(status);
         return;
@@ -606,9 +627,9 @@ export const RightPanel = ({
 
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [isSavingTranslationNotes, setSavingTranslationNotes] = useState(false);
-  const [translationNotesError, setTranslationNotesError] = useState<string | null>(
-    null,
-  );
+  const [translationNotesError, setTranslationNotesError] = useState<
+    string | null
+  >(null);
   const handleOpenNotesModal = useCallback(() => {
     setTranslationNotesError(null);
     setNotesModalOpen(true);
@@ -660,7 +681,12 @@ export const RightPanel = ({
 
   const profileStatusIcon = useMemo(() => {
     if (!profileStatus) {
-      return <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden="true" />;
+      return (
+        <Loader2
+          className="h-4 w-4 animate-spin text-slate-400"
+          aria-hidden="true"
+        />
+      );
     }
     if (profileStatus.complete) {
       return (
@@ -672,57 +698,52 @@ export const RightPanel = ({
 
   const profileNeedsAttention = profileStatus ? !profileStatus.complete : false;
   const profileAttentionLabel = localize(
-    'rightpanel_preview_profile_incomplete_badge',
-    'Fix',
+    "rightpanel_preview_profile_incomplete_badge",
+    "Fix",
   );
   const profileAttentionHint = localize(
-    'rightpanel_preview_profile_incomplete_hint',
-    'Complete the profile to proceed.',
+    "rightpanel_preview_profile_incomplete_hint",
+    "Complete the profile to proceed.",
   );
 
   const profileActionNode =
-    profileNeedsAttention || (profileControls && !profileControls.isEditing)
-      ? (
-          <div className="flex items-center gap-2">
-            {profileNeedsAttention ? (
-              <button
-                type="button"
-                onClick={() => setProfileOpen(true)}
-                className="flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100"
-                title={profileAttentionHint}
-                aria-label={profileAttentionHint}
-                data-collapsible-ignore
-              >
-                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>{profileAttentionLabel}</span>
-              </button>
-            ) : null}
-            {profileControls && !profileControls.isEditing ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!profileOpen) {
-                    setProfileOpen(true);
-                  }
-                  profileControls.startEdit();
-                }}
-                className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                aria-label={localize(
-                  'rightpanel_preview_profile_edit',
-                  'Edit profile',
-                )}
-                title={localize(
-                  'rightpanel_preview_profile_edit',
-                  'Edit profile',
-                )}
-                data-collapsible-ignore
-              >
-                <Pencil className="h-4 w-4" aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-        )
-      : undefined;
+    profileNeedsAttention || (profileControls && !profileControls.isEditing) ? (
+      <div className="flex items-center gap-2">
+        {profileNeedsAttention ? (
+          <button
+            type="button"
+            onClick={() => setProfileOpen(true)}
+            className="flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100"
+            title={profileAttentionHint}
+            aria-label={profileAttentionHint}
+            data-collapsible-ignore
+          >
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{profileAttentionLabel}</span>
+          </button>
+        ) : null}
+        {profileControls && !profileControls.isEditing ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (!profileOpen) {
+                setProfileOpen(true);
+              }
+              profileControls.startEdit();
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+            aria-label={localize(
+              "rightpanel_preview_profile_edit",
+              "Edit profile",
+            )}
+            title={localize("rightpanel_preview_profile_edit", "Edit profile")}
+            data-collapsible-ignore
+          >
+            <Pencil className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    ) : undefined;
 
   const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
   const originPrepSnapshot = content?.originPrep ?? null;
@@ -730,11 +751,11 @@ export const RightPanel = ({
     token &&
       content?.projectId &&
       originPrepSnapshot &&
-      originPrepSnapshot.upload.status === 'uploaded',
+      originPrepSnapshot.upload.status === "uploaded",
   );
   const canTriggerReanalysis = Boolean(
     canManuallyRefreshOrigin &&
-      originPrepSnapshot?.analysis.status !== 'running',
+      originPrepSnapshot?.analysis.status !== "running",
   );
 
   const originFilename = useMemo(() => {
@@ -771,63 +792,55 @@ export const RightPanel = ({
       const message =
         err instanceof Error
           ? err.message
-          : localize(
-              'origin_prep_refresh_error',
-              'Failed to re-run analysis.',
-            );
+          : localize("origin_prep_refresh_error", "Failed to re-run analysis.");
       setReanalyzeError(message);
     } finally {
       setReanalyzingOrigin(false);
     }
-  }, [
-    token,
-    content?.projectId,
-    queryClient,
-    onRefreshContent,
-    localize,
-  ]);
+  }, [token, content?.projectId, queryClient, onRefreshContent, localize]);
 
   const translationAgentState = useWorkflowStore((state) => state.translation);
-  const proofreadingAgentState = useWorkflowStore((state) => state.proofreading);
-
-  const resolvedTabs = useMemo<Array<{ key: RightPanelBaseTab; label: string }>>(
-    () => {
-      const tabs: Array<{ key: RightPanelBaseTab; label: string }> = [
-        {
-          key: "preview",
-          label: localize("rightpanel_tab_overview", "Overview"),
-        },
-        {
-          key: "proofread:editing",
-          label: localize("rightpanel_tab_editor", "Editor"),
-        },
-      ];
-      if (advancedProofreadEnabled) {
-        tabs.push({
-          key: "proofread:findings",
-          label: localize("rightpanel_tab_finder", "Proofread"),
-        });
-      }
-      tabs.push({
-        key: "export",
-        label: localize("rightpanel_tab_export", "eBook"),
-      });
-      return tabs;
-    },
-    [advancedProofreadEnabled, localize],
+  const proofreadingAgentState = useWorkflowStore(
+    (state) => state.proofreading,
   );
+
+  const resolvedTabs = useMemo<
+    Array<{ key: RightPanelBaseTab; label: string }>
+  >(() => {
+    const tabs: Array<{ key: RightPanelBaseTab; label: string }> = [
+      {
+        key: "preview",
+        label: localize("rightpanel_tab_overview", "Overview"),
+      },
+      {
+        key: "proofread:editing",
+        label: localize("rightpanel_tab_editor", "Editor"),
+      },
+    ];
+    if (advancedProofreadEnabled) {
+      tabs.push({
+        key: "proofread:findings",
+        label: localize("rightpanel_tab_finder", "Proofread"),
+      });
+    }
+    tabs.push({
+      key: "export",
+      label: localize("rightpanel_tab_export", "eBook"),
+    });
+    return tabs;
+  }, [advancedProofreadEnabled, localize]);
 
   const prevAdvancedRef = useRef(advancedProofreadEnabled);
 
   useEffect(() => {
     if (!prevAdvancedRef.current && advancedProofreadEnabled) {
-      setTab('proofread:findings');
+      setTab("proofread:findings");
     } else if (
       prevAdvancedRef.current &&
       !advancedProofreadEnabled &&
-      activeTab === 'proofread:findings'
+      activeTab === "proofread:findings"
     ) {
-      setTab('proofread:editing');
+      setTab("proofread:editing");
     }
     prevAdvancedRef.current = advancedProofreadEnabled;
   }, [advancedProofreadEnabled, activeTab, setTab]);
@@ -835,7 +848,6 @@ export const RightPanel = ({
   const handleAdvancedProofreadToggle = useCallback(() => {
     toggleAdvancedProofread();
   }, [toggleAdvancedProofread]);
-
 
   const originProfile = content?.documentProfiles?.origin ?? null;
   const translationProfile = content?.documentProfiles?.translation ?? null;
@@ -867,7 +879,10 @@ export const RightPanel = ({
     if (typeof primary === "string" && primary.length > 0) {
       return primary;
     }
-    if (typeof appliedTranslation === "string" && appliedTranslation.length > 0) {
+    if (
+      typeof appliedTranslation === "string" &&
+      appliedTranslation.length > 0
+    ) {
       return appliedTranslation;
     }
     if (typeof translationContentFromBatches === "string") {
@@ -987,13 +1002,9 @@ export const RightPanel = ({
     ) {
       const formatted = Number(originMetrics.wordCount).toLocaleString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_words",
-          `${formatted} words`,
-          {
-            count: formatted,
-          },
-        ),
+        localize("rightpanel_summary_metric_words", `${formatted} words`, {
+          count: formatted,
+        }),
       );
     }
     if (
@@ -1020,13 +1031,9 @@ export const RightPanel = ({
         Math.round(originMetrics.readingTimeMinutes),
       ).toString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_minutes",
-          `${minutes} mins`,
-          {
-            count: minutes,
-          },
-        ),
+        localize("rightpanel_summary_metric_minutes", `${minutes} mins`, {
+          count: minutes,
+        }),
       );
     }
     return labels;
@@ -1082,11 +1089,7 @@ export const RightPanel = ({
         <BookOpen className="h-4 w-4" aria-hidden="true" />
       </button>
     );
-  }, [
-    originContentAvailable,
-    handleOpenOriginModal,
-    localize,
-  ]);
+  }, [originContentAvailable, handleOpenOriginModal, localize]);
   const translationFallback = useMemo(() => {
     if (translationProfile) return null;
     const primary = content?.content?.translation?.content ?? "";
@@ -1095,7 +1098,7 @@ export const RightPanel = ({
         ? appliedTranslation
         : primary.trim().length
           ? primary
-          : translationContentFromBatches ?? "";
+          : (translationContentFromBatches ?? "");
     const trimmed = source.trim();
     if (!trimmed) return null;
     const paragraphs = trimmed
@@ -1131,7 +1134,8 @@ export const RightPanel = ({
         null,
       language:
         content?.content?.translation?.language ??
-        (content?.content?.translation as { lang?: string } | undefined)?.lang ??
+        (content?.content?.translation as { lang?: string } | undefined)
+          ?.lang ??
         null,
     };
   }, [
@@ -1139,6 +1143,7 @@ export const RightPanel = ({
     content?.proofreading?.updatedAt,
     translationContentFromBatches,
     translationProfile,
+    appliedTranslation,
   ]);
 
   const translationMetrics = useMemo(() => {
@@ -1161,7 +1166,12 @@ export const RightPanel = ({
       readingTimeMinutes,
       readingTimeLabel: "",
     };
-  }, [translationProfile, translationFallback, translationContentAvailable, translationText]);
+  }, [
+    translationProfile,
+    translationFallback,
+    translationContentAvailable,
+    translationText,
+  ]);
 
   const translationMetricLabels = useMemo(() => {
     if (!translationMetrics) return [] as string[];
@@ -1172,13 +1182,9 @@ export const RightPanel = ({
     ) {
       const formatted = Number(translationMetrics.wordCount).toLocaleString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_words",
-          `${formatted} words`,
-          {
-            count: formatted,
-          },
-        ),
+        localize("rightpanel_summary_metric_words", `${formatted} words`, {
+          count: formatted,
+        }),
       );
     }
     if (
@@ -1205,13 +1211,9 @@ export const RightPanel = ({
         Math.round(translationMetrics.readingTimeMinutes),
       ).toString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_minutes",
-          `${minutes} mins`,
-          {
-            count: minutes,
-          },
-        ),
+        localize("rightpanel_summary_metric_minutes", `${minutes} mins`, {
+          count: minutes,
+        }),
       );
     }
     return labels;
@@ -1310,8 +1312,7 @@ export const RightPanel = ({
       return;
     }
     const hasText =
-      Boolean(translationContentAvailable) ||
-      Boolean(translationFallback);
+      Boolean(translationContentAvailable) || Boolean(translationFallback);
     if (hasText || !onRefreshContent) {
       translationRefreshAttemptsRef.current = 0;
       return;
@@ -1521,7 +1522,7 @@ export const RightPanel = ({
           new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       )
       .slice(0, 50);
-  }, [projectSummary, content, projectJobs]);
+  }, [projectSummary, content, projectJobs, localize]);
 
   const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1612,14 +1613,14 @@ export const RightPanel = ({
           <div className="flex flex-1 items-stretch">
             {resolvedTabs.map((tab) => {
               const isActive = activeTab === tab.key;
-              const isAdvancedTab = tab.key === 'proofread:findings';
+              const isAdvancedTab = tab.key === "proofread:findings";
               return (
                 <button
                   key={tab.key}
                   className={`flex-1 px-4 py-2 text-sm font-medium ${
                     isActive
-                      ? 'border-b-2 border-indigo-500 text-indigo-600'
-                      : 'text-slate-500'
+                      ? "border-b-2 border-indigo-500 text-indigo-600"
+                      : "text-slate-500"
                   }`}
                   onClick={() => setTab(tab.key)}
                 >
@@ -1635,14 +1636,14 @@ export const RightPanel = ({
                           event.stopPropagation();
                           event.preventDefault();
                           setAdvancedProofreadEnabled(false);
-                          setTab('proofread:editing');
+                          setTab("proofread:editing");
                         }}
                         onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
+                          if (event.key === "Enter" || event.key === " ") {
                             event.stopPropagation();
                             event.preventDefault();
                             setAdvancedProofreadEnabled(false);
-                            setTab('proofread:editing');
+                            setTab("proofread:editing");
                           }
                         }}
                       >
@@ -2079,17 +2080,24 @@ export const RightPanel = ({
                   {originTitle?.trim() ? originTitle.trim() : "—"}
                 </span>
                 {originAuthor?.trim() ? (
-                  <span className="text-slate-500"> · {originAuthor.trim()}</span>
+                  <span className="text-slate-500">
+                    {" "}
+                    · {originAuthor.trim()}
+                  </span>
                 ) : null}
               </span>
               {originFilename ? (
                 <span className="text-xs text-slate-400">{originFilename}</span>
               ) : null}
             </div>
-            {(originMetricLabels.length || originTimestampLabel) ? (
+            {originMetricLabels.length || originTimestampLabel ? (
               <p className="text-sm text-slate-600">
-                {originMetricLabels.length ? originMetricLabels.join(" · ") : null}
-                {originMetricLabels.length && originTimestampLabel ? " · " : null}
+                {originMetricLabels.length
+                  ? originMetricLabels.join(" · ")
+                  : null}
+                {originMetricLabels.length && originTimestampLabel
+                  ? " · "
+                  : null}
                 {originTimestampLabel
                   ? localize(
                       "rightpanel_summary_metric_updated",
@@ -2118,7 +2126,10 @@ export const RightPanel = ({
       ) : null}
       {isNotesModalOpen ? (
         <Modal
-          title={localize('rightpanel_translation_notes_title', 'Translation notes')}
+          title={localize(
+            "rightpanel_translation_notes_title",
+            "Translation notes",
+          )}
           onClose={handleCloseNotesModal}
           maxWidthClass="max-w-4xl"
         >
@@ -2153,11 +2164,14 @@ export const RightPanel = ({
                   {translationTitle?.trim() ? translationTitle.trim() : "—"}
                 </span>
                 {translationAuthor?.trim() ? (
-                  <span className="text-slate-500"> · {translationAuthor.trim()}</span>
+                  <span className="text-slate-500">
+                    {" "}
+                    · {translationAuthor.trim()}
+                  </span>
                 ) : null}
               </span>
             </div>
-            {(translationMetricLabels.length || translationTimestampLabel) ? (
+            {translationMetricLabels.length || translationTimestampLabel ? (
               <p className="text-sm text-slate-600">
                 {translationMetricLabels.length
                   ? translationMetricLabels.join(" · ")

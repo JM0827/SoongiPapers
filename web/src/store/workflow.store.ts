@@ -5,6 +5,7 @@ export type TranslationStatus =
   | "idle"
   | "queued"
   | "running"
+  | "recovering"
   | "done"
   | "failed"
   | "cancelled";
@@ -12,13 +13,41 @@ export type ProofreadingStatus =
   | "idle"
   | "queued"
   | "running"
+  | "recovering"
   | "done"
   | "failed";
-export type QualityStatus = "idle" | "running" | "done" | "failed";
+export type QualityStatus =
+  | "idle"
+  | "running"
+  | "recovering"
+  | "done"
+  | "failed";
+
+export type AgentRunStatus = TranslationStatus;
+
+export interface AgentRunState {
+  status: AgentRunStatus;
+  heartbeatAt: number | null;
+  willRetry: boolean;
+  nextRetryDelayMs: number | null;
+}
+
+export interface AgentSubState {
+  id: string;
+  status: "running" | "retrying" | "done" | "failed";
+  label?: string | null;
+  error?: string | null;
+}
 
 export interface QualityChunkSummary {
   index: number;
-  status: "pending" | "running" | "completed" | "error" | "partial" | "fallback";
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "error"
+    | "partial"
+    | "fallback";
   score: number | null;
   durationMs: number | null;
   requestId?: string | null;
@@ -52,6 +81,8 @@ export interface TranslationAgentState {
   lastMessage: string | null;
   updatedAt: string | null;
   projectId: string | null;
+  run: AgentRunState;
+  subStates: AgentSubState[];
 }
 
 export interface ProofreadingAgentState {
@@ -91,6 +122,8 @@ export interface ProofreadingAgentState {
   };
   lastHeartbeatAt: string | null;
   isStalled: boolean;
+  run: AgentRunState;
+  subStates: AgentSubState[];
 }
 
 export interface QualityAgentState {
@@ -104,6 +137,8 @@ export interface QualityAgentState {
   currentChunkIndex: number | null;
   chunkSummaries: QualityChunkSummary[];
   lastMessage: string | null;
+  run: AgentRunState;
+  subStates: AgentSubState[];
 }
 
 interface WorkflowState {
@@ -133,6 +168,25 @@ interface WorkflowState {
   resetQuality: (projectId?: string | null) => void;
 }
 
+const defaultRunState: AgentRunState = {
+  status: "idle",
+  heartbeatAt: null,
+  willRetry: false,
+  nextRetryDelayMs: null,
+};
+
+const buildRunState = (
+  base: AgentRunState,
+  status: AgentRunState["status"],
+  overrides?: Partial<AgentRunState>,
+): AgentRunState => ({
+  status,
+  heartbeatAt: overrides?.heartbeatAt ?? Date.now(),
+  willRetry: overrides?.willRetry ?? base.willRetry ?? false,
+  nextRetryDelayMs:
+    overrides?.nextRetryDelayMs ?? base.nextRetryDelayMs ?? null,
+});
+
 const defaultTranslationState: TranslationAgentState = {
   status: "idle",
   jobId: null,
@@ -150,6 +204,8 @@ const defaultTranslationState: TranslationAgentState = {
   lastMessage: null,
   updatedAt: null,
   projectId: null,
+  run: { ...defaultRunState },
+  subStates: [],
 };
 
 const defaultProofreadingState: ProofreadingAgentState = {
@@ -165,6 +221,8 @@ const defaultProofreadingState: ProofreadingAgentState = {
   completionSummary: null,
   lastHeartbeatAt: null,
   isStalled: false,
+  run: { ...defaultRunState },
+  subStates: [],
 };
 
 const defaultQualityState: QualityAgentState = {
@@ -178,6 +236,8 @@ const defaultQualityState: QualityAgentState = {
   currentChunkIndex: null,
   chunkSummaries: [],
   lastMessage: null,
+  run: { ...defaultRunState },
+  subStates: [],
 };
 
 export const useWorkflowStore = create<WorkflowState>((set) => ({
@@ -198,10 +258,36 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ? state.translation
           : { ...defaultTranslationState, projectId };
       const patch = typeof update === "function" ? update(base) : update;
-      return { translation: { ...base, ...patch, projectId } };
+      const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
+      const desiredStatus = (runPatch?.status ??
+        restPatch.status ??
+        base.status) as TranslationStatus;
+      const nextRun = runPatch
+        ? buildRunState(base.run, runPatch.status ?? desiredStatus, runPatch)
+        : desiredStatus !== base.run.status
+          ? buildRunState(base.run, desiredStatus)
+          : base.run;
+      const nextSubStates = subPatch ?? base.subStates;
+      const nextStatus = desiredStatus;
+      return {
+        translation: {
+          ...base,
+          ...restPatch,
+          status: nextStatus,
+          run: nextRun,
+          subStates: nextSubStates,
+          projectId,
+        },
+      };
     }),
   resetTranslation: (projectId = null) =>
-    set({ translation: { ...defaultTranslationState, projectId } }),
+    set({
+      translation: {
+        ...defaultTranslationState,
+        projectId,
+        run: { ...defaultRunState, status: "idle" },
+      },
+    }),
   setProofreading: (projectId, update) =>
     set((state) => {
       if (!projectId) return {};
@@ -216,10 +302,36 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ? state.proofreading
           : { ...defaultProofreadingState, projectId };
       const patch = typeof update === "function" ? update(base) : update;
-      return { proofreading: { ...base, ...patch, projectId } };
+      const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
+      const desiredStatus = (runPatch?.status ??
+        restPatch.status ??
+        base.status) as ProofreadingStatus;
+      const nextRun = runPatch
+        ? buildRunState(base.run, runPatch.status ?? desiredStatus, runPatch)
+        : desiredStatus !== base.run.status
+          ? buildRunState(base.run, desiredStatus)
+          : base.run;
+      const nextSubStates = subPatch ?? base.subStates;
+      const nextStatus = desiredStatus;
+      return {
+        proofreading: {
+          ...base,
+          ...restPatch,
+          status: nextStatus,
+          run: nextRun,
+          subStates: nextSubStates,
+          projectId,
+        },
+      };
     }),
   resetProofreading: (projectId = null) =>
-    set({ proofreading: { ...defaultProofreadingState, projectId } }),
+    set({
+      proofreading: {
+        ...defaultProofreadingState,
+        projectId,
+        run: { ...defaultRunState, status: "idle" },
+      },
+    }),
   setQuality: (projectId, update) =>
     set((state) => {
       if (!projectId) return {};
@@ -231,10 +343,36 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ? state.quality
           : { ...defaultQualityState, projectId };
       const patch = typeof update === "function" ? update(base) : update;
-      return { quality: { ...base, ...patch, projectId } };
+      const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
+      const desiredStatus = (runPatch?.status ??
+        restPatch.status ??
+        base.status) as QualityStatus;
+      const nextRun = runPatch
+        ? buildRunState(base.run, runPatch.status ?? desiredStatus, runPatch)
+        : desiredStatus !== base.run.status
+          ? buildRunState(base.run, desiredStatus)
+          : base.run;
+      const nextSubStates = subPatch ?? base.subStates;
+      const nextStatus = desiredStatus;
+      return {
+        quality: {
+          ...base,
+          ...restPatch,
+          status: nextStatus,
+          run: nextRun,
+          subStates: nextSubStates,
+          projectId,
+        },
+      };
     }),
   resetQuality: (projectId = null) =>
-    set({ quality: { ...defaultQualityState, projectId } }),
+    set({
+      quality: {
+        ...defaultQualityState,
+        projectId,
+        run: { ...defaultRunState, status: "idle" },
+      },
+    }),
 }));
 
 export type WorkflowStore = ReturnType<typeof useWorkflowStore>;

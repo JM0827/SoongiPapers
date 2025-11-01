@@ -22,7 +22,9 @@ export async function ensureBaseline(
     .filter(Boolean);
 
   const uniqueWords = new Set(words);
-  const sentimentHits = words.filter((word) => SENTIMENT_WORDS.has(word)).length;
+  const sentimentHits = words.filter((word) =>
+    SENTIMENT_WORDS.has(word),
+  ).length;
 
   return {
     emotion: {
@@ -32,7 +34,9 @@ export async function ensureBaseline(
       confidence: 0.5,
     },
     vividness: {
-      lexical_diversity: Number((uniqueWords.size / Math.max(words.length, 1)).toFixed(3)),
+      lexical_diversity: Number(
+        (uniqueWords.size / Math.max(words.length, 1)).toFixed(3),
+      ),
       concreteness: Math.min(1, words.length / 120),
       sensory_density: Math.min(1, sentimentHits / 10),
       vividness: Math.min(1, sentimentHits / 8 + uniqueWords.size / 200),

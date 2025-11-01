@@ -12,7 +12,9 @@ const client = new OpenAI({
 
 if (!process.env.OPENAI_API_KEY) {
   // eslint-disable-next-line no-console
-  console.warn("[TRANSLATION] OPENAI_API_KEY is not set. Stage calls will fail.");
+  console.warn(
+    "[TRANSLATION] OPENAI_API_KEY is not set. Stage calls will fail.",
+  );
 }
 
 const DEFAULT_STAGE_MODELS: Record<TranslationStage, string> = {
@@ -56,7 +58,9 @@ export interface StageCallResult {
   };
 }
 
-export async function callStageLLM(options: StageCallOptions): Promise<StageCallResult> {
+export async function callStageLLM(
+  options: StageCallOptions,
+): Promise<StageCallResult> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error(
       "OPENAI_API_KEY is required to execute sequential translation stages",

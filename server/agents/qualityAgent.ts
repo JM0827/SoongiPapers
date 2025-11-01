@@ -1,15 +1,6 @@
 // server/agents/qualityAgent.ts
 // OpenAI API를 활용해 번역 품질(단일 번역 평가)을 수행하는 모듈
 // Fastify 라우트에서 호출해 사용합니다.
-											
-														  
-																 
-																
-																	 
-																				
-								 
-																		
-																				
 
 import OpenAI from "openai";
 import { z } from "zod";
@@ -24,24 +15,15 @@ import { SHARED_TRANSLATION_GUIDELINES } from "./prompts/sharedGuidelines";
 import { buildAlignedPairSet } from "./quality/alignedPairs";
 import { buildQualityChunks } from "./quality/chunking";
 
-const DEFAULT_CHUNK_SIZE =
-  Number(process.env.LITERARY_QA_CHUNK_SIZE) || 3200;
+const DEFAULT_CHUNK_SIZE = Number(process.env.LITERARY_QA_CHUNK_SIZE) || 3200;
 const DEFAULT_CHUNK_OVERLAP =
   Number(process.env.LITERARY_QA_CHUNK_OVERLAP) || 200;
 const DEFAULT_QUALITY_CONCURRENCY = Math.max(
   1,
   Number(process.env.LITERARY_QA_CONCURRENCY) || 2,
 );
-									 
-												 
 
 // ----------------------------- 타입 정의 -----------------------------
-					   
-			  
-			 
-		   
-				 
-				   
 
 // 정량 평가 항목 키
 export type QuantKeys =
@@ -56,9 +38,6 @@ export type QuantScores = Record<
   QuantKeys,
   { score: number; commentary: { ko: string; en: string } }
 >;
-					
-					  
- 
 
 // 최종 평가 결과 구조
 export interface FinalEvaluation {
@@ -98,6 +77,7 @@ export interface FinalEvaluation {
       missingFields?: string[];
       preview?: string | null;
       truncated?: boolean;
+      jsonRepairApplied?: boolean;
     }>;
     config?: {
       maxOutputTokens: number;
@@ -106,10 +86,9 @@ export interface FinalEvaluation {
     };
     truncatedChunks?: number;
     totalAttempts?: number;
+    jsonRepairAppliedChunks?: number;
   };
 }
-
-																		  
 
 // 평가 함수 입력값
 export interface EvaluateParams {
@@ -177,6 +156,7 @@ export type QualityEvaluationEvent =
       sourceTokens?: number;
       translatedTokens?: number;
       truncated?: boolean;
+      jsonRepairApplied?: boolean;
     }
   | {
       type: "chunk-partial";
@@ -214,9 +194,9 @@ export interface QualityEvaluationOptions {
 }
 
 // ----------------------------- OpenAI Client -----------------------------
-																   
 
-export const DEFAULT_LITERARY_MODEL = process.env.LITERARY_QA_MODEL || "gpt-5-mini";
+export const DEFAULT_LITERARY_MODEL =
+  process.env.LITERARY_QA_MODEL || "gpt-5-mini";
 
 const parseVerbosity = (value?: string | null) => {
   if (!value) return undefined;
@@ -284,22 +264,24 @@ const clampScore = (value: number) =>
   Math.max(0, Math.min(100, Math.round(value)));
 
 const isCommentaryComplete = (value?: { ko?: string; en?: string } | null) =>
-  Boolean(value && typeof value.ko === "string" && typeof value.en === "string");
+  Boolean(
+    value && typeof value.ko === "string" && typeof value.en === "string",
+  );
 
-const isQuantEntryComplete = (value?: {
-  score?: number;
-  commentary?: { ko?: string; en?: string };
-} | null) =>
+const isQuantEntryComplete = (
+  value?: {
+    score?: number;
+    commentary?: { ko?: string; en?: string };
+  } | null,
+) =>
   typeof value?.score === "number" && isCommentaryComplete(value?.commentary);
 
 const ensureCommentary = (
   value: { ko?: string; en?: string } | undefined,
   fallback: { ko: string; en: string },
 ) => ({
-  ko:
-    value?.ko && value.ko.trim().length ? value.ko.trim() : fallback.ko,
-  en:
-    value?.en && value.en.trim().length ? value.en.trim() : fallback.en,
+  ko: value?.ko && value.ko.trim().length ? value.ko.trim() : fallback.ko,
+  en: value?.en && value.en.trim().length ? value.en.trim() : fallback.en,
 });
 
 const collectMissingFields = (partial: PartialEval): string[] => {
@@ -433,15 +415,6 @@ const buildFallbackEvaluation = (
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-					 
-																						
-																					   
-																					 
-																						   
-																							
-	 
-													
-											  
 });
 
 // 시스템 프롬프트: 모델에게 "이 구조로 JSON만 반환하라"고 강제
@@ -484,14 +457,6 @@ OUTPUT CONTRACT:
 `;
 
 // ----------------------------- 청크 분할 함수 -----------------------------
-											 
-																							  
-				
-										
-																			
-								   
-				  
-   
 
 // 긴 텍스트를 일정 크기 단위로 나누는 함수 (문단 우선 → 문장 분리)
 // overlap 옵션으로 앞 청크 꼬리를 붙여 맥락 보존
@@ -581,12 +546,7 @@ const evalResponseJsonSchema = {
       qualitative: {
         type: "object",
         additionalProperties: false,
-        required: [
-          "emotionalDepth",
-          "vividness",
-          "metaphors",
-          "literaryValue",
-        ],
+        required: ["emotionalDepth", "vividness", "metaphors", "literaryValue"],
         properties: {
           emotionalDepth: {
             type: "object",
@@ -729,7 +689,11 @@ const evalResponseJsonSchema = {
 };
 
 interface EvalChunkCallbacks {
-  onRetry?(info: { index: number; from: number; to: number }): void | Promise<void>;
+  onRetry?(info: {
+    index: number;
+    from: number;
+    to: number;
+  }): void | Promise<void>;
   onPartial?(info: {
     index: number;
     attempt: number;
@@ -769,6 +733,7 @@ async function evalChunk(
   attemptsUsed: number;
   partialPreview?: string | null;
   truncated: boolean;
+  jsonRepairApplied: boolean;
 }> {
   const {
     model,
@@ -843,7 +808,11 @@ async function evalChunk(
       }
     | undefined;
 
-  for (let outerAttempt = attempt; outerAttempt <= MAX_CHUNK_ATTEMPTS; outerAttempt += 1) {
+  for (
+    let outerAttempt = attempt;
+    outerAttempt <= MAX_CHUNK_ATTEMPTS;
+    outerAttempt += 1
+  ) {
     let previousTokens = currentMaxTokens;
     let runResult;
 
@@ -897,7 +866,9 @@ async function evalChunk(
         `⚠️ [QualityAgent] OpenAI call failed for chunk ${chunkIndex + 1}, retrying (outer attempt ${outerAttempt + 1})`,
         error,
       );
-      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      await new Promise((resolve) =>
+        setTimeout(resolve, DELAY_BASE_MS * outerAttempt),
+      );
       continue;
     }
 
@@ -905,8 +876,13 @@ async function evalChunk(
     currentMaxTokens = runResult.maxOutputTokens;
     truncatedEncountered = truncatedEncountered || runResult.truncated;
 
-    const { parsedJson, text, requestId, usage } =
-      safeExtractOpenAIResponse(runResult.response);
+    const {
+      parsedJson,
+      text,
+      requestId,
+      usage,
+      repairApplied,
+    } = safeExtractOpenAIResponse(runResult.response);
 
     lastRequestId = requestId ?? runResult.response.id ?? undefined;
     lastUsage = usage;
@@ -948,7 +924,9 @@ async function evalChunk(
         });
         currentMaxTokens = nextTokens;
       }
-      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      await new Promise((resolve) =>
+        setTimeout(resolve, DELAY_BASE_MS * outerAttempt),
+      );
       continue;
     }
 
@@ -974,7 +952,9 @@ async function evalChunk(
         throw err;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+      await new Promise((resolve) =>
+        setTimeout(resolve, DELAY_BASE_MS * outerAttempt),
+      );
       continue;
     }
 
@@ -993,6 +973,7 @@ async function evalChunk(
         attemptsUsed: totalAttempts,
         partialPreview: null,
         truncated: truncatedEncountered,
+        jsonRepairApplied: Boolean(repairApplied),
       };
     }
 
@@ -1006,7 +987,8 @@ async function evalChunk(
     });
 
     const fallbackReady =
-      outerAttempt >= MAX_CHUNK_ATTEMPTS || currentMaxTokens >= maxOutputTokensCap;
+      outerAttempt >= MAX_CHUNK_ATTEMPTS ||
+      currentMaxTokens >= maxOutputTokensCap;
 
     if (fallbackReady) {
       const completed = buildFallbackEvaluation(partial);
@@ -1029,6 +1011,7 @@ async function evalChunk(
         attemptsUsed: totalAttempts,
         partialPreview: lastPreview ?? null,
         truncated: truncatedEncountered,
+        jsonRepairApplied: Boolean(repairApplied),
       };
     }
 
@@ -1045,7 +1028,9 @@ async function evalChunk(
       currentMaxTokens = nextTokens;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, DELAY_BASE_MS * outerAttempt));
+    await new Promise((resolve) =>
+      setTimeout(resolve, DELAY_BASE_MS * outerAttempt),
+    );
   }
 
   throw new Error("quality_chunk_failed");
@@ -1103,6 +1088,7 @@ interface ChunkEvaluationRecord {
   missingFields: string[];
   partialPreview?: string | null;
   truncated: boolean;
+  jsonRepairApplied: boolean;
 }
 
 const roundScore = (value: number) => Math.round(value);
@@ -1143,21 +1129,6 @@ export async function callQualityModel(
   console.log(
     `[QualityAgent] Using OpenAI model ${model} (DEFAULT_LITERARY_MODEL=${DEFAULT_LITERARY_MODEL}, verbosity=${QA_VERBOSITY ?? "default"}, reasoning=${QA_REASONING_EFFORT ?? "default"})`,
   );
-	  
-				
-												
-					
-											
-		   
-								
-						  
-													   
-										  
-												  
-			  
-		   
-					
-			
 
   if (!process.env.OPENAI_API_KEY) {
     console.error("❌ [QualityAgent] OPENAI_API_KEY is not set");
@@ -1232,10 +1203,7 @@ export async function callQualityModel(
   const totalChunks = chunkDescriptors.length;
   const concurrency = Math.max(
     1,
-    Math.min(
-      totalChunks,
-      options.concurrency ?? DEFAULT_QUALITY_CONCURRENCY,
-    ),
+    Math.min(totalChunks, options.concurrency ?? DEFAULT_QUALITY_CONCURRENCY),
   );
 
   await options.listeners?.onEvent?.({
@@ -1290,6 +1258,7 @@ export async function callQualityModel(
           attemptsUsed,
           partialPreview,
           truncated,
+          jsonRepairApplied,
         } = await evalChunk(
           {
             model,
@@ -1336,9 +1305,11 @@ export async function callQualityModel(
           index: descriptor.index,
           sourceLength: descriptor.sourceLength,
           translatedLength: descriptor.translatedLength,
-          sourceTokens: descriptor.sourceTokens ?? estimateTokens(descriptor.sourceChunk),
+          sourceTokens:
+            descriptor.sourceTokens ?? estimateTokens(descriptor.sourceChunk),
           translatedTokens:
-            descriptor.translatedTokens ?? estimateTokens(descriptor.translatedChunk),
+            descriptor.translatedTokens ??
+            estimateTokens(descriptor.translatedChunk),
           pairCount: descriptor.pairCount ?? 0,
           overlapPairCount: descriptor.overlapPairCount ?? 0,
           startPairIndex: descriptor.startPairIndex ?? 0,
@@ -1354,6 +1325,7 @@ export async function callQualityModel(
           missingFields: missingFields ?? [],
           partialPreview: partialPreview ?? null,
           truncated,
+          jsonRepairApplied: Boolean(jsonRepairApplied),
         };
 
         if (usage) {
@@ -1381,6 +1353,7 @@ export async function callQualityModel(
           sourceTokens: descriptor.sourceTokens,
           translatedTokens: descriptor.translatedTokens,
           truncated,
+          jsonRepairApplied: Boolean(jsonRepairApplied),
         });
 
         await options.listeners?.onEvent?.({
@@ -1392,8 +1365,7 @@ export async function callQualityModel(
         await options.listeners?.onEvent?.({
           type: "chunk-error",
           index: descriptor.index,
-          message:
-            error instanceof Error ? error.message : String(error ?? ""),
+          message: error instanceof Error ? error.message : String(error ?? ""),
           error,
         });
         throw error;
@@ -1431,7 +1403,9 @@ export async function callQualityModel(
       })),
     ),
     commentary: mergeBilingual(
-      completedRecords.map((record) => record.data.quantitative[key].commentary),
+      completedRecords.map(
+        (record) => record.data.quantitative[key].commentary,
+      ),
       2,
     ),
   }));
@@ -1488,6 +1462,7 @@ export async function callQualityModel(
     missingFields: record.missingFields,
     preview: record.partialPreview ?? null,
     truncated: record.truncated,
+    jsonRepairApplied: record.jsonRepairApplied,
   }));
 
   const result: FinalEvaluation = {
@@ -1511,11 +1486,15 @@ export async function callQualityModel(
         maxOutputTokensCap: QA_MAX_OUTPUT_TOKENS_CAP,
         concurrency,
       },
-      truncatedChunks: completedRecords.filter((record) => record.truncated).length,
+      truncatedChunks: completedRecords.filter((record) => record.truncated)
+        .length,
       totalAttempts: completedRecords.reduce(
         (sum, record) => sum + record.attempts,
         0,
       ),
+      jsonRepairAppliedChunks: completedRecords.filter(
+        (record) => record.jsonRepairApplied,
+      ).length,
     },
   };
 

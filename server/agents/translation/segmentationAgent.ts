@@ -26,7 +26,7 @@ export interface SegmentationAgentOptions {
 }
 
 const parsedMaxSegmentLength = Number.parseInt(
-  process.env.SEGMENTATION_MAX_SEGMENT_LENGTH_V2 ?? '',
+  process.env.SEGMENTATION_MAX_SEGMENT_LENGTH_V2 ?? "",
   10,
 );
 
@@ -35,7 +35,8 @@ const DEFAULT_MAX_SEGMENT_LENGTH =
     ? parsedMaxSegmentLength
     : 1600;
 
-const sentenceRegex = /[^.!?\u203D\u203C\u3002\uFF01\uFF1F]+(?:[.!?\u203D\u203C\u3002\uFF01\uFF1F]+|$)/gu;
+const sentenceRegex =
+  /[^.!?\u203D\u203C\u3002\uFF01\uFF1F]+(?:[.!?\u203D\u203C\u3002\uFF01\uFF1F]+|$)/gu;
 
 function normalizeWhitespace(input: string): string {
   return input
@@ -159,7 +160,12 @@ export function segmentOriginText(
         }
       });
     } else if (paragraph.length > maxLength) {
-      const chunks = chunkLongText(paragraph, maxLength, paragraphIndex, globalIndex);
+      const chunks = chunkLongText(
+        paragraph,
+        maxLength,
+        paragraphIndex,
+        globalIndex,
+      );
       chunks.forEach((chunk) => segments.push(chunk));
       globalIndex += chunks.length;
     } else {

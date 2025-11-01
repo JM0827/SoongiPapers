@@ -17,4 +17,4 @@ export type {
   TranslateSegmentReq,
   TranslateSegmentRes,
   TranslationStage,
-} from '@bookko/translation-types';
+} from "@bookko/translation-types";

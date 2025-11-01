@@ -5,9 +5,9 @@ const envFallback =
   process.env.PROOFREAD_MODEL_FALLBACK ??
   undefined;
 
-export const DEFAULT_PROOFREAD_MODEL = envPrimary?.trim() || 'gpt-5';
+export const DEFAULT_PROOFREAD_MODEL = envPrimary?.trim() || "gpt-5";
 
-export const FALLBACK_PROOFREAD_MODEL = envFallback?.trim() || 'gpt-5-mini';
+export const FALLBACK_PROOFREAD_MODEL = envFallback?.trim() || "gpt-5-mini";
 
 export function getProofreadModelSequence(preferred?: string | null): string[] {
   const sequence: string[] = [];

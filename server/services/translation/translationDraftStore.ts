@@ -112,9 +112,10 @@ function serializeRecord(
     guardsJson: guards ? JSON.stringify(guards) : null,
     notesJson: notes ? JSON.stringify(notes) : null,
     spanPairsJson: spanPairs ? JSON.stringify(spanPairs) : null,
-    candidatesJson: Array.isArray(candidates) && candidates.length
-      ? JSON.stringify(candidates)
-      : null,
+    candidatesJson:
+      Array.isArray(candidates) && candidates.length
+        ? JSON.stringify(candidates)
+        : null,
     needsReview,
   };
 }
@@ -186,7 +187,7 @@ export async function persistStageResults(
       retry_count,
       updated_at
     )
-    VALUES ${values.join(', ')}
+    VALUES ${values.join(", ")}
     ON CONFLICT (job_id, stage, segment_index)
     DO UPDATE SET
       text_target = EXCLUDED.text_target,

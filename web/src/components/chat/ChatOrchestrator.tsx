@@ -52,7 +52,12 @@ import {
   useChatMessages,
   type ChatMessage as Message,
 } from "../../hooks/useChatMessages";
-type StageKey = "origin" | "translation" | "proofreading" | "quality" | "publishing";
+type StageKey =
+  | "origin"
+  | "translation"
+  | "proofreading"
+  | "quality"
+  | "publishing";
 
 const SUPPORTED_ORIGIN_EXTENSIONS = [
   ".txt",
@@ -173,27 +178,31 @@ export const ChatOrchestrator = ({
 }: ChatOrchestratorProps) => {
   const { locale } = useUILocale();
   const lastProofSummaryRef = useRef<{
-    counts: Record<'critical' | 'high' | 'medium' | 'low', number>;
+    counts: Record<"critical" | "high" | "medium" | "low", number>;
   } | null>(null);
   const normalizeProofSeverity = useCallback((value?: string | null) => {
     if (!value) return undefined;
     const normalized = value.toLowerCase();
-    if (normalized.includes('critical') || normalized.includes('extreme')) {
-      return 'critical';
+    if (normalized.includes("critical") || normalized.includes("extreme")) {
+      return "critical";
     }
-    if (normalized.includes('high') || normalized.includes('severe')) {
-      return 'high';
+    if (normalized.includes("high") || normalized.includes("severe")) {
+      return "high";
     }
-    if (normalized.includes('medium') || normalized.includes('moderate')) {
-      return 'medium';
+    if (normalized.includes("medium") || normalized.includes("moderate")) {
+      return "medium";
     }
-    if (normalized.includes('low') || normalized.includes('minor')) {
-      return 'low';
+    if (normalized.includes("low") || normalized.includes("minor")) {
+      return "low";
     }
     return undefined;
   }, []);
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
@@ -210,9 +219,10 @@ export const ChatOrchestrator = ({
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
-  const [inputDraft, setInputDraft] = useState<{ id: string; text: string } | null>(
-    null,
-  );
+  const [inputDraft, setInputDraft] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
   const firstRunScriptShownRef = useRef(false);
   const stageAnchorRefs = useRef<Record<StageKey, HTMLElement | null>>({
     origin: null,
@@ -265,7 +275,9 @@ export const ChatOrchestrator = ({
   const setEditingSelectionStore = useEditingCommandStore(
     (state) => state.setSelection,
   );
-  const setChatActionExecutor = useChatActionStore((state) => state.setExecutor);
+  const setChatActionExecutor = useChatActionStore(
+    (state) => state.setExecutor,
+  );
   const lastHandledEditingRef = useRef<string | null>(null);
 
   const currentProject = useMemo(
@@ -284,7 +296,7 @@ export const ChatOrchestrator = ({
       lastProofSummaryRef.current = null;
       return;
     }
-    const counts: Record<'critical' | 'high' | 'medium' | 'low', number> = {
+    const counts: Record<"critical" | "high" | "medium" | "low", number> = {
       critical: 0,
       high: 0,
       medium: 0,
@@ -329,7 +341,9 @@ export const ChatOrchestrator = ({
     stageLabel.includes("final");
 
   const hasTranslation = Boolean(
-    translationContentLoaded || translationReadyByStage || snapshot.translation?.hasContent,
+    translationContentLoaded ||
+      translationReadyByStage ||
+      snapshot.translation?.hasContent,
   );
   const targetLang = currentProject?.target_lang;
   const translationJobId: string | null =
@@ -390,7 +404,6 @@ export const ChatOrchestrator = ({
       badge?: Message["badge"],
       actions?: ChatAction[],
       persist = false,
-      _contextId?: string,
     ) => {
       validateAssistantMessage(text);
       const normalized = text.trim();
@@ -433,13 +446,7 @@ export const ChatOrchestrator = ({
           });
       }
     },
-    [
-      messages,
-      updateChatMessage,
-      addChatMessage,
-      projectId,
-      token,
-    ],
+    [messages, updateChatMessage, addChatMessage, projectId, token],
   );
 
   const updateAssistantMessage = useCallback(
@@ -466,23 +473,15 @@ export const ChatOrchestrator = ({
     if (firstRunScriptShownRef.current) return;
     firstRunScriptShownRef.current = true;
     setQuickReplies(buildQuickReplies());
-  }, [
-    historyLoaded,
-    isHistoryLoading,
-    historyLength,
-    buildQuickReplies,
-  ]);
+  }, [historyLoaded, isHistoryLoading, historyLength, buildQuickReplies]);
 
-  const scrollToStage = useCallback(
-    (stage: StageKey) => {
-      const target = stageAnchorRefs.current[stage];
-      if (!target) return;
-      setShowScrollToLatest(false);
-      setIsAtBottom(false);
-      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    },
-    [],
-  );
+  const scrollToStage = useCallback((stage: StageKey) => {
+    const target = stageAnchorRefs.current[stage];
+    if (!target) return;
+    setShowScrollToLatest(false);
+    setIsAtBottom(false);
+    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, []);
 
   const refreshContentOnly = useCallback(
     () => refreshProjectContext("content"),
@@ -726,7 +725,10 @@ export const ChatOrchestrator = ({
       const beforePreview = previewText(selection.rawText ?? selection.text);
       const afterPreview = previewText(suggestion.resultText);
       const lines = [
-        localize("chat_editing_suggestion_heading", "✏️ 수정 제안이 도착했어요."),
+        localize(
+          "chat_editing_suggestion_heading",
+          "✏️ 수정 제안이 도착했어요.",
+        ),
         localize("chat_editing_suggestion_original", `원작: ${beforePreview}`, {
           text: beforePreview,
         }),
@@ -842,11 +844,7 @@ export const ChatOrchestrator = ({
         return;
       }
 
-      const response = await requestEditingSuggestion(
-        mode,
-        selection,
-        trimmed,
-      );
+      const response = await requestEditingSuggestion(mode, selection, trimmed);
       if (!response) {
         return;
       }
@@ -892,11 +890,7 @@ export const ChatOrchestrator = ({
 
       addEditingSuggestion(suggestion);
       pushAssistant(
-        buildSuggestionMessage(
-          selection,
-          suggestion,
-          effectiveWarnings,
-        ),
+        buildSuggestionMessage(selection, suggestion, effectiveWarnings),
         {
           label: localize(
             "chat_editing_label_suggestion",
@@ -928,7 +922,10 @@ export const ChatOrchestrator = ({
   );
 
   const buildEditingQuickReplies = useCallback(
-    (mode: EditingActionType, selection: EditorSelectionContext): QuickReplyItem[] => {
+    (
+      mode: EditingActionType,
+      selection: EditorSelectionContext,
+    ): QuickReplyItem[] => {
       const items: QuickReplyItem[] = [];
       const run = (instruction: string) => {
         setQuickReplies([]);
@@ -1110,10 +1107,7 @@ export const ChatOrchestrator = ({
       }
       if (suggestion.status === "applied") {
         pushAssistant(
-          localize(
-            "chat_editing_already_applied",
-            "이미 적용된 제안입니다.",
-          ),
+          localize("chat_editing_already_applied", "이미 적용된 제안입니다."),
           {
             label: "Editing",
             tone: "default",
@@ -1136,7 +1130,8 @@ export const ChatOrchestrator = ({
       }
 
       const range = suggestion.selection.range;
-      const expectedText = suggestion.selection.rawText ?? suggestion.selection.text;
+      const expectedText =
+        suggestion.selection.rawText ?? suggestion.selection.text;
       const result = editorAdapter.replaceText({
         range,
         expectedText,
@@ -1148,13 +1143,10 @@ export const ChatOrchestrator = ({
           "chat_editing_apply_failed",
           "선택한 문장이 변경되어 적용하지 못했습니다.",
         );
-        pushAssistant(
-          result.message ?? fallback,
-          {
-            label: "Editing",
-            tone: "error",
-          },
-        );
+        pushAssistant(result.message ?? fallback, {
+          label: "Editing",
+          tone: "error",
+        });
         return;
       }
 
@@ -1173,9 +1165,8 @@ export const ChatOrchestrator = ({
           label: localize("chat_editing_label_applied", "Editing applied"),
           tone: "success",
         },
-        [
-        { type: "undoEditingSuggestion", suggestionId },
-      ]);
+        [{ type: "undoEditingSuggestion", suggestionId }],
+      );
     },
     [editorAdapter, pushAssistant, updateEditingSuggestion, localize],
   );
@@ -1242,13 +1233,10 @@ export const ChatOrchestrator = ({
           "chat_editing_undo_failed",
           "변경 내용을 되돌리지 못했습니다.",
         );
-        pushAssistant(
-          result.message ?? fallback,
-          {
-            label: "Editing",
-            tone: "error",
-          },
-        );
+        pushAssistant(result.message ?? fallback, {
+          label: "Editing",
+          tone: "error",
+        });
         return;
       }
 
@@ -1426,11 +1414,9 @@ export const ChatOrchestrator = ({
     );
     if (!projectId) return null;
     const sequence = highestSequence + 1;
-    return localize(
-      "chat_translation_run_label",
-      `번역 ${sequence}차`,
-      { sequence },
-    );
+    return localize("chat_translation_run_label", `번역 ${sequence}차`, {
+      sequence,
+    });
   }, [localize, workflowSummary, projectId]);
 
   const translationVisual = useMemo(() => {
@@ -1501,7 +1487,7 @@ export const ChatOrchestrator = ({
 
           const guardStageKey = stageOrder.includes("qa")
             ? "qa"
-            : stageOrder[stageOrder.length - 1] ?? "qa";
+            : (stageOrder[stageOrder.length - 1] ?? "qa");
           const qaCount = stageCounts[guardStageKey] ?? 0;
           const qaComplete =
             totalSegments > 0
@@ -1558,6 +1544,7 @@ export const ChatOrchestrator = ({
     translationState.needsReviewCount,
     translationState.guardFailures,
     translationState.flaggedSegments,
+    translationState.pipelineStages,
     translationStage,
     hasTranslation,
     localize,
@@ -1623,7 +1610,10 @@ export const ChatOrchestrator = ({
     | "failed";
 
   const statusMeta = useMemo<
-    Record<StageStatusKey, { label: string; tone: "info" | "success" | "danger" }>
+    Record<
+      StageStatusKey,
+      { label: string; tone: "info" | "success" | "danger" }
+    >
   >(
     () => ({
       ready: {
@@ -1651,7 +1641,10 @@ export const ChatOrchestrator = ({
   );
 
   const stageLabels = useMemo<
-    Record<"origin" | "translation" | "proofreading" | "quality" | "publishing", string>
+    Record<
+      "origin" | "translation" | "proofreading" | "quality" | "publishing",
+      string
+    >
   >(
     () => ({
       origin: localize("timeline_stage_manuscript", "Manuscript Intake"),
@@ -1692,7 +1685,10 @@ export const ChatOrchestrator = ({
   const normalizedProofreadingStatus = useMemo(() => {
     type ProofStatus = "idle" | "queued" | "running" | "done" | "failed";
 
-    const push = (value: ProofStatus | null | undefined, acc: ProofStatus[]) => {
+    const push = (
+      value: ProofStatus | null | undefined,
+      acc: ProofStatus[],
+    ) => {
       if (!value) return;
       if (value === "idle") return;
       acc.push(value);
@@ -1709,10 +1705,16 @@ export const ChatOrchestrator = ({
       return null;
     };
 
-    const normalizeLifecycleStage = (stageValue: string | null): ProofStatus | null => {
+    const normalizeLifecycleStage = (
+      stageValue: string | null,
+    ): ProofStatus | null => {
       if (!stageValue) return null;
       const normalized = stageValue.toLowerCase().replace(/\s+/g, "");
-      if (!normalized || normalized === "none" || normalized === "no-proofreading") {
+      if (
+        !normalized ||
+        normalized === "none" ||
+        normalized === "no-proofreading"
+      ) {
         return null;
       }
       if (/fail|error|cancel/.test(normalized)) return "failed";
@@ -1763,8 +1765,7 @@ export const ChatOrchestrator = ({
   }, [qualityState.status, qualityStage, translationStatusKey]);
 
   const publishingStatusKey = useMemo<StageStatusKey | undefined>(() => {
-    const stage =
-      snapshot.lifecycle.publishing?.stage?.toLowerCase() ?? "none";
+    const stage = snapshot.lifecycle.publishing?.stage?.toLowerCase() ?? "none";
     if (stage.includes("fail")) return "failed";
     if (stage === "exporting") return "inProgress";
     if (stage === "exported") return "completed";
@@ -1823,114 +1824,107 @@ export const ChatOrchestrator = ({
     if (!prep) {
       return {
         label: baseLabel,
-        statusKey: 'ready' as StageStatusKey,
+        statusKey: "ready" as StageStatusKey,
         detail: undefined,
       };
     }
 
-    if (prep.analysis.status === 'running') {
+    if (prep.analysis.status === "running") {
       return {
         label: baseLabel,
-        statusKey: 'inProgress' as StageStatusKey,
+        statusKey: "inProgress" as StageStatusKey,
+        detail: undefined,
+      };
+    }
+
+    if (prep.analysis.status === "stale" || prep.notes.status === "stale") {
+      return {
+        label: baseLabel,
+        statusKey: "queued" as StageStatusKey,
+        detail: localize(
+          "timeline_origin_detail_refresh",
+          "The manuscript changed. Re-run the analysis to refresh notes.",
+        ),
+      };
+    }
+
+    if (prep.analysis.status === "missing") {
+      return {
+        label: baseLabel,
+        statusKey: "queued" as StageStatusKey,
         detail: undefined,
       };
     }
 
     if (
-      prep.analysis.status === 'stale' ||
-      prep.notes.status === 'stale'
+      prep.analysis.status === "complete" &&
+      prep.notes.status === "complete"
     ) {
       return {
         label: baseLabel,
-        statusKey: 'queued' as StageStatusKey,
-        detail: localize(
-          'timeline_origin_detail_refresh',
-          'The manuscript changed. Re-run the analysis to refresh notes.',
-        ),
-      };
-    }
-
-    if (prep.analysis.status === 'missing') {
-      return {
-        label: baseLabel,
-        statusKey: 'queued' as StageStatusKey,
-        detail: undefined,
-      };
-    }
-
-    if (prep.analysis.status === 'complete' && prep.notes.status === 'complete') {
-      return {
-        label: baseLabel,
-        statusKey: 'completed' as StageStatusKey,
+        statusKey: "completed" as StageStatusKey,
         detail: undefined,
       };
     }
 
     return {
       label: baseLabel,
-      statusKey: 'ready' as StageStatusKey,
+      statusKey: "ready" as StageStatusKey,
       detail: undefined,
     };
-  }, [
-    hasOrigin,
-    localize,
-    snapshot.originPrep,
-    stageLabels.origin,
-  ]);
+  }, [hasOrigin, localize, snapshot.originPrep, stageLabels.origin]);
 
-  const timelineStages = useMemo(
-    () => {
-      const items: Array<{
-        key: "origin" | "translation" | "proofreading" | "quality" | "publishing";
+  const timelineStages = useMemo(() => {
+    const items: Array<{
+      key: "origin" | "translation" | "proofreading" | "quality" | "publishing";
+      label: string;
+      status?: {
         label: string;
-        status?: {
-          label: string;
-          tone: "info" | "success" | "danger";
-          state?: StageStatusKey;
-        };
-        detail?: string;
-      }> = [];
-
-      const pushStage = (
-        key: "origin" | "translation" | "proofreading" | "quality" | "publishing",
-        statusKey?: StageStatusKey,
-        detail?: string,
-        labelOverride?: string,
-      ) => {
-        items.push({
-          key,
-          label: labelOverride ?? stageLabels[key],
-          status: statusKey
-            ? { ...statusMeta[statusKey], state: statusKey }
-            : undefined,
-          detail,
-        });
+        tone: "info" | "success" | "danger";
+        state?: StageStatusKey;
       };
+      detail?: string;
+    }> = [];
 
-      const originLabel = originStageInfo?.label ?? stageLabels.origin;
-      pushStage(
-        "origin",
-        originStageInfo?.statusKey,
-        originStageInfo?.detail,
-        originLabel,
-      );
-      pushStage("translation", translationStatusKey, translationDetail);
-      pushStage("proofreading", proofreadingStatusKey);
-      pushStage("quality", qualityStatusKey);
-      pushStage("publishing", publishingStatusKey);
+    const pushStage = (
+      key: "origin" | "translation" | "proofreading" | "quality" | "publishing",
+      statusKey?: StageStatusKey,
+      detail?: string,
+      labelOverride?: string,
+    ) => {
+      items.push({
+        key,
+        label: labelOverride ?? stageLabels[key],
+        status: statusKey
+          ? { ...statusMeta[statusKey], state: statusKey }
+          : undefined,
+        detail,
+      });
+    };
 
-      return items;
-    },
-    [
-      originStageInfo,
-      publishingStatusKey,
-      proofreadingStatusKey,
-      stageLabels,
-      statusMeta,
-      translationDetail,
-      translationStatusKey,
-    ],
-  );
+    const originLabel = originStageInfo?.label ?? stageLabels.origin;
+    pushStage(
+      "origin",
+      originStageInfo?.statusKey,
+      originStageInfo?.detail,
+      originLabel,
+    );
+    pushStage("translation", translationStatusKey, translationDetail);
+    pushStage("proofreading", proofreadingStatusKey);
+    pushStage("quality", qualityStatusKey);
+    pushStage("publishing", publishingStatusKey);
+
+    return items;
+  }, [
+    originStageInfo,
+    publishingStatusKey,
+    proofreadingStatusKey,
+    qualityStatusKey,
+    stageLabels,
+    statusMeta,
+    translationDetail,
+    translationStatusKey,
+  ]);
 
   type RecommendationKind =
     | "uploadOrigin"
@@ -1985,10 +1979,7 @@ export const ChatOrchestrator = ({
           type: "startTranslation",
           label: nextTranslationLabel ?? translationWorkflow?.label ?? null,
         },
-        buttonLabel: localize(
-          "chat_rec_start_translation_cta",
-          "번역 시작",
-        ),
+        buttonLabel: localize("chat_rec_start_translation_cta", "번역 시작"),
       });
     }
 
@@ -2005,10 +1996,7 @@ export const ChatOrchestrator = ({
           "번역이 완료됐어요. 교정을 시작해 보세요.",
         ),
         action: { type: "startProofread" },
-        buttonLabel: localize(
-          "chat_rec_start_proofread_cta",
-          "교정 시작",
-        ),
+        buttonLabel: localize("chat_rec_start_proofread_cta", "교정 시작"),
       });
     }
 
@@ -2025,10 +2013,7 @@ export const ChatOrchestrator = ({
           "교정이 끝났어요. 품질 검토로 마무리해 볼까요?",
         ),
         action: { type: "startQuality" },
-        buttonLabel: localize(
-          "chat_rec_start_quality_cta",
-          "품질 검토",
-        ),
+        buttonLabel: localize("chat_rec_start_quality_cta", "품질 검토"),
       });
     }
 
@@ -2044,10 +2029,7 @@ export const ChatOrchestrator = ({
           "모든 단계가 끝났어요. 전자책을 만들어 볼까요?",
         ),
         action: { type: "openExportPanel" },
-        buttonLabel: localize(
-          "chat_rec_open_export_cta",
-          "전자책 만들기",
-        ),
+        buttonLabel: localize("chat_rec_open_export_cta", "전자책 만들기"),
       });
     }
 
@@ -2355,7 +2337,6 @@ export const ChatOrchestrator = ({
             },
             undefined,
             false,
-            "origin",
           );
         } else {
           pushAssistant(
@@ -2370,7 +2351,6 @@ export const ChatOrchestrator = ({
             },
             undefined,
             false,
-            "origin",
           );
         }
         return true;
@@ -2402,7 +2382,6 @@ export const ChatOrchestrator = ({
             },
             undefined,
             false,
-            "translation",
           );
         } else if (
           snapshot.jobs.status === "running" ||
@@ -2419,7 +2398,6 @@ export const ChatOrchestrator = ({
             },
             undefined,
             false,
-            "translation",
           );
         } else {
           pushAssistant(
@@ -2433,7 +2411,6 @@ export const ChatOrchestrator = ({
             },
             undefined,
             false,
-            "translation",
           );
         }
         return true;
@@ -2441,13 +2418,7 @@ export const ChatOrchestrator = ({
 
       return false;
     },
-    [
-      snapshot,
-      pushAssistant,
-      setTab,
-      describeLocation,
-      localize,
-    ],
+    [snapshot, pushAssistant, setTab, describeLocation, localize],
   );
 
   useEffect(() => {
@@ -2637,13 +2608,10 @@ export const ChatOrchestrator = ({
               ? "The translation is available in the preview tab, and changes from proofreading will apply automatically when they finish."
               : "The translation is available in the preview tab.",
           );
-          pushAssistant(
-            `${baseMessage}\n${previewHint}`,
-            {
-              label: "Translation preview",
-              tone: "success",
-            },
-          );
+          pushAssistant(`${baseMessage}\n${previewHint}`, {
+            label: "Translation preview",
+            tone: "success",
+          });
           return;
         }
         case "viewTranslationStatus": {
@@ -2765,16 +2733,12 @@ export const ChatOrchestrator = ({
           const priorityParts = summary
             ? (["critical", "high"] as const)
                 .filter((key) => summary.counts[key] > 0)
-                .map(
-                  (key) => `${severityLabels[key]} ${summary.counts[key]}건`,
-                )
+                .map((key) => `${severityLabels[key]} ${summary.counts[key]}건`)
             : [];
           const secondaryParts = summary
             ? (["medium", "low"] as const)
                 .filter((key) => summary.counts[key] > 0)
-                .map(
-                  (key) => `${severityLabels[key]} ${summary.counts[key]}건`,
-                )
+                .map((key) => `${severityLabels[key]} ${summary.counts[key]}건`)
             : [];
 
           const advisoryLines = [
@@ -2850,6 +2814,9 @@ export const ChatOrchestrator = ({
       undoEditingSuggestion,
       dismissEditingSuggestion,
       localize,
+      originPrep,
+      prepGuardMessage,
+      translationPrepReady,
     ],
   );
 
@@ -2901,18 +2868,15 @@ export const ChatOrchestrator = ({
       const editingState = useEditingCommandStore.getState();
       const selectionForEditing = editingState.selection;
       const inferredEditingMode = selectionForEditing
-        ? activeEditingAction ?? guessEditingIntent(trimmed)
-        : activeEditingAction ?? guessEditingIntent(trimmed);
+        ? (activeEditingAction ?? guessEditingIntent(trimmed))
+        : (activeEditingAction ?? guessEditingIntent(trimmed));
 
       if (inferredEditingMode) {
         if (!selectionForEditing) {
-          pushAssistant(
-            "먼저 수정할 문장을 선택해 주세요.",
-            {
-              label: "Editing",
-              tone: "default",
-            },
-          );
+          pushAssistant("먼저 수정할 문장을 선택해 주세요.", {
+            label: "Editing",
+            tone: "default",
+          });
           setActiveEditingAction(null);
           return;
         }
@@ -2982,10 +2946,11 @@ export const ChatOrchestrator = ({
             }));
           },
         });
-      } catch (streamError) {
+      } catch (error) {
         if (streamCompleted) {
           return;
         }
+        console.warn("[chat] workflow stream failed, falling back", error);
         try {
           const fallback = await api.chat(token, streamPayload);
           const adaptedActions = adaptActionsForOrigin(
@@ -3021,6 +2986,7 @@ export const ChatOrchestrator = ({
     },
     [
       token,
+      projectId,
       updateAssistantMessage,
       processAssistantActions,
       messages,
@@ -3039,6 +3005,7 @@ export const ChatOrchestrator = ({
       guessEditingIntent,
       processEditingCommand,
       setActiveEditingAction,
+      addChatMessage,
     ],
   );
   const processFile = useCallback(
@@ -3290,21 +3257,27 @@ export const ChatOrchestrator = ({
   }, [scrollMessagesToBottom]);
 
   const originAnalysisStatus = snapshot.originPrep?.analysis.status ?? null;
-  const prevOriginAnalysisStatusRef = useRef<string | null>(originAnalysisStatus);
+  const prevOriginAnalysisStatusRef = useRef<string | null>(
+    originAnalysisStatus,
+  );
 
   useEffect(() => {
-    if (prevOriginAnalysisStatusRef.current === 'running' && originAnalysisStatus && originAnalysisStatus !== 'running') {
-      refreshProjectContext('content');
+    if (
+      prevOriginAnalysisStatusRef.current === "running" &&
+      originAnalysisStatus &&
+      originAnalysisStatus !== "running"
+    ) {
+      refreshProjectContext("content");
     }
     prevOriginAnalysisStatusRef.current = originAnalysisStatus;
   }, [originAnalysisStatus, refreshProjectContext]);
 
   useEffect(() => {
     if (!projectId) return;
-    if (originAnalysisStatus !== 'running') return;
+    if (originAnalysisStatus !== "running") return;
 
     const intervalId = window.setInterval(() => {
-      refreshProjectContext('content');
+      refreshProjectContext("content");
     }, 5000);
 
     return () => window.clearInterval(intervalId);
@@ -3347,9 +3320,11 @@ export const ChatOrchestrator = ({
           </h2>
           {currentProject && (
             <p className="mt-1 text-xs text-slate-500">
-              {currentProject.origin_lang ?? localize("chat_lang_unknown", "unknown")}
-              {" "}→{" "}
-              {currentProject.target_lang ?? localize("chat_lang_unknown", "unknown")}
+              {currentProject.origin_lang ??
+                localize("chat_lang_unknown", "unknown")}{" "}
+              →{" "}
+              {currentProject.target_lang ??
+                localize("chat_lang_unknown", "unknown")}
             </p>
           )}
 

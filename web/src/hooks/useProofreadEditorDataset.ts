@@ -16,7 +16,12 @@ export const proofreadEditorKeys = {
     jobId?: string | null,
     translationFileId?: string | null,
   ) =>
-    ["proofread-editor", projectId, jobId ?? null, translationFileId ?? null] as const,
+    [
+      "proofread-editor",
+      projectId,
+      jobId ?? null,
+      translationFileId ?? null,
+    ] as const,
 };
 
 export const useProofreadEditorDataset = ({
@@ -26,7 +31,11 @@ export const useProofreadEditorDataset = ({
   translationFileId,
 }: UseProofreadEditorDatasetParams) =>
   useQuery<ProofreadEditorResponse | null>({
-    queryKey: proofreadEditorKeys.dataset(projectId, jobId ?? null, translationFileId ?? null),
+    queryKey: proofreadEditorKeys.dataset(
+      projectId,
+      jobId ?? null,
+      translationFileId ?? null,
+    ),
     queryFn: async () => {
       if (!token || !projectId) {
         throw new Error("Missing authentication or projectId");

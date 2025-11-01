@@ -2,8 +2,15 @@ import { useCallback, useEffect, useMemo } from "react";
 import { api } from "../services/api";
 import type { ChatAction } from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
-import type { ProofreadingAgentState } from "../store/workflow.store";
+import type {
+  AgentRunState,
+  AgentSubState,
+  ProofreadingAgentState,
+} from "../store/workflow.store";
 import { useProofreadCommandStore } from "../store/proofreadCommand.store";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 type PushAssistant = (
   text: string,
@@ -42,6 +49,40 @@ const DEFAULT_STALL_THRESHOLD_MS = (() => {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
 })();
+
+const createRunState = (
+  status: AgentRunState["status"],
+  overrides?: Partial<AgentRunState>,
+): AgentRunState => ({
+  status,
+  heartbeatAt: overrides?.heartbeatAt ?? Date.now(),
+  willRetry: overrides?.willRetry ?? false,
+  nextRetryDelayMs: overrides?.nextRetryDelayMs ?? null,
+});
+
+const mapStageStatusesToSubStates = (
+  stages: Array<{
+    tier?: string | null;
+    key?: string | null;
+    label?: string | null;
+    status?: string | null;
+  }>,
+): AgentSubState[] =>
+  stages.map((stage, index) => {
+    const id = `${stage.tier ?? "global"}:${stage.key ?? stage.label ?? index}`;
+    const normalized = (stage.status ?? "").toLowerCase();
+    const status: AgentSubState["status"] =
+      normalized === "done"
+        ? "done"
+        : normalized === "error"
+          ? "failed"
+          : "running";
+    return {
+      id,
+      status,
+      label: stage.label ?? stage.key ?? stage.tier ?? id,
+    };
+  });
 
 export const useProofreadAgent = ({
   token,
@@ -128,7 +169,10 @@ export const useProofreadAgent = ({
 
     setProofreadingForProject((current) => {
       const nextProofreadingId = lifecycle.jobId ?? current.proofreadingId;
-      if (current.status === nextStatus && current.proofreadingId === nextProofreadingId) {
+      if (
+        current.status === nextStatus &&
+        current.proofreadingId === nextProofreadingId
+      ) {
         return current;
       }
 
@@ -139,26 +183,26 @@ export const useProofreadAgent = ({
         lastError: nextStatus === "failed" ? current.lastError : null,
         lastMessage:
           nextStatus === "running"
-            ? current.lastMessage ?? "교정이 진행 중입니다."
+            ? (current.lastMessage ?? "교정이 진행 중입니다.")
             : nextStatus === "queued"
-              ? current.lastMessage ?? "교정 작업이 대기 중입니다."
+              ? (current.lastMessage ?? "교정 작업이 대기 중입니다.")
               : nextStatus === "done"
-                ? current.lastMessage ?? "교정이 완료되었습니다."
+                ? (current.lastMessage ?? "교정이 완료되었습니다.")
                 : nextStatus === "failed"
-                  ? current.lastMessage ?? "최근 교정이 실패했습니다."
+                  ? (current.lastMessage ?? "최근 교정이 실패했습니다.")
                   : current.lastMessage,
+        run: createRunState(nextStatus),
+        subStates: mapStageStatusesToSubStates(current.stageStatuses ?? []),
       };
     });
   }, [lifecycle, projectId, setProofreadingForProject]);
 
   const startProofread = useCallback(
-    async (
-      options?: {
-        label?: string | null;
-        allowParallel?: boolean;
-        runDeep?: boolean;
-      },
-    ) => {
+    async (options?: {
+      label?: string | null;
+      allowParallel?: boolean;
+      runDeep?: boolean;
+    }) => {
       if (
         proofreading.status === "running" ||
         proofreading.status === "queued"
@@ -182,10 +226,12 @@ export const useProofreadAgent = ({
         lastMessage: "교정 작업을 준비 중입니다.",
         proofreadingId: null,
         stageStatuses: [],
+        subStates: [],
         tierSummaries: {},
         completionSummary: null,
         lastHeartbeatAt: new Date().toISOString(),
         isStalled: false,
+        run: createRunState("queued"),
       }));
       appendActivity("queued", "교정 작업을 준비 중입니다.");
       pushAssistant(
@@ -212,13 +258,17 @@ export const useProofreadAgent = ({
               const progressMessage = rawMessage?.trim().length
                 ? rawMessage
                 : "교정 작업이 진행 중입니다.";
-              setProofreadingForProject({
+              setProofreadingForProject((current) => ({
                 status: "running",
                 lastMessage: progressMessage,
                 lastError: null,
                 lastHeartbeatAt: new Date().toISOString(),
                 isStalled: false,
-              });
+                run: createRunState("running"),
+                subStates: mapStageStatusesToSubStates(
+                  current.stageStatuses ?? [],
+                ),
+              }));
               appendActivity("progress", progressMessage);
               return;
             }
@@ -236,13 +286,10 @@ export const useProofreadAgent = ({
                 label,
               });
               if (runStatus !== "accepted") {
-                pushAssistant(
-                  "교정 워크플로우 요청이 거절되었습니다.",
-                  {
-                    label: "Proofread workflow",
-                    tone: "error",
-                  },
-                );
+                pushAssistant("교정 워크플로우 요청이 거절되었습니다.", {
+                  label: "Proofread workflow",
+                  tone: "error",
+                });
               }
 
               if (runStatus !== "accepted") {
@@ -255,6 +302,10 @@ export const useProofreadAgent = ({
                       ? event.message
                       : "프로젝트 상태 때문에 교정 작업을 시작할 수 없습니다.",
                   lastMessage: "교정 워크플로우 요청이 거절되었습니다.",
+                  run: createRunState("failed"),
+                  subStates: mapStageStatusesToSubStates(
+                    current.stageStatuses ?? [],
+                  ),
                 }));
               }
 
@@ -304,6 +355,13 @@ export const useProofreadAgent = ({
                   stageStatuses: nextStages,
                   lastHeartbeatAt: new Date().toISOString(),
                   isStalled: false,
+                  run: createRunState(
+                    statusRaw === "error" ? "recovering" : "running",
+                    {
+                      willRetry: statusRaw === "error",
+                    },
+                  ),
+                  subStates: mapStageStatusesToSubStates(nextStages),
                 };
               });
               appendActivity("stage", stageMessage, {
@@ -326,22 +384,29 @@ export const useProofreadAgent = ({
                   ? "같은 번역본에 대한 교정이 이미 진행 중입니다. 잠시 후 결과를 확인해 주세요."
                   : "같은 번역본에 대한 교정 결과가 이미 존재합니다.";
 
-              setProofreadingForProject((current) => ({
-                status: status === "running" ? "running" : "done",
-                lastMessage: message,
-                lastError: null,
-                proofreadingId: proofreadRunId ?? current.proofreadingId,
-                stageStatuses:
+              setProofreadingForProject((current) => {
+                const nextStages =
                   status === "running"
-                    ? current.stageStatuses
+                    ? (current.stageStatuses ?? [])
                     : (current.stageStatuses ?? []).map((entry) => ({
                         ...entry,
                         status:
                           entry.status === "failed" ? entry.status : "done",
-                      })),
-                lastHeartbeatAt: new Date().toISOString(),
-                isStalled: false,
-              }));
+                      }));
+                return {
+                  status: status === "running" ? "running" : "done",
+                  lastMessage: message,
+                  lastError: null,
+                  proofreadingId: proofreadRunId ?? current.proofreadingId,
+                  stageStatuses: nextStages,
+                  lastHeartbeatAt: new Date().toISOString(),
+                  isStalled: false,
+                  run: createRunState(
+                    status === "running" ? "running" : "done",
+                  ),
+                  subStates: mapStageStatusesToSubStates(nextStages),
+                };
+              });
               appendActivity("duplicate", message, {
                 status,
                 proofreadRunId,
@@ -379,7 +444,8 @@ export const useProofreadAgent = ({
                     ? event.itemCount
                     : typeof (event as Record<string, unknown>).item_count ===
                         "number"
-                      ? ((event as Record<string, unknown>).item_count as number)
+                      ? ((event as Record<string, unknown>)
+                          .item_count as number)
                       : null;
                 return rawCount && Number.isFinite(rawCount) && rawCount >= 0
                   ? Math.round(rawCount)
@@ -413,13 +479,14 @@ export const useProofreadAgent = ({
                   tierSummaries: nextTierSummaries,
                   lastHeartbeatAt: new Date().toISOString(),
                   isStalled: false,
+                  run: createRunState("running"),
+                  subStates: mapStageStatusesToSubStates(nextStages),
                 };
               });
               appendActivity("tier_complete", message, {
                 tier,
                 proofreadingId,
-                itemCount:
-                  itemCount > 0 ? itemCount : undefined,
+                itemCount: itemCount > 0 ? itemCount : undefined,
               });
               return;
             }
@@ -430,20 +497,26 @@ export const useProofreadAgent = ({
                 typeof event.proofreading_id === "string"
                   ? event.proofreading_id
                   : undefined;
-              const report = (event as Record<string, any>)?.report as
-                | Record<string, any>
-                | undefined;
-              const summary = report?.summary as
-                | Record<string, any>
-                | undefined;
-              const countsBySubfeature =
-                (summary?.countsBySubfeature as Record<string, number>) ?? {};
-              const totalIssues = Object.values(countsBySubfeature).reduce<number>(
-                (acc, value) =>
-                  acc +
-                  (typeof value === "number" && Number.isFinite(value)
-                    ? value
-                    : 0),
+              const reportRaw = (event as { report?: unknown }).report;
+              const report = isRecord(reportRaw) ? reportRaw : undefined;
+              const summaryRaw =
+                report && isRecord(report.summary)
+                  ? report.summary
+                  : undefined;
+              const countsSourceRaw =
+                summaryRaw && isRecord(summaryRaw.countsBySubfeature)
+                  ? summaryRaw.countsBySubfeature
+                  : undefined;
+              const countsBySubfeature: Record<string, number> = {};
+              if (countsSourceRaw) {
+                for (const [key, value] of Object.entries(countsSourceRaw)) {
+                  if (typeof value === "number" && Number.isFinite(value)) {
+                    countsBySubfeature[key] = value;
+                  }
+                }
+              }
+              const totalIssues = Object.values(countsBySubfeature).reduce(
+                (acc, count) => acc + count,
                 0,
               );
               const tierIssueCounts: Record<string, number> = {};
@@ -453,12 +526,12 @@ export const useProofreadAgent = ({
                 },
               );
               const notesKo =
-                typeof summary?.notes_ko === "string"
-                  ? summary.notes_ko.trim()
+                typeof summaryRaw?.notes_ko === "string"
+                  ? summaryRaw.notes_ko.trim()
                   : undefined;
               const notesEn =
-                typeof summary?.notes_en === "string"
-                  ? summary.notes_en.trim()
+                typeof summaryRaw?.notes_en === "string"
+                  ? summaryRaw.notes_en.trim()
                   : undefined;
               const completionSummary = {
                 totalIssues,
@@ -609,10 +682,7 @@ export const useProofreadAgent = ({
             })),
             isStalled: false,
           }));
-          appendActivity(
-            "error",
-            "교정이 비정상적으로 종료되었습니다.",
-          );
+          appendActivity("error", "교정이 비정상적으로 종료되었습니다.");
           pushAssistant(
             "교정이 비정상적으로 종료되었습니다.",
             {
@@ -645,6 +715,7 @@ export const useProofreadAgent = ({
     },
     [
       proofreading.status,
+      proofreading.tierSummaries,
       token,
       projectId,
       translationJobId,
@@ -670,7 +741,8 @@ export const useProofreadAgent = ({
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (
-        (proofreading.status === "running" || proofreading.status === "queued") &&
+        (proofreading.status === "running" ||
+          proofreading.status === "queued") &&
         proofreading.lastHeartbeatAt
       ) {
         const last = Date.parse(proofreading.lastHeartbeatAt);
@@ -684,7 +756,10 @@ export const useProofreadAgent = ({
               undefined,
               { updateHeartbeat: false },
             );
-          } else if (diff <= DEFAULT_STALL_THRESHOLD_MS && proofreading.isStalled) {
+          } else if (
+            diff <= DEFAULT_STALL_THRESHOLD_MS &&
+            proofreading.isStalled
+          ) {
             setProofreadingForProject({ isStalled: false });
             appendActivity(
               "resumed",

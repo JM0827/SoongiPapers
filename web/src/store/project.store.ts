@@ -13,9 +13,9 @@ interface ProjectState {
   updateProjectMeta: (projectId: string, meta: ProjectMeta) => void;
 }
 
-const RECENT_STORAGE_KEY = 'project-t1.web.recent-projects';
-const ACTIVE_PROJECT_ID_KEY = 'project-t1.web.active-project-id';
-const ACTIVE_PROJECT_NAME_KEY = 'project-t1.web.active-project-name';
+const RECENT_STORAGE_KEY = "project-t1.web.recent-projects";
+const ACTIVE_PROJECT_ID_KEY = "project-t1.web.active-project-id";
+const ACTIVE_PROJECT_NAME_KEY = "project-t1.web.active-project-name";
 
 const loadStoredIds = (key: string): string[] => {
   if (typeof window === "undefined") return [];
@@ -33,7 +33,7 @@ const loadStoredIds = (key: string): string[] => {
 };
 
 const persistIds = (key: string, ids: string[]) => {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(key, JSON.stringify(ids));
   } catch (error) {
@@ -42,10 +42,10 @@ const persistIds = (key: string, ids: string[]) => {
 };
 
 const loadStoredString = (key: string): string | null => {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
   try {
     const value = window.localStorage.getItem(key);
-    if (typeof value === 'string' && value.trim().length > 0) {
+    if (typeof value === "string" && value.trim().length > 0) {
       return value;
     }
     return null;
@@ -56,7 +56,7 @@ const loadStoredString = (key: string): string | null => {
 };
 
 const persistString = (key: string, value: string | null) => {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   try {
     if (value && value.trim().length > 0) {
       window.localStorage.setItem(key, value);

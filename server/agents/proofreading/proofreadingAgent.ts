@@ -28,7 +28,12 @@ import { SHARED_TRANSLATION_GUIDELINES } from "../prompts/sharedGuidelines";
 import { getCurrentMemoryRecord } from "../../services/translation/memory";
 import type { GuardFindingDetail } from "@bookko/translation-types";
 import { normalizeTranslationNotes } from "../../models/DocumentProfile";
-import type { IssueItem, ProofreadingLLMRunMeta } from "./config";
+import type {
+  IssueItem,
+  ProofreadingLLMRunMeta,
+  ProofreadingReport,
+  ResultBucket,
+} from "./config";
 import { insertProofreadingLog } from "../../db/proofreadingLog";
 
 type Tier = "quick" | "deep";
@@ -98,12 +103,14 @@ export const sanitizeTargetExcerpt = (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-const normalizeSeverity = (
-  value: unknown,
-): GuardFindingDetail["severity"] => {
+const normalizeSeverity = (value: unknown): GuardFindingDetail["severity"] => {
   if (typeof value !== "string") return undefined;
   const normalized = value.toLowerCase();
-  if (normalized === "info" || normalized === "warn" || normalized === "error") {
+  if (
+    normalized === "info" ||
+    normalized === "warn" ||
+    normalized === "error"
+  ) {
     return normalized;
   }
   return undefined;
@@ -190,7 +197,9 @@ const collectGuardSegmentsForTarget = (
     .map(({ segment }) => segment);
 };
 
-async function loadSegmentGuards(jobId: string): Promise<SegmentGuardEnvelope[]> {
+async function loadSegmentGuards(
+  jobId: string,
+): Promise<SegmentGuardEnvelope[]> {
   const { rows } = await query(
     `SELECT segment_index,
             segment_id,
@@ -207,15 +216,18 @@ async function loadSegmentGuards(jobId: string): Promise<SegmentGuardEnvelope[]>
 
   return rows
     .map((row) => {
-      const segmentId = typeof row.segment_id === "string" ? row.segment_id : "";
+      const segmentId =
+        typeof row.segment_id === "string" ? row.segment_id : "";
       if (!segmentId) return null;
       const notes = isRecord(row.notes)
         ? (row.notes as Record<string, unknown>)
         : null;
       const guardFindingsSource = notes?.guardFindings ?? notes?.guard_findings;
       const guardFindings = parseGuardFindings(guardFindingsSource);
-      const textSource = typeof row.text_source === "string" ? row.text_source : "";
-      const rawTarget = typeof row.text_target === "string" ? row.text_target : "";
+      const textSource =
+        typeof row.text_source === "string" ? row.text_source : "";
+      const rawTarget =
+        typeof row.text_target === "string" ? row.text_target : "";
       const textTarget = sanitizeTargetExcerpt(textSource, rawTarget);
       if (!textTarget) return null;
       return {
@@ -280,12 +292,12 @@ export type ProofreadingProgressEvent =
       type: "tier_complete";
       tier: Tier;
       proofreading_id: string;
-      report: any;
+      report: ProofreadingReport;
     }
   | {
       type: "complete";
       proofreading_id: string;
-      report: any;
+      report: ProofreadingReport;
     }
   | {
       type: "error";
@@ -332,7 +344,10 @@ export async function runProofreading(
     finalTextHash,
   });
 
-  if (existingRun && (existingRun.status === "running" || existingRun.status === "completed")) {
+  if (
+    existingRun &&
+    (existingRun.status === "running" || existingRun.status === "completed")
+  ) {
     if (onProgress) {
       onProgress({
         type: "duplicate",
@@ -400,10 +415,11 @@ export async function runProofreading(
       )
       .filter(
         (sf) =>
-          sf.enabled || (includeDeep && (sf.tier as Tier | undefined) === "deep"),
+          sf.enabled ||
+          (includeDeep && (sf.tier as Tier | undefined) === "deep"),
       );
 
-    const tierReports: Partial<Record<Tier, any>> = {};
+    const tierReports: Partial<Record<Tier, ProofreadingReport>> = {};
 
     const quickSubfeatures = enabledSubfeatures.filter(
       (sf) => (sf.tier as Tier | undefined) === "quick",
@@ -571,7 +587,8 @@ export async function runProofreading(
                       tier,
                       subfeatureKey: sf.key,
                       chunkIndex,
-                      error: error instanceof Error ? error.message : String(error),
+                      error:
+                        error instanceof Error ? error.message : String(error),
                     }),
                   );
                 }
@@ -596,7 +613,7 @@ export async function runProofreading(
               status: "done",
               itemCount: decoratedItems.length,
             });
-          } catch (err: any) {
+          } catch (error) {
             emit({
               type: "stage",
               tier,
@@ -604,7 +621,7 @@ export async function runProofreading(
               label: sf.label,
               status: "error",
             });
-            throw err;
+            throw error;
           }
         }),
       );
@@ -635,7 +652,7 @@ export async function runProofreading(
         ? { ...baseMeta, llm: { runs: tierReportRuns } }
         : baseMeta;
 
-      const report = {
+      const report: ProofreadingReport = {
         meta: reportMeta,
         results: tierResults,
         summary: {
@@ -646,11 +663,11 @@ export async function runProofreading(
         },
       };
 
-      const tierReport = {
+      const tierReport: ProofreadingReport = {
         ...report,
-        results: report.results.map((bucket: any) => ({
+        results: report.results.map((bucket) => ({
           ...bucket,
-          items: bucket.items?.map((item: any) => ({ ...item })) ?? [],
+          items: bucket.items?.map((item) => ({ ...item })) ?? [],
         })),
       };
 
@@ -685,7 +702,7 @@ export async function runProofreading(
       ? { ...baseMeta, llm: { runs: llmRuns } }
       : baseMeta;
 
-    const report = {
+    const report: ProofreadingReport = {
       meta: finalMeta,
       results: filteredBuckets,
       summary: {
@@ -709,10 +726,12 @@ export async function runProofreading(
     emit({ type: "complete", proofreading_id, report });
 
     return { proofreading_id, report };
-  } catch (err: any) {
+  } catch (error) {
     await updateProofreadRunStatus(proofreadRunId, "failed");
     await updateHistory({ proofreading_id, status: "error" });
-    emit({ type: "error", message: err?.message || "Proofreading failed" });
-    throw err;
+    const message =
+      error instanceof Error ? error.message : "Proofreading failed";
+    emit({ type: "error", message });
+    throw error;
   }
 }

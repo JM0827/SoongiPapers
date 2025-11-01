@@ -14,7 +14,9 @@ export const SidebarActivitySection = ({
   return (
     <SidebarSection title="최근 업데이트" isOpen={isOpen} onToggle={onToggle}>
       {items.length === 0 ? (
-        <p className="text-[11px] text-slate-500">최근 업데이트 정보가 없습니다.</p>
+        <p className="text-[11px] text-slate-500">
+          최근 업데이트 정보가 없습니다.
+        </p>
       ) : (
         <ul className="text-[11px] text-slate-600">
           {items.map((item) => (

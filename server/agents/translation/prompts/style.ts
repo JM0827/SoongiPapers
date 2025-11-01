@@ -42,6 +42,8 @@ export function buildStyleUserPrompt({
     );
   }
   sections.push(`Literal draft:\n${literalDraft}`);
-  sections.push("Produce the styled translation while keeping factual fidelity.");
+  sections.push(
+    "Produce the styled translation while keeping factual fidelity.",
+  );
   return sections.join("\n\n");
 }

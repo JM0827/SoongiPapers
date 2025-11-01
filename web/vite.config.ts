@@ -8,11 +8,11 @@ const hmrHost = process.env.VITE_HMR_HOST;
 const hmrPort = process.env.VITE_HMR_PORT
   ? Number(process.env.VITE_HMR_PORT)
   : 5174;
-const httpsEnabled = process.env.VITE_HTTPS_ENABLED === 'true';
+const httpsEnabled = process.env.VITE_HTTPS_ENABLED === "true";
 const httpsConfig = httpsEnabled
   ? {
-      key: resolve(rootDir, '../certs/server.key'),
-      cert: resolve(rootDir, '../certs/server.crt'),
+      key: resolve(rootDir, "../certs/server.key"),
+      cert: resolve(rootDir, "../certs/server.crt"),
     }
   : undefined;
 
@@ -38,12 +38,14 @@ export default defineConfig({
     hmr: {
       ...(hmrHost ? { host: hmrHost } : {}),
       port: hmrPort,
-      protocol: httpsEnabled ? 'wss' : 'ws',
+      protocol: httpsEnabled ? "wss" : "ws",
     },
 
     proxy: {
       "/api": {
-        target: httpsEnabled ? 'https://localhost:8080' : 'http://localhost:8080',
+        target: httpsEnabled
+          ? "https://localhost:8080"
+          : "http://localhost:8080",
         changeOrigin: true,
         secure: httpsEnabled ? false : true,
       },
