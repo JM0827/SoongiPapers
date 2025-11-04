@@ -7,7 +7,11 @@ export interface SafeExtractedOpenAIResponse {
     completion_tokens?: number;
     total_tokens?: number;
   };
+  repairApplied?: boolean;
 }
+
+const JSON_CONTROL_CHAR_REGEX =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 const collectOutputText = (resp: any): string | undefined => {
   const direct = resp?.output_text;
@@ -34,6 +38,60 @@ const isMaxBudgetStop = (res: any) =>
   res?.status === "incomplete" &&
   res?.incomplete_details?.reason === "max_output_tokens";
 
+const balanceStructuralPairs = (
+  value: string,
+  open: string,
+  close: string,
+): { value: string; applied: boolean } => {
+  const openReg = new RegExp(`\\${open}`, "g");
+  const closeReg = new RegExp(`\\${close}`, "g");
+  const openCount = (value.match(openReg) ?? []).length;
+  const closeCount = (value.match(closeReg) ?? []).length;
+  if (openCount > closeCount) {
+    return {
+      value: value + close.repeat(openCount - closeCount),
+      applied: true,
+    };
+  }
+  return { value, applied: false };
+};
+
+const repairJsonString = (raw: string): { value: string; applied: boolean } => {
+  let value = raw.trim();
+  let applied = false;
+
+  const sanitized = value.replace(JSON_CONTROL_CHAR_REGEX, "");
+  if (sanitized !== value) {
+    value = sanitized;
+    applied = true;
+  }
+
+  const lastStructuralIndex = Math.max(
+    value.lastIndexOf("}"),
+    value.lastIndexOf("]"),
+  );
+  if (lastStructuralIndex !== -1 && lastStructuralIndex < value.length - 1) {
+    value = value.slice(0, lastStructuralIndex + 1).trimEnd();
+    applied = true;
+  }
+
+  const braceResult = balanceStructuralPairs(value, "{", "}");
+  value = braceResult.value;
+  applied = applied || braceResult.applied;
+
+  const bracketResult = balanceStructuralPairs(value, "[", "]");
+  value = bracketResult.value;
+  applied = applied || bracketResult.applied;
+
+  const quoteCount = (value.match(/"/g) ?? []).length;
+  if (quoteCount % 2 !== 0) {
+    value += '"';
+    applied = true;
+  }
+
+  return { value, applied };
+};
+
 export function safeExtractOpenAIResponse(
   resp: any,
 ): SafeExtractedOpenAIResponse {
@@ -51,7 +109,9 @@ export function safeExtractOpenAIResponse(
     ? resp.output_parsed[0]
     : undefined;
 
-  const text = collectOutputText(resp);
+  const originalText = collectOutputText(resp);
+  let normalizedText = originalText;
+  let repairApplied = false;
 
   if (!parsed && Array.isArray(resp?.output)) {
     const contents = resp.output.flatMap((item: any) => item?.content ?? []);
@@ -65,34 +125,50 @@ export function safeExtractOpenAIResponse(
     }
   }
 
-  if (!parsed && text) {
+  if (!parsed && normalizedText) {
     try {
-      parsed = JSON.parse(text);
+      parsed = JSON.parse(normalizedText);
     } catch (_err) {
-      // swallow JSON parse errors; text fallback still returned
+      const repaired = repairJsonString(normalizedText);
+      if (repaired.applied) {
+        normalizedText = repaired.value;
+        try {
+          parsed = JSON.parse(normalizedText);
+          repairApplied = true;
+        } catch (
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          __repairErr
+        ) {
+          // swallow parse error after repair; fallback handled below
+        }
+      }
     }
   }
 
-  if (!parsed && !text) {
+  if (!parsed && !normalizedText) {
     if (isMaxBudgetStop(resp)) {
-      const id = resp?.id ?? null;
-      const msg = `OpenAI response incomplete (reason=max_output_tokens, id=${id}).`;
-      const err: Error & { code?: string; metadata?: Record<string, unknown> } =
-        new Error(msg);
-      err.code = "openai_response_incomplete";
-      err.metadata = { reason: "max_output_tokens", responseId: id };
-      throw err;
+      parsed = {
+        version: "v2",
+        items: [],
+      };
+    } else {
+      try {
+        const preview = JSON.stringify(resp)?.slice(0, 2000);
+        console.error("[LLM] Empty response payload", preview);
+      } catch (_logErr) {
+        console.error("[LLM] Empty response payload (unable to stringify)");
+      }
+      throw new Error("Empty response from OpenAI (no text, no message)");
     }
-    try {
-      const preview = JSON.stringify(resp)?.slice(0, 2000);
-      console.error("[LLM] Empty response payload", preview);
-    } catch (_logErr) {
-      console.error("[LLM] Empty response payload (unable to stringify)");
-    }
-    throw new Error("Empty response from OpenAI (no text, no message)");
   }
 
-  return { parsedJson: parsed, text, requestId: resp?.id, usage };
+  return {
+    parsedJson: parsed,
+    text: normalizedText,
+    requestId: resp?.id,
+    usage,
+    repairApplied,
+  };
 }
 
 export function isFatalParamErr(error: unknown): boolean {

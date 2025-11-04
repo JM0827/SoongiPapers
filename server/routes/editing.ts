@@ -112,7 +112,10 @@ const editingRoutes: FastifyPluginAsync = async (fastify) => {
   try {
     openaiClient = getOpenAIClient();
   } catch (error) {
-    fastify.log.error({ err: error }, "[editing] Failed to initialise OpenAI client");
+    fastify.log.error(
+      { err: error },
+      "[editing] Failed to initialise OpenAI client",
+    );
   }
 
   const runEditingCompletion = async (
@@ -265,7 +268,10 @@ const editingRoutes: FastifyPluginAsync = async (fastify) => {
     reply: FastifyReply,
   ) => {
     try {
-      const result = await runEditingCompletion(mode, request.body as EditingRequestBody);
+      const result = await runEditingCompletion(
+        mode,
+        request.body as EditingRequestBody,
+      );
       return reply.send({
         suggestionId: randomUUID(),
         resultText: result.resultText,
@@ -276,7 +282,9 @@ const editingRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       request.log.error({ err: error, mode }, "[editing] request failed");
       const message =
-        error instanceof Error ? error.message : "Failed to process editing request";
+        error instanceof Error
+          ? error.message
+          : "Failed to process editing request";
       const status = (() => {
         if (!(error instanceof Error)) return 500;
         const normalized = error.message.toLowerCase();

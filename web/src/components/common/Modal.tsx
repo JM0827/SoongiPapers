@@ -35,7 +35,7 @@ export const Modal = ({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
       <div
-        className={`w-full ${maxWidthClass ?? 'max-w-md'} overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-xl`}
+        className={`w-full ${maxWidthClass ?? "max-w-md"} overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-xl`}
       >
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-start justify-between gap-4">
@@ -50,7 +50,7 @@ export const Modal = ({
                 type="button"
                 onClick={onClose}
                 className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
-                aria-label={closeLabel ?? 'Close dialog'}
+                aria-label={closeLabel ?? "Close dialog"}
               >
                 <X className="h-4 w-4" />
               </button>

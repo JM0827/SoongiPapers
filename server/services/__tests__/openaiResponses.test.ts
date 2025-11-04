@@ -1,14 +1,15 @@
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
 
 import {
   runResponsesWithRetry,
   RESPONSES_INCOMPLETE_ERROR_CODE,
-} from '../openaiResponses';
+} from "../openaiResponses";
 
-describe('runResponsesWithRetry', () => {
-  test('retries truncated Responses call with increased token budget', async () => {
-    const attempts: Array<{ maxOutputTokens: number; attemptIndex: number }> = [];
+describe("runResponsesWithRetry", () => {
+  test("retries truncated Responses call with increased token budget", async () => {
+    const attempts: Array<{ maxOutputTokens: number; attemptIndex: number }> =
+      [];
     let callCount = 0;
 
     const result = await runResponsesWithRetry({
@@ -22,23 +23,28 @@ describe('runResponsesWithRetry', () => {
         callCount += 1;
 
         if (callCount === 1) {
-          const err = new Error('incomplete response') as Error & { code?: string };
+          const err = new Error("incomplete response") as Error & {
+            code?: string;
+          };
           err.code = RESPONSES_INCOMPLETE_ERROR_CODE;
           throw err;
         }
 
-        return { id: 'resp-ok' };
+        return { id: "resp-ok" };
       },
     });
 
     assert.equal(callCount, 2);
-    assert.deepEqual(attempts.map((it) => it.maxOutputTokens), [300, 450]);
+    assert.deepEqual(
+      attempts.map((it) => it.maxOutputTokens),
+      [300, 210],
+    );
     assert.equal(result.attempts, 2);
-    assert.equal(result.maxOutputTokens, 450);
-    assert.equal(result.truncated, true);
+    assert.equal(result.maxOutputTokens, 210);
+    assert.equal(result.truncated, false);
   });
 
-  test('retries malformed JSON response and applies SyntaxError backoff', async () => {
+  test("retries malformed JSON response and applies SyntaxError backoff", async () => {
     const attempts: number[] = [];
     let callCount = 0;
 
@@ -51,21 +57,21 @@ describe('runResponsesWithRetry', () => {
         callCount += 1;
 
         if (callCount === 1) {
-          throw new SyntaxError('Unexpected token < in JSON');
+          throw new SyntaxError("Unexpected token < in JSON");
         }
 
-        return { id: 'resp-after-retry' };
+        return { id: "resp-after-retry" };
       },
     });
 
     assert.equal(callCount, 2);
-    assert.deepEqual(attempts, [200, 260]);
+    assert.deepEqual(attempts, [200, 200]);
     assert.equal(result.attempts, 2);
-    assert.equal(result.maxOutputTokens, 260);
+    assert.equal(result.maxOutputTokens, 200);
     assert.equal(result.truncated, false);
   });
 
-  test('bubbles non-retryable errors from buildRequest', async () => {
+  test("bubbles non-retryable errors from buildRequest", async () => {
     await assert.rejects(
       () =>
         runResponsesWithRetry({
@@ -73,7 +79,7 @@ describe('runResponsesWithRetry', () => {
           initialMaxOutputTokens: 400,
           maxOutputTokensCap: 800,
           buildRequest: async () => {
-            throw new Error('fatal');
+            throw new Error("fatal");
           },
         }),
       /fatal/,

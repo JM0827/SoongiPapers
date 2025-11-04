@@ -18,6 +18,8 @@ import type {
 } from "../types/domain";
 import { useChatInsightStore } from "../store/chatInsight.store";
 import { useProofreadIssueActionStore } from "../store/proofreadIssueAction.store";
+import { useWorkflowStore } from "../store/workflow.store";
+import type { ProofreadAgentPageV2 } from "../store/workflow.store";
 
 interface ApplyProofreadingResponse {
   updated_at?: string;
@@ -315,7 +317,7 @@ const resolveIssuesFromReport = (
   report: ProofreadingReport | null,
 ): ProofreadIssueEntry[] => {
   if (!report) return [];
-  const buckets = Array.isArray(report.results) ? report.results ?? [] : [];
+  const buckets = Array.isArray(report.results) ? (report.results ?? []) : [];
   return buckets
     .flatMap((bucket, bucketIndex) =>
       (bucket.items ?? []).map((issue, issueIndex) => ({
@@ -357,6 +359,7 @@ export const ProofreadIssuesProvider = ({
   projectId,
   children,
 }: ProofreadIssuesProviderProps) => {
+  const workflowProof = useWorkflowStore((state) => state.proofreading);
   const proofreading = content?.proofreading ?? null;
   const [session, setSession] = useState<ProjectContent["proofreading"] | null>(
     proofreading ?? null,
@@ -375,7 +378,9 @@ export const ProofreadIssuesProvider = ({
     translationText ?? "",
   );
   const translationRef = useRef(currentTranslation);
-  const upsertProofSummary = useChatInsightStore((state) => state.upsertProofSummary);
+  const upsertProofSummary = useChatInsightStore(
+    (state) => state.upsertProofSummary,
+  );
   const setProofIssueHandlers = useProofreadIssueActionStore(
     (state) => state.setHandlers,
   );
@@ -450,7 +455,9 @@ export const ProofreadIssuesProvider = ({
     if (showAllIssues) return allIssues;
     return allIssues.filter(({ issue }) => {
       const severity = normalizeSeverity(issue.severity) ?? "low";
-      return severity === "critical" || severity === "high" || severity === "medium";
+      return (
+        severity === "critical" || severity === "high" || severity === "medium"
+      );
     });
   }, [allIssues, showAllIssues]);
 
@@ -472,7 +479,84 @@ export const ProofreadIssuesProvider = ({
     return map;
   }, [allIssues, appliedIdSet, issueStatuses]);
 
-  const highlights = useMemo<ProofreadHighlightSegment[]>(() => {
+  const livePages = useMemo<ProofreadAgentPageV2[]>(() => {
+    const providerProject = projectId ?? content?.projectId ?? null;
+    const stateProject = workflowProof.projectId ?? null;
+    if (stateProject && providerProject && stateProject !== providerProject) {
+      return [];
+    }
+    return workflowProof.pages ?? [];
+  }, [workflowProof, projectId, content?.projectId]);
+
+  const v2Highlights = useMemo<ProofreadHighlightSegment[]>(() => {
+    if (!currentTranslation) return [];
+    if (!livePages.length) return [];
+    const translationLength = currentTranslation.length;
+    const seen = new Set<string>();
+    const segments: ProofreadHighlightSegment[] = [];
+
+    livePages.forEach((page, pageIndex) => {
+      page.items.forEach((item, itemIndex) => {
+        const rawStart = Number(item.o?.[0]);
+        const rawEnd = Number(item.o?.[1]);
+        if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return;
+        const start = Math.max(0, Math.min(translationLength, rawStart));
+        const end = Math.max(start, Math.min(translationLength, rawEnd));
+        if (end <= start) return;
+
+        const issueId = item.uid ?? `${page.run_id}:${pageIndex}:${itemIndex}`;
+        if (seen.has(issueId)) return;
+        seen.add(issueId);
+
+        const severity =
+          item.s === "error"
+            ? "high"
+            : item.s === "warning"
+              ? "medium"
+              : "low";
+        const status = issueStateById[issueId] ?? "pending";
+        const colorMeta = getSubfeatureColor(item.k);
+        const tone =
+          status === "pending"
+            ? {
+                colorClass: colorMeta.highlight,
+                editorClass: colorMeta.highlightClass,
+                editorColor: colorMeta.highlightColor,
+              }
+            : statusHighlightTone[status];
+
+        const tooltipPieces = [
+          severity ? `Severity ${severity.toUpperCase()}` : null,
+          item.k,
+          item.r,
+        ].filter(Boolean);
+
+        segments.push({
+          start,
+          end,
+          colorClass: tone.colorClass,
+          editorClass: tone.editorClass,
+          editorColor: tone.editorColor,
+          tooltip: tooltipPieces.join(" · "),
+          issueId,
+          status,
+          issue: {
+            id: issueId,
+            severity,
+            feature: item.k,
+            issueEn: item.r,
+            issueKo: item.r,
+            recommendationEn: item.fix?.text,
+            recommendationKo: item.fix?.text,
+          },
+        });
+      });
+    });
+
+    return segments.sort((a, b) => a.start - b.start);
+  }, [currentTranslation, livePages, issueStateById]);
+
+  const legacyHighlights = useMemo<ProofreadHighlightSegment[]>(() => {
     if (!issues.length || !currentTranslation) return [];
     const usedRanges: Array<{ start: number; end: number }> = [];
     const segments: ProofreadHighlightSegment[] = [];
@@ -540,6 +624,11 @@ export const ProofreadIssuesProvider = ({
 
     return segments.sort((a, b) => a.start - b.start);
   }, [issues, issueStateById, currentTranslation]);
+
+  const highlights = useMemo<ProofreadHighlightSegment[]>(() => {
+    if (v2Highlights.length) return v2Highlights;
+    return legacyHighlights;
+  }, [v2Highlights, legacyHighlights]);
 
   const stage = useMemo(() => {
     if (session?.stage) return session.stage;
@@ -870,8 +959,7 @@ export const ProofreadIssuesProvider = ({
       severityOrder.map((key) => snapshot.counts[key]).join(","),
       snapshot.exampleIssues
         .map(
-          (item) =>
-            `${item.issueId}:${item.severity}:${item.location ?? ""}`,
+          (item) => `${item.issueId}:${item.severity}:${item.location ?? ""}`,
         )
         .join("|"),
     ].join(";");
@@ -918,7 +1006,13 @@ export const ProofreadIssuesProvider = ({
     return () => {
       resetHandlers();
     };
-  }, [allIssues, handleApply, handleIgnore, setProofIssueHandlers, resetHandlers]);
+  }, [
+    allIssues,
+    handleApply,
+    handleIgnore,
+    setProofIssueHandlers,
+    resetHandlers,
+  ]);
 
   const value = useMemo<ProofreadIssuesContextValue>(
     () => ({

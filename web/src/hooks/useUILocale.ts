@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useUIStore } from "../store/ui.store";
-import { DEFAULT_LOCALE, isSupportedLocale, type UILocale } from "../config/i18n";
+import {
+  DEFAULT_LOCALE,
+  isSupportedLocale,
+  type UILocale,
+} from "../config/i18n";
 import { useAuthStore } from "../store/auth.store";
 import { api } from "../services/api";
 

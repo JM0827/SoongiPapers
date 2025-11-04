@@ -37,7 +37,10 @@ export default async function memoryRoutes(app: FastifyInstance) {
         memory: current?.memory ?? null,
       });
     } catch (error) {
-      request.log.error({ err: error, projectId }, "[MEMORY] Failed to fetch memory");
+      request.log.error(
+        { err: error, projectId },
+        "[MEMORY] Failed to fetch memory",
+      );
       reply.status(500).send({ error: "Failed to fetch project memory" });
     }
   });
@@ -59,11 +62,14 @@ export default async function memoryRoutes(app: FastifyInstance) {
     try {
       const record = await ensureProjectMemory(
         body.projectId,
-        (body.memory as Record<string, unknown> | undefined) as any,
+        body.memory as Record<string, unknown> | undefined as any,
       );
       reply.status(201).send(record);
     } catch (error) {
-      request.log.error({ err: error, projectId: body.projectId }, "[MEMORY] Failed to init memory");
+      request.log.error(
+        { err: error, projectId: body.projectId },
+        "[MEMORY] Failed to init memory",
+      );
       reply.status(500).send({ error: "Failed to initialize project memory" });
     }
   });
@@ -85,11 +91,14 @@ export default async function memoryRoutes(app: FastifyInstance) {
     try {
       const record = await mergeProjectMemory(
         body.projectId,
-        (body.memory as Record<string, unknown> | undefined) as any,
+        body.memory as Record<string, unknown> | undefined as any,
       );
       reply.send(record);
     } catch (error) {
-      request.log.error({ err: error, projectId: body.projectId }, "[MEMORY] Failed to update memory");
+      request.log.error(
+        { err: error, projectId: body.projectId },
+        "[MEMORY] Failed to update memory",
+      );
       reply.status(500).send({ error: "Failed to update project memory" });
     }
   });

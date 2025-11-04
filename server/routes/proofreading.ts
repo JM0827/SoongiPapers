@@ -9,6 +9,7 @@ import {
   requestAction as requestWorkflowAction,
   WorkflowRunRecord,
 } from "../services/workflowManager";
+import { NdjsonStreamWriter } from "../lib/ndjsonStream";
 
 const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
   // (선택) JWT를 쓰면 여기에서 req.jwtVerify() 훅 추가 가능
@@ -43,12 +44,18 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
       reply.raw.setHeader("Connection", "keep-alive");
       reply.raw.setHeader("Transfer-Encoding", "chunked");
 
-      const send = (payload: any) => {
-        reply.raw.write(`${JSON.stringify(payload)}\n`);
-        const raw: any = reply.raw as any;
-        if (typeof raw.flush === "function") {
-          raw.flush();
-        }
+      let streamClosed = false;
+      req.raw.once("close", () => {
+        streamClosed = true;
+      });
+
+      const writer = new NdjsonStreamWriter(reply.raw, {
+        logger: req.log,
+      });
+
+      const send = (payload: Record<string, unknown>) => {
+        if (streamClosed) return;
+        writer.write(payload);
       };
 
       let workflowRun: WorkflowRunRecord | null = null;
@@ -77,11 +84,15 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
             const projectStatus = result.projectStatus ?? null;
             const message = (() => {
               if (reason === "already_running") {
-                const statusText = conflictStatus ? ` (상태: ${conflictStatus})` : "";
+                const statusText = conflictStatus
+                  ? ` (상태: ${conflictStatus})`
+                  : "";
                 return `이미 진행 중인 교정 작업이 있어 새 작업을 시작할 수 없습니다.${statusText}`;
               }
               if (reason === "project_inactive") {
-                const statusText = projectStatus ? ` (프로젝트 상태: ${projectStatus})` : "";
+                const statusText = projectStatus
+                  ? ` (프로젝트 상태: ${projectStatus})`
+                  : "";
                 return `프로젝트 상태 때문에 교정 작업을 시작할 수 없습니다.${statusText}`;
               }
               return "교정 작업을 시작할 수 없습니다.";
@@ -94,7 +105,8 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
               projectStatus,
               message,
             });
-            reply.raw.end();
+            streamClosed = true;
+            writer.close();
             return;
           }
           workflowRun = result.run;
@@ -111,7 +123,8 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
               workflowError?.message ??
               "교정 워크플로우를 준비하지 못했습니다.",
           });
-          reply.raw.end();
+          streamClosed = true;
+          writer.close();
           return;
         }
 
@@ -123,24 +136,33 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
             await completeWorkflowRun(workflowRun.runId, { jobId: job_id });
           }
         } catch (error: any) {
-          if (workflowRun) {
-            await failWorkflowRun(workflowRun.runId, {
+          req.log.error(
+            {
+              err: error,
+              projectId: project_id,
               jobId: job_id,
-              error: error?.message ?? "unknown",
+            },
+            "[proofread] streaming run failed",
+          );
+          if (!streamClosed) {
+            send({
+              type: "error",
+              message: error?.message || "Proofreading failed",
             });
           }
-          send({
-            type: "error",
-            message: error?.message || "Proofreading failed",
-          });
         }
       } catch (error: any) {
+        req.log.error(
+          { err: error, projectId: null, jobId: null },
+          "[proofread] unhandled error",
+        );
         send({
           type: "error",
           message: error?.message || "Proofreading failed",
         });
       } finally {
-        reply.raw.end();
+        streamClosed = true;
+        writer.close();
       }
     },
   );

@@ -4,21 +4,24 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useMemo,
   useState,
-} from 'react';
-import { Loader2, CheckCircle2, Circle } from 'lucide-react';
+} from "react";
+import { Loader2, CheckCircle2, Circle } from "lucide-react";
 
 import type {
   DocumentProfileSummary,
   DocumentSummaryFallback,
-} from '../../types/domain';
-import type { LocalizeFn } from '../../types/localize';
-import { handleKeyboardToggle, isEventFromInteractive } from '../common/Collapsible';
+} from "../../types/domain";
+import type { LocalizeFn } from "../../types/localize";
+import {
+  handleKeyboardToggle,
+  isEventFromInteractive,
+} from "../common/collapsibleUtils";
 import {
   type TranslationNotesSectionProps,
   TranslationNotesSection,
-} from './TranslationNotesSection';
+} from "./TranslationNotesSection";
 
-export type SummaryStatus = 'pending' | 'running' | 'done';
+export type SummaryStatus = "pending" | "running" | "done";
 
 export interface DocumentSummaryCardProps {
   title: string;
@@ -43,6 +46,7 @@ export interface DocumentSummaryCardProps {
   fallbackLanguage?: string | null;
   fallbackVersion?: number | null;
   headerAccessory?: ReactNode;
+  fileName?: string | null;
 }
 
 export const DocumentSummaryCard = ({
@@ -51,13 +55,14 @@ export const DocumentSummaryCard = ({
   localize,
   isLoading = false,
   defaultOpen = true,
-  status = 'pending',
+  status = "pending",
   fallbackSummary,
   fallbackMetrics,
   fallbackTimestamp,
   fallbackLanguage,
   fallbackVersion,
   headerAccessory,
+  fileName,
 }: DocumentSummaryCardProps) => {
   const effectiveTimestamp =
     profile?.updatedAt ?? profile?.createdAt ?? fallbackTimestamp ?? null;
@@ -68,16 +73,15 @@ export const DocumentSummaryCard = ({
     profile?.summary ??
     (fallbackSummary
       ? {
-          story: fallbackSummary.story ?? '',
-          intention: fallbackSummary.intention ?? '',
+          story: fallbackSummary.story ?? "",
+          intention: fallbackSummary.intention ?? "",
           readerPoints: fallbackSummary.readerPoints ?? [],
         }
       : null);
   const wordsLabel = profile?.metrics?.wordCount ?? fallbackMetrics?.wordCount;
   const charsLabel = profile?.metrics?.charCount ?? fallbackMetrics?.charCount;
   const minutesLabel =
-    profile?.metrics?.readingTimeMinutes ??
-    fallbackMetrics?.readingTimeMinutes;
+    profile?.metrics?.readingTimeMinutes ?? fallbackMetrics?.readingTimeMinutes;
 
   const toggleDisabled = Boolean(isLoading && !summary);
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -102,66 +106,78 @@ export const DocumentSummaryCard = ({
   };
 
   const headerClass = toggleDisabled
-    ? 'flex flex-1 cursor-default flex-col gap-1 focus:outline-none'
-    : 'flex flex-1 cursor-pointer flex-col gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white';
+    ? "flex flex-1 cursor-default flex-col gap-1 focus:outline-none"
+    : "flex flex-1 cursor-pointer flex-col gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white";
 
   const renderFooter = () => {
     const parts = [
       wordsLabel
-        ? localize(
-            'rightpanel_summary_metric_words',
-            `${wordsLabel} words`,
-            { count: wordsLabel },
-          )
+        ? localize("rightpanel_summary_metric_words", `${wordsLabel} words`, {
+            count: wordsLabel,
+          })
         : null,
       charsLabel
         ? localize(
-            'rightpanel_summary_metric_characters',
+            "rightpanel_summary_metric_characters",
             `${charsLabel} characters`,
             { count: charsLabel },
           )
         : null,
       minutesLabel
         ? localize(
-            'rightpanel_summary_metric_minutes',
+            "rightpanel_summary_metric_minutes",
             `${minutesLabel} mins`,
             { count: minutesLabel },
           )
         : null,
       timestampLabel
         ? localize(
-            'rightpanel_summary_metric_updated',
+            "rightpanel_summary_metric_updated",
             `update: ${timestampLabel}`,
             { timestamp: timestampLabel },
           )
         : null,
+      fileName
+        ? localize(
+            "rightpanel_summary_metric_filename",
+            `File: ${fileName}`,
+            { filename: fileName },
+          )
+        : null,
     ].filter(Boolean);
     if (!parts.length) return null;
-    return <p className="mt-4 text-[11px] text-slate-400">{parts.join(' ')}</p>;
+    return (
+      <p className="mt-4 text-[11px] text-slate-400">{parts.join(" · ")}</p>
+    );
   };
 
   const statusIcon = () => {
-    if (status === 'running') {
+    if (status === "running") {
       return (
-        <Loader2 className="h-4 w-4 animate-spin text-indigo-500" aria-hidden="true" />
+        <Loader2
+          className="h-4 w-4 animate-spin text-indigo-500"
+          aria-hidden="true"
+        />
       );
     }
-    if (status === 'done') {
-      return <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />;
+    if (status === "done") {
+      return (
+        <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+      );
     }
     return <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />;
   };
 
   const statusDescription = useMemo(() => {
     if (profile) {
-      const languageSuffix = profile.language ? `.${profile.language}` : '';
+      const languageSuffix = profile.language ? `.${profile.language}` : "";
       return (
         <p className="text-xs text-slate-500">
           {localize(
-            'rightpanel_summary_status_version',
+            "rightpanel_summary_status_version",
             `Version v${profile.version}${languageSuffix}`,
             {
-              version: profile.version ?? '',
+              version: profile.version ?? "",
               languageSuffix,
             },
           )}
@@ -169,12 +185,12 @@ export const DocumentSummaryCard = ({
       );
     }
     if (fallbackSummary) {
-      const versionLabel = fallbackVersion ? ` · v${fallbackVersion}` : '';
-      const languageLabel = fallbackLanguage ? `.${fallbackLanguage}` : '';
+      const versionLabel = fallbackVersion ? ` · v${fallbackVersion}` : "";
+      const languageLabel = fallbackLanguage ? `.${fallbackLanguage}` : "";
       return (
         <p className="text-xs text-slate-500">
           {localize(
-            'rightpanel_summary_status_fallback',
+            "rightpanel_summary_status_fallback",
             `Temporary summary${versionLabel}${languageLabel}`,
             {
               versionLabel,
@@ -184,21 +200,18 @@ export const DocumentSummaryCard = ({
         </p>
       );
     }
-    if (status === 'running' || isLoading) {
+    if (status === "running" || isLoading) {
       return (
         <p className="text-xs text-slate-500">
-          {localize(
-            'rightpanel_summary_status_loading',
-            'Fetching analysis…',
-          )}
+          {localize("rightpanel_summary_status_loading", "Fetching analysis…")}
         </p>
       );
     }
     return (
       <p className="text-xs text-slate-400">
         {localize(
-          'rightpanel_summary_status_empty',
-          'Summary has not been generated yet.',
+          "rightpanel_summary_status_empty",
+          "Summary has not been generated yet.",
         )}
       </p>
     );
@@ -242,14 +255,14 @@ export const DocumentSummaryCard = ({
           aria-label={
             isOpen
               ? localize(
-                  'rightpanel_summary_action_collapse',
+                  "rightpanel_summary_action_collapse",
                   `Collapse ${title}`,
                   {
                     title,
                   },
                 )
               : localize(
-                  'rightpanel_summary_action_expand',
+                  "rightpanel_summary_action_expand",
                   `Expand ${title}`,
                   {
                     title,
@@ -259,14 +272,14 @@ export const DocumentSummaryCard = ({
           title={
             isOpen
               ? localize(
-                  'rightpanel_summary_action_collapse',
+                  "rightpanel_summary_action_collapse",
                   `Collapse ${title}`,
                   {
                     title,
                   },
                 )
               : localize(
-                  'rightpanel_summary_action_expand',
+                  "rightpanel_summary_action_expand",
                   `Expand ${title}`,
                   {
                     title,
@@ -276,7 +289,7 @@ export const DocumentSummaryCard = ({
           disabled={toggleDisabled}
           data-collapsible-ignore
         >
-          {isOpen ? '˄' : '˅'}
+          {isOpen ? "˄" : "˅"}
         </button>
       </header>
       {isOpen &&
@@ -285,8 +298,8 @@ export const DocumentSummaryCard = ({
             {summary.intention && (
               <div className="mt-4 text-sm text-slate-700">
                 <span className="font-medium text-slate-800">
-                  {localize('rightpanel_summary_intention_label', 'Intention:')}
-                </span>{' '}
+                  {localize("rightpanel_summary_intention_label", "Intention:")}
+                </span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
                   {summary.intention}
                 </span>
@@ -295,8 +308,8 @@ export const DocumentSummaryCard = ({
             {summary.story && (
               <div className="mt-3 text-sm text-slate-700">
                 <span className="font-medium text-slate-800">
-                  {localize('rightpanel_summary_story_label', 'Story:')}
-                </span>{' '}
+                  {localize("rightpanel_summary_story_label", "Story:")}
+                </span>{" "}
                 <span className="whitespace-pre-wrap text-slate-600">
                   {summary.story}
                 </span>
@@ -306,13 +319,13 @@ export const DocumentSummaryCard = ({
               <div className="mt-4 space-y-1 text-sm text-slate-700">
                 <p className="font-medium text-slate-800">
                   {localize(
-                    'rightpanel_summary_reader_points_label',
-                    'Reader points',
+                    "rightpanel_summary_reader_points_label",
+                    "Reader points",
                   )}
                 </p>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
                   {summary.readerPoints.map((point, index) => (
-                    <li key={`${profile?.id ?? 'fallback'}-point-${index}`}>
+                    <li key={`${profile?.id ?? "fallback"}-point-${index}`}>
                       {point}
                     </li>
                   ))}
@@ -321,9 +334,9 @@ export const DocumentSummaryCard = ({
             ) : null}
             {renderFooter()}
           </>
-        ) : status === 'running' || isLoading ? (
+        ) : status === "running" || isLoading ? (
           <p className="mt-4 text-sm text-slate-500">
-            {localize('rightpanel_summary_loading', 'Fetching analysis…')}
+            {localize("rightpanel_summary_loading", "Fetching analysis…")}
           </p>
         ) : null)}
     </section>
@@ -335,20 +348,21 @@ export interface DocumentSummarySectionProps {
   translation: DocumentProfileSummary | null;
   localize: LocalizeFn;
   isLoading?: boolean;
-  onEditTranslationNotes?: TranslationNotesSectionProps['onEdit'];
-  translationNotesEditable?: TranslationNotesSectionProps['editable'];
-  translationNotesSaving?: TranslationNotesSectionProps['isSaving'];
-  translationNotesError?: TranslationNotesSectionProps['error'];
-  onReanalyze?: TranslationNotesSectionProps['onRefresh'];
-  isReanalyzing?: TranslationNotesSectionProps['isRefreshing'];
-  canReanalyze?: TranslationNotesSectionProps['canRefresh'];
-  reanalysisError?: TranslationNotesSectionProps['refreshError'];
+  onEditTranslationNotes?: TranslationNotesSectionProps["onEdit"];
+  translationNotesEditable?: TranslationNotesSectionProps["editable"];
+  translationNotesSaving?: TranslationNotesSectionProps["isSaving"];
+  translationNotesError?: TranslationNotesSectionProps["error"];
+  onReanalyze?: TranslationNotesSectionProps["onRefresh"];
+  isReanalyzing?: TranslationNotesSectionProps["isRefreshing"];
+  canReanalyze?: TranslationNotesSectionProps["canRefresh"];
+  reanalysisError?: TranslationNotesSectionProps["refreshError"];
   originStatus?: SummaryStatus;
   translationStatus?: SummaryStatus;
   translationFallback?: DocumentSummaryFallback | null;
   originFallback?: DocumentSummaryFallback | null;
   originHeaderAccessory?: ReactNode;
   translationHeaderAccessory?: ReactNode;
+  originFileName?: string | null;
 }
 
 export const DocumentSummarySection = ({
@@ -364,18 +378,19 @@ export const DocumentSummarySection = ({
   isReanalyzing = false,
   canReanalyze = true,
   reanalysisError = null,
-  originStatus = 'pending',
-  translationStatus = 'pending',
+  originStatus = "pending",
+  translationStatus = "pending",
   translationFallback = null,
   originFallback = null,
   originHeaderAccessory,
   translationHeaderAccessory,
+  originFileName = null,
 }: DocumentSummarySectionProps) => (
   <div className="space-y-4">
     <DocumentSummaryCard
       title={localize(
-        'rightpanel_origin_summary_title',
-        'Summary of manuscript',
+        "rightpanel_origin_summary_title",
+        "Summary of manuscript",
       )}
       localize={localize}
       profile={origin}
@@ -387,6 +402,7 @@ export const DocumentSummarySection = ({
       fallbackLanguage={originFallback?.language ?? null}
       fallbackVersion={originFallback ? 0 : null}
       headerAccessory={originHeaderAccessory}
+      fileName={originFileName}
     />
     <TranslationNotesSection
       notes={origin?.translationNotes ?? null}
@@ -402,8 +418,8 @@ export const DocumentSummarySection = ({
     />
     <DocumentSummaryCard
       title={localize(
-        'rightpanel_translation_summary_title',
-        'Summary of translation',
+        "rightpanel_translation_summary_title",
+        "Summary of translation",
       )}
       localize={localize}
       profile={translation}

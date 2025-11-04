@@ -1,6 +1,6 @@
 export {
   ProofreadEditorProvider,
   useProofreadEditorContext,
-} from './ProofreadEditorProvider';
+} from "./ProofreadEditorProvider";
 
-export type { ProofreadEditorSegmentState } from './ProofreadEditorProvider';
+export type { ProofreadEditorSegmentState } from "./ProofreadEditorProvider";

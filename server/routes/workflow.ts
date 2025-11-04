@@ -68,11 +68,9 @@ const workflowRoutes: FastifyPluginAsync = async (fastify) => {
           { err: error },
           "[WORKFLOW] Failed to request action",
         );
-        reply
-          .status(500)
-          .send({
-            error: "새 작업을 시작하지 못했습니다. 다시 시도해 주세요.",
-          });
+        reply.status(500).send({
+          error: "새 작업을 시작하지 못했습니다. 다시 시도해 주세요.",
+        });
       }
     },
   );

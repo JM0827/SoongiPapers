@@ -1,0 +1,53 @@
+{
+  "type": "items",
+  "data": {
+    "page": {
+      "version": "v2",
+      "run_id": "run_short",
+      "chunk_id": "grammar:0",
+      "tier": "quick",
+      "model": "gpt-5-mini-2025-08-07",
+      "latency_ms": 420,
+      "prompt_tokens": 128,
+      "completion_tokens": 96,
+      "truncated": false,
+      "warnings": [
+        "json_repair_applied"
+      ],
+      "index_base": 0,
+      "offset_semantics": "[start,end)",
+      "stats": {
+        "item_count": 1,
+        "avg_item_bytes": 17
+      },
+      "metrics": {
+        "downshift_count": 0,
+        "forced_pagination": false,
+        "cursor_retry_count": 0
+      },
+      "items": [
+        {
+          "k": "grammar",
+          "s": "error",
+          "r": "Fix article usage",
+          "t": "replace",
+          "i": [
+            0,
+            0
+          ],
+          "o": [
+            12,
+            24
+          ],
+          "fix": {
+            "text": "the"
+          }
+        }
+      ],
+      "has_more": false,
+      "next_cursor": "",
+      "provider_response_id": "resp_short",
+      "finish_reason": "stop"
+    }
+  }
+}

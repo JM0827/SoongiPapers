@@ -12,8 +12,7 @@ type ResponseVerbosity = "low" | "medium" | "high";
 type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 const WORDS_PER_MINUTE = 220;
-const DEFAULT_MODEL =
-  process.env.PROFILE_AGENT_MODEL?.trim() || "gpt-5-mini";
+const DEFAULT_MODEL = process.env.PROFILE_AGENT_MODEL?.trim() || "gpt-5-mini";
 const FALLBACK_MODEL =
   process.env.PROFILE_AGENT_VALIDATION_MODEL?.trim() || "gpt-5-mini";
 const DEFAULT_VERBOSITY = normalizeVerbosity(
@@ -155,10 +154,16 @@ const profileResponseSchema = {
   },
 };
 
-function normalizeVerbosity(value: string | undefined | null): ResponseVerbosity {
+function normalizeVerbosity(
+  value: string | undefined | null,
+): ResponseVerbosity {
   if (!value) return "medium";
   const normalized = value.trim().toLowerCase();
-  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
     return normalized;
   }
   return "medium";
@@ -251,6 +256,7 @@ export interface ProfileAgentOutput {
     chunkCount: number;
     retryCount: number;
     truncated: boolean;
+    jsonRepairApplied: boolean;
   };
 }
 
@@ -329,7 +335,8 @@ function parseEntityList(
   return value
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
-      const name = toNullableString((entry as Record<string, unknown>).name) ?? "";
+      const name =
+        toNullableString((entry as Record<string, unknown>).name) ?? "";
       if (!name) return null;
       const targetName =
         toNullableString(
@@ -347,8 +354,13 @@ function parseEntityList(
       };
     })
     .filter(
-      (entry): entry is { name: string; targetName: string | null; frequency: number } =>
-        Boolean(entry),
+      (
+        entry,
+      ): entry is {
+        name: string;
+        targetName: string | null;
+        frequency: number;
+      } => Boolean(entry),
     )
     .slice(0, 20);
 }
@@ -375,7 +387,9 @@ function parseCharacters(value: unknown): TranslationNotes["characters"] {
         traits,
       };
     })
-    .filter((entry): entry is TranslationNotes["characters"][number] => Boolean(entry))
+    .filter((entry): entry is TranslationNotes["characters"][number] =>
+      Boolean(entry),
+    )
     .slice(0, 20);
 }
 
@@ -421,11 +435,15 @@ function parseTranslationNotes(value: unknown): TranslationNotes | null {
   const characters = parseCharacters(raw.characters);
   const namedEntities = parseEntityList(raw.namedEntities ?? raw.entities);
   const locations = parseEntityList(raw.locations);
-  const measurementUnits = parseBilingualList(raw.measurementUnits ?? raw.units);
+  const measurementUnits = parseBilingualList(
+    raw.measurementUnits ?? raw.units,
+  );
   const linguisticFeatures = parseBilingualList(
     raw.linguisticFeatures ?? raw.slang ?? raw.phrases,
   );
-  const timePeriod = toNullableString(raw.timePeriod ?? raw.era ?? raw.timeline);
+  const timePeriod = toNullableString(
+    raw.timePeriod ?? raw.era ?? raw.timeline,
+  );
 
   if (
     !characters.length &&
@@ -484,13 +502,15 @@ export async function analyzeDocumentProfile(
     ? `Target language for translations: ${input.targetLanguage}.`
     : "Target language for translations: English.";
 
-  const outputLocale: UILocale = resolveOutputLocale(input.summaryLocale ?? null);
+  const outputLocale: UILocale = resolveOutputLocale(
+    input.summaryLocale ?? null,
+  );
   const localeInstruction =
     outputLocale === "ko"
       ? "Write the summary, intention, and readerPoints in Korean using natural Korean sentences."
       : "Write the summary, intention, and readerPoints in English.";
 
-const systemPrompt = `You are a seasoned Korean literature critic and translation analyst.
+  const systemPrompt = `You are a seasoned Korean literature critic and translation analyst.
 You study manuscripts and produce structured insights that downstream translation agents consume.
 Keep the voice professional, fact-driven, and under 250 words overall.`;
 
@@ -553,6 +573,7 @@ ${truncated}
   let usage = { inputTokens: 0, outputTokens: 0 };
   let selectedAttemptIndex = -1;
   let lastError: unknown = null;
+  let jsonRepairApplied = false;
 
   for (let index = 0; index < attempts.length; index += 1) {
     const attempt = attempts[index];
@@ -587,32 +608,27 @@ ${truncated}
         ],
       });
 
-      const { parsedJson, text: rawText, usage: responseUsage } =
-        safeExtractOpenAIResponse(response);
-
-      let payload: RawProfileResponse | null = null;
+      const {
+        parsedJson,
+        text: rawText,
+        usage: responseUsage,
+        repairApplied,
+      } = safeExtractOpenAIResponse(response);
 
       lastRequestMaxTokens = requestMaxTokens;
+      jsonRepairApplied = Boolean(repairApplied);
 
-      if (parsedJson && typeof parsedJson === "object") {
-        payload = parsedJson as RawProfileResponse;
-      } else if (rawText && rawText.trim().length) {
-        try {
-          payload = JSON.parse(rawText) as RawProfileResponse;
-        } catch (parseError) {
-          const err = new Error("profile_invalid_json");
-          (err as Error & { cause?: unknown; raw?: string }).cause = parseError;
-          (err as Error & { cause?: unknown; raw?: string }).raw =
-            rawText.slice(0, 2000);
-          throw err;
-        }
+      if (!parsedJson || typeof parsedJson !== "object") {
+        const err = new Error("profile_invalid_json");
+        (err as Error & { raw?: string; repairApplied?: boolean }).raw =
+          rawText?.slice(0, 2000) ?? undefined;
+        (
+          err as Error & { raw?: string; repairApplied?: boolean }
+        ).repairApplied = Boolean(repairApplied);
+        throw err;
       }
 
-      if (!payload) {
-        throw new Error("Profile agent returned an empty payload");
-      }
-
-      parsedPayload = payload;
+      parsedPayload = parsedJson as RawProfileResponse;
       responseModel = response.model || attempt.model;
       usage = {
         inputTokens: responseUsage?.prompt_tokens ?? 0,
@@ -649,10 +665,7 @@ ${truncated}
         continue;
       }
 
-      if (
-        error instanceof Error &&
-        error.message === "profile_invalid_json"
-      ) {
+      if (error instanceof Error && error.message === "profile_invalid_json") {
         dynamicMaxOutputTokens = Math.min(
           Math.ceil(dynamicMaxOutputTokens * 1.5),
           MAX_OUTPUT_TOKENS_CAP,
@@ -685,7 +698,9 @@ ${truncated}
     60,
   );
   const readerPoints = normalizeReaderPoints(parsedPayload.readerPoints);
-  const translationNotes = parseTranslationNotes(parsedPayload.translationNotes);
+  const translationNotes = parseTranslationNotes(
+    parsedPayload.translationNotes,
+  );
 
   const selectedAttempt =
     attempts[Math.max(0, selectedAttemptIndex)] ?? attempts[0];
@@ -715,6 +730,7 @@ ${truncated}
       chunkCount: 1,
       retryCount: Math.max(0, selectedAttemptIndex),
       truncated: wasTruncated,
+      jsonRepairApplied,
     },
   };
 }

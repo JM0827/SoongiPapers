@@ -26,7 +26,9 @@ const statusLabel = (value: string | null | undefined) => {
   }
 };
 
-export const buildStatusSnapshot = (summary: WorkflowSummary | null): StatusSnapshot => {
+export const buildStatusSnapshot = (
+  summary: WorkflowSummary | null,
+): StatusSnapshot => {
   const defaults: StatusSnapshot = {
     translation: "translation: idle",
     proofreading: "proofreading: idle",

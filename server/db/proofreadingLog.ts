@@ -1,8 +1,29 @@
 import { randomUUID } from "crypto";
 import { query } from "../db";
-import { recordProofreadLog, listProofreadLogsFromMemory } from "../services/proofreadTelemetry";
+import {
+  recordProofreadLog,
+  listProofreadLogsFromMemory,
+} from "../services/proofreadTelemetry";
 
 export type ProofreadingLogSeverity = "info" | "warn" | "error";
+
+let extendedColumnsAvailable = true;
+
+function isMissingColumnError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  if (code === "42703") return true;
+  const message =
+    typeof (error as { message?: unknown } | null)?.message === "string"
+      ? ((error as { message: string }).message ?? "")
+      : "";
+  if (!message) return false;
+  if (!message.includes("column")) return false;
+  return (
+    message.includes("downshift") ||
+    message.includes("forced_pagination") ||
+    message.includes("cursor_retry")
+  );
+}
 
 export interface ProofreadingLogEntry {
   id: string;
@@ -27,6 +48,9 @@ export interface ProofreadingLogEntry {
   verbosity: string;
   reasoning_effort: string;
   created_at: Date;
+  downshift_attempts?: number | null;
+  forced_pagination?: number | null;
+  cursor_retry?: number | null;
 }
 
 export async function insertProofreadingLog(payload: {
@@ -53,6 +77,9 @@ export async function insertProofreadingLog(payload: {
     };
     verbosity: string;
     reasoningEffort: string;
+    downshiftAttempts?: number;
+    forcedPagination?: number;
+    cursorRetry?: number;
   };
 }): Promise<void> {
   const entry: ProofreadingLogEntry = {
@@ -78,9 +105,108 @@ export async function insertProofreadingLog(payload: {
     verbosity: payload.meta.verbosity,
     reasoning_effort: payload.meta.reasoningEffort,
     created_at: new Date(),
+    downshift_attempts: payload.meta.downshiftAttempts ?? 0,
+    forced_pagination: payload.meta.forcedPagination ?? 0,
+    cursor_retry: payload.meta.cursorRetry ?? 0,
   };
 
   recordProofreadLog(entry);
+
+  const baseParams = [
+    entry.project_id,
+    entry.job_id,
+    entry.proofreading_id,
+    entry.run_id,
+    entry.tier,
+    entry.subfeature_key,
+    entry.subfeature_label,
+    entry.chunk_index,
+    entry.model,
+    entry.max_output_tokens,
+    entry.attempts,
+    entry.truncated,
+    entry.request_id,
+    entry.guard_segments,
+    entry.memory_version,
+    entry.usage_prompt_tokens,
+    entry.usage_completion_tokens,
+    entry.usage_total_tokens,
+    entry.verbosity,
+    entry.reasoning_effort,
+  ];
+
+  if (extendedColumnsAvailable) {
+    try {
+      await query(
+        `INSERT INTO proofreading_logs (
+            project_id,
+            job_id,
+            proofreading_id,
+            run_id,
+            tier,
+            subfeature_key,
+            subfeature_label,
+            chunk_index,
+            model,
+            max_output_tokens,
+            attempts,
+            truncated,
+            request_id,
+            guard_segments,
+            memory_version,
+            usage_prompt_tokens,
+            usage_completion_tokens,
+            usage_total_tokens,
+            verbosity,
+            reasoning_effort,
+            downshift_attempts,
+            forced_pagination,
+            cursor_retry
+          )
+          VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13,
+            $14,
+            $15,
+            $16,
+            $17,
+            $18,
+            $19,
+            $20,
+            $21,
+            $22,
+            $23
+          )`,
+        [
+          ...baseParams,
+          entry.downshift_attempts ?? 0,
+          entry.forced_pagination ?? 0,
+          entry.cursor_retry ?? 0,
+        ],
+      );
+      return;
+    } catch (error) {
+      if (isMissingColumnError(error)) {
+        extendedColumnsAvailable = false;
+        console.warn(
+          "[proofreading_logs] missing extended columns; falling back to legacy insert",
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
 
   await query(
     `INSERT INTO proofreading_logs (
@@ -127,28 +253,7 @@ export async function insertProofreadingLog(payload: {
         $19,
         $20
       )`,
-    [
-      entry.project_id,
-      entry.job_id,
-      entry.proofreading_id,
-      entry.run_id,
-      entry.tier,
-      entry.subfeature_key,
-      entry.subfeature_label,
-      entry.chunk_index,
-      entry.model,
-      entry.max_output_tokens,
-      entry.attempts,
-      entry.truncated,
-      entry.request_id,
-      entry.guard_segments,
-      entry.memory_version,
-      entry.usage_prompt_tokens,
-      entry.usage_completion_tokens,
-      entry.usage_total_tokens,
-      entry.verbosity,
-      entry.reasoning_effort,
-    ],
+    baseParams,
   );
 }
 
@@ -164,40 +269,80 @@ export async function listProofreadingLogs(config: {
     where.push(`project_id = $${params.length}`);
   }
 
-  const queryText = `
-    SELECT id,
-           project_id,
-           job_id,
-           proofreading_id,
-           run_id,
-           tier,
-           subfeature_key,
-           subfeature_label,
-           chunk_index,
-           model,
-           max_output_tokens,
-           attempts,
-           truncated,
-           request_id,
-           guard_segments,
-           memory_version,
-           usage_prompt_tokens,
-           usage_completion_tokens,
-           usage_total_tokens,
-           verbosity,
-           reasoning_effort,
-           created_at
-      FROM proofreading_logs
-      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-      ORDER BY created_at DESC
-      LIMIT $${params.push(config.limit ?? 100)}
-  `;
+  const limitParam = config.limit ?? 100;
+  const queryText = extendedColumnsAvailable
+    ? `
+        SELECT id,
+               project_id,
+               job_id,
+               proofreading_id,
+               run_id,
+               tier,
+               subfeature_key,
+               subfeature_label,
+               chunk_index,
+               model,
+               max_output_tokens,
+               attempts,
+               truncated,
+               request_id,
+               guard_segments,
+               memory_version,
+               usage_prompt_tokens,
+               usage_completion_tokens,
+               usage_total_tokens,
+               verbosity,
+               reasoning_effort,
+               downshift_attempts,
+               forced_pagination,
+               cursor_retry,
+               created_at
+          FROM proofreading_logs
+          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+          ORDER BY created_at DESC
+          LIMIT $${params.push(limitParam)}
+      `
+    : `
+        SELECT id,
+               project_id,
+               job_id,
+               proofreading_id,
+               run_id,
+               tier,
+               subfeature_key,
+               subfeature_label,
+               chunk_index,
+               model,
+               max_output_tokens,
+               attempts,
+               truncated,
+               request_id,
+               guard_segments,
+               memory_version,
+               usage_prompt_tokens,
+               usage_completion_tokens,
+               usage_total_tokens,
+               verbosity,
+               reasoning_effort,
+               created_at
+          FROM proofreading_logs
+          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+          ORDER BY created_at DESC
+          LIMIT $${params.push(limitParam)}
+      `;
 
   try {
     const { rows } = await query(queryText, params);
     if (rows.length) return rows as ProofreadingLogEntry[];
   } catch (error) {
-    console.error('[proofreading] failed to fetch logs from db', error);
+    if (extendedColumnsAvailable && isMissingColumnError(error)) {
+      extendedColumnsAvailable = false;
+      console.warn(
+        "[proofreading_logs] extended columns missing; retrying without counters",
+      );
+      return listProofreadingLogs(config);
+    }
+    console.error("[proofreading] failed to fetch logs from db", error);
   }
 
   return listProofreadLogsFromMemory(config);

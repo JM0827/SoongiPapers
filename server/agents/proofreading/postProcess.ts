@@ -24,7 +24,8 @@ const meetsSeverity = (
 
 const dedupeKey = (item: IssueItem, bucket: ResultBucket) => {
   const sentenceId = item.en_sentence_id ?? item.kr_sentence_id ?? "n/a";
-  const fingerprint = item.after ?? item.recommendation_en ?? item.recommendation_ko ?? "";
+  const fingerprint =
+    item.after ?? item.recommendation_en ?? item.recommendation_ko ?? "";
   return `${bucket.subfeatureKey}-${sentenceId}-${fingerprint}`;
 };
 
@@ -37,7 +38,10 @@ export function filterBuckets(
   return buckets.map((bucket) => {
     const filtered = bucket.items
       .filter((item) => {
-        if (typeof item.confidence === "number" && item.confidence < minConfidence) {
+        if (
+          typeof item.confidence === "number" &&
+          item.confidence < minConfidence
+        ) {
           if ((item.severity ?? "low") === "low") return false;
         }
         if (!meetsSeverity(item.severity, minSeverity)) return false;
@@ -50,8 +54,10 @@ export function filterBuckets(
         return true;
       })
       .sort((a, b) => {
-        const aScore = (SEVERITY_ORDER[a.severity ?? ""] ?? 0) * 100 + (a.confidence ?? 0);
-        const bScore = (SEVERITY_ORDER[b.severity ?? ""] ?? 0) * 100 + (b.confidence ?? 0);
+        const aScore =
+          (SEVERITY_ORDER[a.severity ?? ""] ?? 0) * 100 + (a.confidence ?? 0);
+        const bScore =
+          (SEVERITY_ORDER[b.severity ?? ""] ?? 0) * 100 + (b.confidence ?? 0);
         return bScore - aScore;
       })
       .slice(0, maxPerSubfeature);
@@ -66,7 +72,8 @@ export function filterBuckets(
 export function recomputeCounts(buckets: ResultBucket[]) {
   const counts: Record<string, number> = {};
   for (const bucket of buckets) {
-    counts[bucket.subfeatureLabel] = (counts[bucket.subfeatureLabel] ?? 0) + bucket.items.length;
+    counts[bucket.subfeatureLabel] =
+      (counts[bucket.subfeatureLabel] ?? 0) + bucket.items.length;
   }
   return counts;
 }

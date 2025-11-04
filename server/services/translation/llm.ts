@@ -12,25 +12,20 @@ const client = new OpenAI({
 
 if (!process.env.OPENAI_API_KEY) {
   // eslint-disable-next-line no-console
-  console.warn("[TRANSLATION] OPENAI_API_KEY is not set. Stage calls will fail.");
+  console.warn(
+    "[TRANSLATION] OPENAI_API_KEY is not set. Stage calls will fail.",
+  );
 }
 
 const DEFAULT_STAGE_MODELS: Record<TranslationStage, string> = {
-  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-5",
-  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-5",
-  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-5",
-  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-5-mini",
   draft:
     process.env.SEQUENTIAL_DRAFT_MODEL ??
-    process.env.SEQUENTIAL_LITERAL_MODEL ??
     "gpt-5",
   revise:
     process.env.SEQUENTIAL_REVISE_MODEL ??
-    process.env.SEQUENTIAL_STYLE_MODEL ??
     "gpt-5",
   "micro-check":
     process.env.SEQUENTIAL_MICRO_CHECK_MODEL ??
-    process.env.SEQUENTIAL_QA_MODEL ??
     "gpt-5-mini",
 };
 
@@ -56,7 +51,9 @@ export interface StageCallResult {
   };
 }
 
-export async function callStageLLM(options: StageCallOptions): Promise<StageCallResult> {
+export async function callStageLLM(
+  options: StageCallOptions,
+): Promise<StageCallResult> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error(
       "OPENAI_API_KEY is required to execute sequential translation stages",

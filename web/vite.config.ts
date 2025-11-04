@@ -1,4 +1,6 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
+import type { UserConfigExport as VitestConfigExport } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -8,15 +10,15 @@ const hmrHost = process.env.VITE_HMR_HOST;
 const hmrPort = process.env.VITE_HMR_PORT
   ? Number(process.env.VITE_HMR_PORT)
   : 5174;
-const httpsEnabled = process.env.VITE_HTTPS_ENABLED === 'true';
+const httpsEnabled = process.env.VITE_HTTPS_ENABLED === "true";
 const httpsConfig = httpsEnabled
   ? {
-      key: resolve(rootDir, '../certs/server.key'),
-      cert: resolve(rootDir, '../certs/server.crt'),
+      key: resolve(rootDir, "../certs/server.key"),
+      cert: resolve(rootDir, "../certs/server.crt"),
     }
   : undefined;
 
-export default defineConfig({
+const config = {
   plugins: [react()],
   resolve: {
     alias: {
@@ -38,12 +40,14 @@ export default defineConfig({
     hmr: {
       ...(hmrHost ? { host: hmrHost } : {}),
       port: hmrPort,
-      protocol: httpsEnabled ? 'wss' : 'ws',
+      protocol: httpsEnabled ? "wss" : "ws",
     },
 
     proxy: {
       "/api": {
-        target: httpsEnabled ? 'https://localhost:8080' : 'http://localhost:8080',
+        target: httpsEnabled
+          ? "https://localhost:8080"
+          : "http://localhost:8080",
         changeOrigin: true,
         secure: httpsEnabled ? false : true,
       },
@@ -53,4 +57,18 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 4173,
   },
-});
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "./src/tests/setup.ts",
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    coverage: {
+      reporter: ["text", "html"],
+    },
+    exclude: [...configDefaults.exclude, "src/tests/setup.ts"],
+  },
+};
+
+export default defineConfig(
+  config as unknown as VitestConfigExport as unknown as import("vite").UserConfigExport,
+);

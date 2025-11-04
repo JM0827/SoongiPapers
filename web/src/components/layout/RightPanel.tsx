@@ -1,5 +1,4 @@
 import {
-  type ChangeEvent,
   type FormEvent,
   useCallback,
   useEffect,
@@ -8,12 +7,17 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, X, Loader2, CheckCircle2, Circle, BookOpen, AlertTriangle } from "lucide-react";
+import {
+  Pencil,
+  X,
+  Loader2,
+  CheckCircle2,
+  Circle,
+  BookOpen,
+  AlertTriangle,
+} from "lucide-react";
 import { useUIStore } from "../../store/ui.store";
-import type {
-  RightPanelBaseTab,
-  RightPanelExtraTab,
-} from "../../store/ui.store";
+import type { RightPanelBaseTab, RightPanelExtraTab } from "../../store/ui.store";
 import { useAuthStore } from "../../store/auth.store";
 import { useAuth } from "../../hooks/useAuth";
 import { useProjectStore } from "../../store/project.store";
@@ -43,13 +47,8 @@ import {
 } from "../translation/DocumentSummarySection";
 import { TranslationNotesEditor } from "../translation/TranslationNotesSection";
 import type { LocalizeFn } from "../../types/localize";
-
-const LEGACY_PIPELINE_STAGE_ORDER = [
-  "literal",
-  "style",
-  "emotion",
-  "qa",
-] as const;
+import { UserProfileMenu } from "../userProfile/UserProfileMenu";
+import type { ProjectContextSnapshot } from "../../hooks/useProjectContext";
 
 const V2_PIPELINE_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
 
@@ -67,22 +66,6 @@ const TRANSLATION_STAGE_LABEL_META: Record<
   StageKey,
   { key: string; fallback: string }
 > = {
-  literal: {
-    key: "translation_stage_literal",
-    fallback: "Literal pass",
-  },
-  style: {
-    key: "translation_stage_style",
-    fallback: "Style pass",
-  },
-  emotion: {
-    key: "translation_stage_emotion",
-    fallback: "Emotion pass",
-  },
-  qa: {
-    key: "translation_stage_qa",
-    fallback: "QA review",
-  },
   draft: {
     key: "translation_stage_draft",
     fallback: "Draft",
@@ -127,6 +110,32 @@ const STAGE_STATUS_META: Record<
   },
 };
 
+const EXTRA_TAB_LABEL_META: Record<
+  RightPanelExtraTab,
+  { key: string; fallback: string }
+> = {
+  profile: {
+    key: "rightpanel_tab_profile",
+    fallback: "My profile",
+  },
+  settings: {
+    key: "rightpanel_tab_settings",
+    fallback: "My settings",
+  },
+  activity: {
+    key: "rightpanel_tab_activity",
+    fallback: "My activity",
+  },
+  terms: {
+    key: "rightpanel_tab_terms",
+    fallback: "Terms",
+  },
+  privacy: {
+    key: "rightpanel_tab_privacy",
+    fallback: "Privacy",
+  },
+};
+
 const applyParams = (
   template: string,
   params?: Record<string, string | number>,
@@ -146,15 +155,7 @@ const getPipelineStageOrder = (
   if (sequential?.pipelineStages?.length) {
     return sequential.pipelineStages;
   }
-  const stageCounts = sequential?.stageCounts ?? {};
-  if (
-    stageCounts.draft !== undefined ||
-    stageCounts.revise !== undefined ||
-    stageCounts["micro-check"] !== undefined
-  ) {
-    return Array.from(V2_PIPELINE_STAGE_ORDER);
-  }
-  return Array.from(LEGACY_PIPELINE_STAGE_ORDER);
+  return Array.from(V2_PIPELINE_STAGE_ORDER);
 };
 
 const inferCurrentPipelineStage = (
@@ -196,15 +197,18 @@ const resolveStageStatusKey = (
   const stageCount = sequential.stageCounts?.[stageKey] ?? 0;
   const pipelineStageCount = sequential.stageCounts ?? {};
   const stageOrder = getPipelineStageOrder(sequential);
-  const guardStageKey = stageOrder.includes("qa")
-    ? "qa"
-    : stageOrder[stageOrder.length - 1] ?? "qa";
-  const qaCount = pipelineStageCount[guardStageKey] ?? 0;
+  const guardStageKey = stageOrder.includes("micro-check")
+    ? "micro-check"
+    : stageOrder[stageOrder.length - 1] ?? "micro-check";
+  const guardCount = pipelineStageCount[guardStageKey] ?? 0;
   const qaComplete =
-    total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
+    total > 0 ? guardCount >= total : completedStages.has(guardStageKey);
 
   if (stageKey === "finalizing") {
-    if (normalizedJobStatus === "failed" || normalizedJobStatus === "cancelled") {
+    if (
+      normalizedJobStatus === "failed" ||
+      normalizedJobStatus === "cancelled"
+    ) {
       return "failed";
     }
     if (completedStages.has("finalizing") || translationDone) {
@@ -289,9 +293,9 @@ const formatSequentialStageStatus = (
     (sequential.completedStages ?? []).map((stage) => stage.toLowerCase()),
   );
   const stageOrder = getPipelineStageOrder(sequential);
-  const guardStageKey = stageOrder.includes("qa")
-    ? "qa"
-    : stageOrder[stageOrder.length - 1] ?? "qa";
+  const guardStageKey = stageOrder.includes("micro-check")
+    ? "micro-check"
+    : stageOrder[stageOrder.length - 1] ?? "micro-check";
   const qaCount = sequential.stageCounts?.[guardStageKey] ?? 0;
   const qaComplete =
     total > 0 ? qaCount >= total : completedStages.has(guardStageKey);
@@ -326,12 +330,7 @@ const formatSequentialStageStatus = (
     sequential.stageCounts?.[stageKey] ?? 0,
     total,
   );
-  const statusKey = resolveStageStatusKey(
-    job,
-    stageKey,
-    sequential,
-    total,
-  );
+  const statusKey = resolveStageStatusKey(job, stageKey, sequential, total);
   const statusMeta = STAGE_STATUS_META[statusKey];
   const statusLabel = localize(statusMeta.key, statusMeta.fallback);
 
@@ -367,146 +366,8 @@ interface RightPanelProps {
   isJobsLoading?: boolean;
   onProfileUpdated?: () => void;
   onRefreshContent?: () => Promise<void> | void;
+  snapshot: ProjectContextSnapshot;
 }
-
-const USER_MENU_ITEMS: Array<{ key: RightPanelExtraTab; label: string }> = [
-  { key: "profile", label: "My profile" },
-  { key: "settings", label: "My settings" },
-  { key: "activity", label: "My activity" },
-  { key: "terms", label: "Terms" },
-  { key: "privacy", label: "Privacy" },
-];
-
-interface UserMenuProps {
-  avatarInitial: string | null;
-  avatarTone: string;
-  avatarPreview: string | null;
-  userName: string | null;
-  userEmail: string | null;
-  onOpenTab: (tab: RightPanelExtraTab, label: string) => void;
-  onLogout: () => void;
-  advancedProofreadEnabled: boolean;
-  onToggleAdvancedProofread: () => void;
-}
-
-const UserMenu = ({
-  avatarInitial,
-  avatarTone,
-  avatarPreview,
-  userName,
-  userEmail,
-  onOpenTab,
-  onLogout,
-  advancedProofreadEnabled,
-  onToggleAdvancedProofread,
-}: UserMenuProps) => {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        event.target instanceof Node &&
-        !menuRef.current.contains(event.target)
-      ) {
-        setMenuOpen(false);
-      }
-    };
-
-    const handleEsc = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEsc);
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEsc);
-    };
-  }, [menuOpen]);
-
-  return (
-    <div ref={menuRef} className="relative">
-      <button
-        type="button"
-        className={`ml-2 flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold text-white transition hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${avatarPreview ? "bg-slate-200" : avatarTone}`}
-        onClick={() => setMenuOpen((prev) => !prev)}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-      >
-        {avatarPreview ? (
-          <img
-            src={avatarPreview}
-            alt={userName ?? "User avatar"}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <span>{avatarInitial ?? "?"}</span>
-        )}
-      </button>
-      {menuOpen && (
-        <div
-          role="menu"
-          className="absolute right-0 z-50 mt-3 w-56 rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-lg"
-        >
-          <div className="mb-3 border-b border-slate-100 pb-2">
-            <p className="text-xs uppercase text-slate-400">Signed in</p>
-            <p className="font-semibold text-slate-700">
-              {userName ?? "Current user"}
-            </p>
-            <p className="text-xs text-slate-500">
-              {userEmail ?? "No email on file"}
-            </p>
-          </div>
-          <div className="flex flex-col gap-1" role="none">
-            {USER_MENU_ITEMS.map((item) => (
-              <button
-                key={item.key}
-                className="rounded px-2.5 py-1.5 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  onOpenTab(item.key, item.label);
-                  setMenuOpen(false);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-            <button
-              className="rounded px-2.5 py-1.5 text-left text-slate-700 transition hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onToggleAdvancedProofread();
-                setMenuOpen(false);
-              }}
-            >
-              {advancedProofreadEnabled ? 'Hide Advanced Proofread' : 'Advanced Proofread'}
-            </button>
-            <button
-              className="rounded px-2.5 py-1.5 text-left text-rose-600 transition hover:bg-rose-50 focus:bg-rose-50 focus:outline-none"
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenuOpen(false);
-                onLogout();
-              }}
-            >
-              Log out
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const RightPanel = ({
   content,
@@ -515,6 +376,7 @@ export const RightPanel = ({
   isJobsLoading = false,
   onProfileUpdated,
   onRefreshContent,
+  snapshot,
 }: RightPanelProps) => {
   const queryClient = useQueryClient();
   const activeTab = useUIStore((state) => state.rightPanelTab);
@@ -546,13 +408,13 @@ export const RightPanel = ({
   const projects = useProjectStore((state) => state.projects);
   const previousProjectRef = useRef<string | null>(activeProjectId ?? null);
   const { locale, setLocale } = useUILocale();
-  const projectJobs = useMemo<JobSummary[]>(
-    () => (Array.isArray(jobsProp) ? jobsProp : []),
-    [jobsProp],
-  );
 
   const localize = useCallback(
-    (key: string, fallback: string, params?: Record<string, string | number>) => {
+    (
+      key: string,
+      fallback: string,
+      params?: Record<string, string | number>,
+    ) => {
       const resolved = translate(key, locale, params);
       if (resolved === key) {
         return applyParams(fallback, params);
@@ -562,8 +424,20 @@ export const RightPanel = ({
     [locale],
   );
 
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-  const [avatarFileName, setAvatarFileName] = useState<string | null>(null);
+  const projectJobs = useMemo<JobSummary[]>(
+    () => (Array.isArray(jobsProp) ? jobsProp : []),
+    [jobsProp],
+  );
+
+  const resolvedExtraTabLabel = useMemo(() => {
+    if (!extraTab) return null;
+    const meta = EXTRA_TAB_LABEL_META[extraTab.key];
+    if (!meta) {
+      return extraTab.label;
+    }
+    return localize(meta.key, meta.fallback);
+  }, [extraTab, localize]);
+
   const [careerSummary, setCareerSummary] = useState("");
   const [careerSavedAt, setCareerSavedAt] = useState<string | null>(null);
   const [settingsState, setSettingsState] = useState({
@@ -576,15 +450,24 @@ export const RightPanel = ({
   const [isNotesModalOpen, setNotesModalOpen] = useState(false);
   const [isOriginModalOpen, setOriginModalOpen] = useState(false);
   const [isTranslationModalOpen, setTranslationModalOpen] = useState(false);
-  const [profileStatus, setProfileStatus] = useState<
-    { consent: boolean; requiredFilled: boolean; complete: boolean } | null
-  >(null);
+  const [profileStatus, setProfileStatus] = useState<{
+    consent: boolean;
+    requiredFilled: boolean;
+    complete: boolean;
+  } | null>(null);
   const profileStatusCacheRef = useRef<
-    Record<string, { consent: boolean; requiredFilled: boolean; complete: boolean }>
+    Record<
+      string,
+      { consent: boolean; requiredFilled: boolean; complete: boolean }
+    >
   >({});
 
   const handleProfileStatusChange = useCallback(
-    (status: { consent: boolean; requiredFilled: boolean; complete: boolean }) => {
+    (status: {
+      consent: boolean;
+      requiredFilled: boolean;
+      complete: boolean;
+    }) => {
       if (!activeProjectId) {
         setProfileStatus(status);
         return;
@@ -606,9 +489,9 @@ export const RightPanel = ({
 
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [isSavingTranslationNotes, setSavingTranslationNotes] = useState(false);
-  const [translationNotesError, setTranslationNotesError] = useState<string | null>(
-    null,
-  );
+  const [translationNotesError, setTranslationNotesError] = useState<
+    string | null
+  >(null);
   const handleOpenNotesModal = useCallback(() => {
     setTranslationNotesError(null);
     setNotesModalOpen(true);
@@ -660,7 +543,12 @@ export const RightPanel = ({
 
   const profileStatusIcon = useMemo(() => {
     if (!profileStatus) {
-      return <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden="true" />;
+      return (
+        <Loader2
+          className="h-4 w-4 animate-spin text-slate-400"
+          aria-hidden="true"
+        />
+      );
     }
     if (profileStatus.complete) {
       return (
@@ -672,57 +560,52 @@ export const RightPanel = ({
 
   const profileNeedsAttention = profileStatus ? !profileStatus.complete : false;
   const profileAttentionLabel = localize(
-    'rightpanel_preview_profile_incomplete_badge',
-    'Fix',
+    "rightpanel_preview_profile_incomplete_badge",
+    "Fix",
   );
   const profileAttentionHint = localize(
-    'rightpanel_preview_profile_incomplete_hint',
-    'Complete the profile to proceed.',
+    "rightpanel_preview_profile_incomplete_hint",
+    "Complete the profile to proceed.",
   );
 
   const profileActionNode =
-    profileNeedsAttention || (profileControls && !profileControls.isEditing)
-      ? (
-          <div className="flex items-center gap-2">
-            {profileNeedsAttention ? (
-              <button
-                type="button"
-                onClick={() => setProfileOpen(true)}
-                className="flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100"
-                title={profileAttentionHint}
-                aria-label={profileAttentionHint}
-                data-collapsible-ignore
-              >
-                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>{profileAttentionLabel}</span>
-              </button>
-            ) : null}
-            {profileControls && !profileControls.isEditing ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!profileOpen) {
-                    setProfileOpen(true);
-                  }
-                  profileControls.startEdit();
-                }}
-                className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
-                aria-label={localize(
-                  'rightpanel_preview_profile_edit',
-                  'Edit profile',
-                )}
-                title={localize(
-                  'rightpanel_preview_profile_edit',
-                  'Edit profile',
-                )}
-                data-collapsible-ignore
-              >
-                <Pencil className="h-4 w-4" aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-        )
-      : undefined;
+    profileNeedsAttention || (profileControls && !profileControls.isEditing) ? (
+      <div className="flex items-center gap-2">
+        {profileNeedsAttention ? (
+          <button
+            type="button"
+            onClick={() => setProfileOpen(true)}
+            className="flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100"
+            title={profileAttentionHint}
+            aria-label={profileAttentionHint}
+            data-collapsible-ignore
+          >
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{profileAttentionLabel}</span>
+          </button>
+        ) : null}
+        {profileControls && !profileControls.isEditing ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (!profileOpen) {
+                setProfileOpen(true);
+              }
+              profileControls.startEdit();
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition hover:text-slate-700"
+            aria-label={localize(
+              "rightpanel_preview_profile_edit",
+              "Edit profile",
+            )}
+            title={localize("rightpanel_preview_profile_edit", "Edit profile")}
+            data-collapsible-ignore
+          >
+            <Pencil className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    ) : undefined;
 
   const appliedTranslation = content?.proofreading?.appliedTranslation ?? null;
   const originPrepSnapshot = content?.originPrep ?? null;
@@ -730,12 +613,14 @@ export const RightPanel = ({
     token &&
       content?.projectId &&
       originPrepSnapshot &&
-      originPrepSnapshot.upload.status === 'uploaded',
+      originPrepSnapshot.upload.status === "uploaded",
   );
   const canTriggerReanalysis = Boolean(
     canManuallyRefreshOrigin &&
-      originPrepSnapshot?.analysis.status !== 'running',
+      originPrepSnapshot?.analysis.status !== "running",
   );
+
+  const snapshotOriginFilename = snapshot.origin?.filename ?? null;
 
   const originFilename = useMemo(() => {
     const originMeta = content?.content?.origin;
@@ -746,6 +631,10 @@ export const RightPanel = ({
     ) {
       return originMeta.filename;
     }
+    const camel = (originMeta as { fileName?: string | null }).fileName;
+    if (typeof camel === "string" && camel.length > 0) {
+      return camel;
+    }
     const legacy = originMeta as { original_filename?: string | null };
     if (
       typeof legacy.original_filename === "string" &&
@@ -753,8 +642,12 @@ export const RightPanel = ({
     ) {
       return legacy.original_filename;
     }
+    const snapshotName = snapshotOriginFilename;
+    if (typeof snapshotName === "string" && snapshotName.length > 0) {
+      return snapshotName;
+    }
     return undefined;
-  }, [content]);
+  }, [content, snapshotOriginFilename]);
 
   const handleReanalyzeOrigin = useCallback(async () => {
     if (!token || !content?.projectId) return;
@@ -771,63 +664,55 @@ export const RightPanel = ({
       const message =
         err instanceof Error
           ? err.message
-          : localize(
-              'origin_prep_refresh_error',
-              'Failed to re-run analysis.',
-            );
+          : localize("origin_prep_refresh_error", "Failed to re-run analysis.");
       setReanalyzeError(message);
     } finally {
       setReanalyzingOrigin(false);
     }
-  }, [
-    token,
-    content?.projectId,
-    queryClient,
-    onRefreshContent,
-    localize,
-  ]);
+  }, [token, content?.projectId, queryClient, onRefreshContent, localize]);
 
   const translationAgentState = useWorkflowStore((state) => state.translation);
-  const proofreadingAgentState = useWorkflowStore((state) => state.proofreading);
-
-  const resolvedTabs = useMemo<Array<{ key: RightPanelBaseTab; label: string }>>(
-    () => {
-      const tabs: Array<{ key: RightPanelBaseTab; label: string }> = [
-        {
-          key: "preview",
-          label: localize("rightpanel_tab_overview", "Overview"),
-        },
-        {
-          key: "proofread:editing",
-          label: localize("rightpanel_tab_editor", "Editor"),
-        },
-      ];
-      if (advancedProofreadEnabled) {
-        tabs.push({
-          key: "proofread:findings",
-          label: localize("rightpanel_tab_finder", "Proofread"),
-        });
-      }
-      tabs.push({
-        key: "export",
-        label: localize("rightpanel_tab_export", "eBook"),
-      });
-      return tabs;
-    },
-    [advancedProofreadEnabled, localize],
+  const proofreadingAgentState = useWorkflowStore(
+    (state) => state.proofreading,
   );
+
+  const resolvedTabs = useMemo<
+    Array<{ key: RightPanelBaseTab; label: string }>
+  >(() => {
+    const tabs: Array<{ key: RightPanelBaseTab; label: string }> = [
+      {
+        key: "preview",
+        label: localize("rightpanel_tab_overview", "Overview"),
+      },
+      {
+        key: "proofread:editing",
+        label: localize("rightpanel_tab_editor", "Editor"),
+      },
+    ];
+    if (advancedProofreadEnabled) {
+      tabs.push({
+        key: "proofread:findings",
+        label: localize("rightpanel_tab_finder", "Proofread"),
+      });
+    }
+    tabs.push({
+      key: "export",
+      label: localize("rightpanel_tab_export", "eBook"),
+    });
+    return tabs;
+  }, [advancedProofreadEnabled, localize]);
 
   const prevAdvancedRef = useRef(advancedProofreadEnabled);
 
   useEffect(() => {
     if (!prevAdvancedRef.current && advancedProofreadEnabled) {
-      setTab('proofread:findings');
+      setTab("proofread:findings");
     } else if (
       prevAdvancedRef.current &&
       !advancedProofreadEnabled &&
-      activeTab === 'proofread:findings'
+      activeTab === "proofread:findings"
     ) {
-      setTab('proofread:editing');
+      setTab("proofread:editing");
     }
     prevAdvancedRef.current = advancedProofreadEnabled;
   }, [advancedProofreadEnabled, activeTab, setTab]);
@@ -835,7 +720,6 @@ export const RightPanel = ({
   const handleAdvancedProofreadToggle = useCallback(() => {
     toggleAdvancedProofread();
   }, [toggleAdvancedProofread]);
-
 
   const originProfile = content?.documentProfiles?.origin ?? null;
   const translationProfile = content?.documentProfiles?.translation ?? null;
@@ -867,7 +751,10 @@ export const RightPanel = ({
     if (typeof primary === "string" && primary.length > 0) {
       return primary;
     }
-    if (typeof appliedTranslation === "string" && appliedTranslation.length > 0) {
+    if (
+      typeof appliedTranslation === "string" &&
+      appliedTranslation.length > 0
+    ) {
       return appliedTranslation;
     }
     if (typeof translationContentFromBatches === "string") {
@@ -987,13 +874,9 @@ export const RightPanel = ({
     ) {
       const formatted = Number(originMetrics.wordCount).toLocaleString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_words",
-          `${formatted} words`,
-          {
-            count: formatted,
-          },
-        ),
+        localize("rightpanel_summary_metric_words", `${formatted} words`, {
+          count: formatted,
+        }),
       );
     }
     if (
@@ -1020,13 +903,9 @@ export const RightPanel = ({
         Math.round(originMetrics.readingTimeMinutes),
       ).toString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_minutes",
-          `${minutes} mins`,
-          {
-            count: minutes,
-          },
-        ),
+        localize("rightpanel_summary_metric_minutes", `${minutes} mins`, {
+          count: minutes,
+        }),
       );
     }
     return labels;
@@ -1082,11 +961,7 @@ export const RightPanel = ({
         <BookOpen className="h-4 w-4" aria-hidden="true" />
       </button>
     );
-  }, [
-    originContentAvailable,
-    handleOpenOriginModal,
-    localize,
-  ]);
+  }, [originContentAvailable, handleOpenOriginModal, localize]);
   const translationFallback = useMemo(() => {
     if (translationProfile) return null;
     const primary = content?.content?.translation?.content ?? "";
@@ -1095,7 +970,7 @@ export const RightPanel = ({
         ? appliedTranslation
         : primary.trim().length
           ? primary
-          : translationContentFromBatches ?? "";
+          : (translationContentFromBatches ?? "");
     const trimmed = source.trim();
     if (!trimmed) return null;
     const paragraphs = trimmed
@@ -1131,7 +1006,8 @@ export const RightPanel = ({
         null,
       language:
         content?.content?.translation?.language ??
-        (content?.content?.translation as { lang?: string } | undefined)?.lang ??
+        (content?.content?.translation as { lang?: string } | undefined)
+          ?.lang ??
         null,
     };
   }, [
@@ -1139,6 +1015,7 @@ export const RightPanel = ({
     content?.proofreading?.updatedAt,
     translationContentFromBatches,
     translationProfile,
+    appliedTranslation,
   ]);
 
   const translationMetrics = useMemo(() => {
@@ -1161,7 +1038,12 @@ export const RightPanel = ({
       readingTimeMinutes,
       readingTimeLabel: "",
     };
-  }, [translationProfile, translationFallback, translationContentAvailable, translationText]);
+  }, [
+    translationProfile,
+    translationFallback,
+    translationContentAvailable,
+    translationText,
+  ]);
 
   const translationMetricLabels = useMemo(() => {
     if (!translationMetrics) return [] as string[];
@@ -1172,13 +1054,9 @@ export const RightPanel = ({
     ) {
       const formatted = Number(translationMetrics.wordCount).toLocaleString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_words",
-          `${formatted} words`,
-          {
-            count: formatted,
-          },
-        ),
+        localize("rightpanel_summary_metric_words", `${formatted} words`, {
+          count: formatted,
+        }),
       );
     }
     if (
@@ -1205,13 +1083,9 @@ export const RightPanel = ({
         Math.round(translationMetrics.readingTimeMinutes),
       ).toString();
       labels.push(
-        localize(
-          "rightpanel_summary_metric_minutes",
-          `${minutes} mins`,
-          {
-            count: minutes,
-          },
-        ),
+        localize("rightpanel_summary_metric_minutes", `${minutes} mins`, {
+          count: minutes,
+        }),
       );
     }
     return labels;
@@ -1310,8 +1184,7 @@ export const RightPanel = ({
       return;
     }
     const hasText =
-      Boolean(translationContentAvailable) ||
-      Boolean(translationFallback);
+      Boolean(translationContentAvailable) || Boolean(translationFallback);
     if (hasText || !onRefreshContent) {
       translationRefreshAttemptsRef.current = 0;
       return;
@@ -1521,20 +1394,7 @@ export const RightPanel = ({
           new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       )
       .slice(0, 50);
-  }, [projectSummary, content, projectJobs]);
-
-  const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setAvatarFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setAvatarPreview(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
+  }, [projectSummary, content, projectJobs, localize]);
 
   const handleCareerSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1612,14 +1472,14 @@ export const RightPanel = ({
           <div className="flex flex-1 items-stretch">
             {resolvedTabs.map((tab) => {
               const isActive = activeTab === tab.key;
-              const isAdvancedTab = tab.key === 'proofread:findings';
+              const isAdvancedTab = tab.key === "proofread:findings";
               return (
                 <button
                   key={tab.key}
                   className={`flex-1 px-4 py-2 text-sm font-medium ${
                     isActive
-                      ? 'border-b-2 border-indigo-500 text-indigo-600'
-                      : 'text-slate-500'
+                      ? "border-b-2 border-indigo-500 text-indigo-600"
+                      : "text-slate-500"
                   }`}
                   onClick={() => setTab(tab.key)}
                 >
@@ -1635,14 +1495,14 @@ export const RightPanel = ({
                           event.stopPropagation();
                           event.preventDefault();
                           setAdvancedProofreadEnabled(false);
-                          setTab('proofread:editing');
+                          setTab("proofread:editing");
                         }}
                         onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
+                          if (event.key === "Enter" || event.key === " ") {
                             event.stopPropagation();
                             event.preventDefault();
                             setAdvancedProofreadEnabled(false);
-                            setTab('proofread:editing');
+                            setTab("proofread:editing");
                           }
                         }}
                       >
@@ -1663,14 +1523,14 @@ export const RightPanel = ({
                 }`}
                 onClick={() => setTab(extraTab.key)}
               >
-                {extraTab.label}
+                {resolvedExtraTabLabel ?? extraTab.label}
               </button>
             )}
           </div>
-          <UserMenu
+          <UserProfileMenu
             avatarInitial={avatarInitial}
             avatarTone={avatarTone}
-            avatarPreview={avatarPreview}
+            avatarPreview={null}
             userName={user?.name ?? null}
             userEmail={user?.email ?? null}
             onOpenTab={(tabKey, label) => openExtraTab({ key: tabKey, label })}
@@ -1727,6 +1587,7 @@ export const RightPanel = ({
                   reanalysisError={reanalyzeError}
                   originHeaderAccessory={originSummaryAccessory}
                   translationHeaderAccessory={translationSummaryAccessory}
+                  originFileName={originFilename ?? null}
                 />
               </div>
             </div>
@@ -1757,30 +1618,47 @@ export const RightPanel = ({
             <div className="space-y-4 p-4 text-sm text-slate-700">
               <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="text-base font-semibold text-slate-800">
-                  Account overview
+                  {localize(
+                    "rightpanel_profile_account_heading",
+                    "Account overview",
+                  )}
                 </h3>
                 <dl className="mt-3 space-y-2 text-sm">
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-500">Name</dt>
+                    <dt className="text-slate-500">
+                      {localize("rightpanel_profile_field_name", "Name")}
+                    </dt>
                     <dd className="font-medium text-slate-800">
                       {user?.name ?? "—"}
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-500">Email</dt>
+                    <dt className="text-slate-500">
+                      {localize("rightpanel_profile_field_email", "Email")}
+                    </dt>
                     <dd className="font-medium text-slate-800">
                       {user?.email ?? "—"}
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-500">Plan</dt>
+                    <dt className="text-slate-500">
+                      {localize("rightpanel_profile_field_plan", "Plan")}
+                    </dt>
                     <dd className="font-medium text-slate-800">
-                      Studio (beta)
+                      {localize(
+                        "rightpanel_profile_field_plan_value",
+                        "Studio (beta)",
+                      )}
                     </dd>
                   </div>
                   {projectSummary?.created_at && (
                     <div className="flex items-center justify-between">
-                      <dt className="text-slate-500">Project since</dt>
+                      <dt className="text-slate-500">
+                        {localize(
+                          "rightpanel_profile_field_project_since",
+                          "Project since",
+                        )}
+                      </dt>
                       <dd className="font-medium text-slate-800">
                         {new Date(projectSummary.created_at).toLocaleString()}
                       </dd>
@@ -1789,72 +1667,48 @@ export const RightPanel = ({
                 </dl>
               </section>
               <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-800">
-                  Avatar
-                </h3>
-                <div className="mt-3 flex flex-wrap items-center gap-4">
-                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-slate-100 text-lg font-semibold text-slate-600">
-                    {avatarPreview ? (
-                      <img
-                        src={avatarPreview}
-                        alt="Avatar preview"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <span>{avatarInitial ?? "?"}</span>
-                    )}
-                  </div>
-                  <div className="space-y-2 text-xs text-slate-500">
-                    <p>
-                      PNG or JPG up to 1 MB. Stored locally until profile sync
-                      is available.
-                    </p>
-                    <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                      Upload
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg"
-                        className="hidden"
-                        onChange={handleAvatarChange}
-                      />
-                    </label>
-                    {avatarFileName && (
-                      <p className="text-xs text-slate-500">
-                        Selected: {avatarFileName}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </section>
-              <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
                 <form onSubmit={handleCareerSubmit} className="space-y-3">
                   <header className="flex items-center justify-between">
                     <div>
                       <h3 className="text-base font-semibold text-slate-800">
-                        Career update
+                        {localize(
+                          "rightpanel_profile_career_heading",
+                          "Career update",
+                        )}
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Share recent publications or achievements to help
-                        reviewers understand context.
+                        {localize(
+                          "rightpanel_profile_career_description",
+                          "Share recent publications or achievements to help reviewers understand context.",
+                        )}
                       </p>
                     </div>
                     <button
                       type="submit"
                       className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
                     >
-                      Save note
+                      {localize(
+                        "rightpanel_profile_career_save",
+                        "Save note",
+                      )}
                     </button>
                   </header>
                   <textarea
                     value={careerSummary}
                     onChange={(event) => setCareerSummary(event.target.value)}
                     className="h-32 w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
-                    placeholder="Example: 2024 Sejong Literary Award finalist; specializing in speculative fiction translation."
+                    placeholder={localize(
+                      "rightpanel_profile_career_placeholder",
+                      "Example: 2024 Sejong Literary Award finalist; specializing in speculative fiction translation.",
+                    )}
                   />
                   {careerSavedAt && (
                     <p className="text-xs text-emerald-600">
-                      Saved locally{" "}
-                      {new Date(careerSavedAt).toLocaleTimeString()}.
+                      {localize(
+                        "rightpanel_profile_career_saved",
+                        "Saved locally {{time}}.",
+                        { time: new Date(careerSavedAt).toLocaleTimeString() },
+                      )}
                     </p>
                   )}
                 </form>
@@ -1868,24 +1722,35 @@ export const RightPanel = ({
                   <header className="flex items-center justify-between">
                     <div>
                       <h3 className="text-base font-semibold text-slate-800">
-                        Workspace settings
+                        {localize(
+                          "rightpanel_settings_heading",
+                          "Workspace settings",
+                        )}
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Adjust notification preferences and defaults for this
-                        session.
+                        {localize(
+                          "rightpanel_settings_description",
+                          "Adjust notification preferences and defaults for this session.",
+                        )}
                       </p>
                     </div>
                     <button
                       type="submit"
                       className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
                     >
-                      Save settings
+                      {localize(
+                        "rightpanel_settings_save",
+                        "Save settings",
+                      )}
                     </button>
                   </header>
                   <div className="space-y-3">
                     <label className="flex items-center justify-between gap-3">
                       <span className="text-sm text-slate-700">
-                        Email updates
+                        {localize(
+                          "rightpanel_settings_email_updates",
+                          "Email updates",
+                        )}
                       </span>
                       <input
                         type="checkbox"
@@ -1896,7 +1761,10 @@ export const RightPanel = ({
                     </label>
                     <label className="flex items-center justify-between gap-3">
                       <span className="text-sm text-slate-700">
-                        Push notifications
+                        {localize(
+                          "rightpanel_settings_push_notifications",
+                          "Push notifications",
+                        )}
                       </span>
                       <input
                         type="checkbox"
@@ -1909,7 +1777,10 @@ export const RightPanel = ({
                     </label>
                     <label className="flex items-center justify-between gap-3">
                       <span className="text-sm text-slate-700">
-                        Token usage alerts
+                        {localize(
+                          "rightpanel_settings_token_alerts",
+                          "Token usage alerts",
+                        )}
                       </span>
                       <input
                         type="checkbox"
@@ -1920,7 +1791,10 @@ export const RightPanel = ({
                     </label>
                     <div className="flex flex-col gap-1">
                       <label className="text-sm text-slate-700">
-                        Preferred language
+                        {localize(
+                          "rightpanel_settings_language",
+                          "Preferred language",
+                        )}
                       </label>
                       <select
                         value={settingsState.locale}
@@ -1937,7 +1811,9 @@ export const RightPanel = ({
                       </select>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm text-slate-700">Theme</label>
+                      <label className="text-sm text-slate-700">
+                        {localize("rightpanel_settings_theme", "Theme")}
+                      </label>
                       <select
                         value={settingsState.theme}
                         onChange={(event) =>
@@ -1948,16 +1824,34 @@ export const RightPanel = ({
                         }
                         className="rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
                       >
-                        <option value="system">Follow system</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
+                        <option value="system">
+                          {localize(
+                            "rightpanel_settings_theme_system",
+                            "Follow system",
+                          )}
+                        </option>
+                        <option value="light">
+                          {localize(
+                            "rightpanel_settings_theme_light",
+                            "Light",
+                          )}
+                        </option>
+                        <option value="dark">
+                          {localize(
+                            "rightpanel_settings_theme_dark",
+                            "Dark",
+                          )}
+                        </option>
                       </select>
                     </div>
                   </div>
                   {settingsSavedAt && (
                     <p className="text-xs text-emerald-600">
-                      Settings captured{" "}
-                      {new Date(settingsSavedAt).toLocaleTimeString()}.
+                      {localize(
+                        "rightpanel_settings_saved",
+                        "Settings captured {{time}}.",
+                        { time: new Date(settingsSavedAt).toLocaleTimeString() },
+                      )}
                     </p>
                   )}
                 </form>
@@ -1970,20 +1864,35 @@ export const RightPanel = ({
                 <header className="flex items-center justify-between">
                   <div>
                     <h3 className="text-base font-semibold text-slate-800">
-                      Recent activity
+                      {localize(
+                        "rightpanel_activity_heading",
+                        "Recent activity",
+                      )}
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Merged from jobs, batches, proofreading, and quality
-                      records. Showing the latest 50 events.
+                      {localize(
+                        "rightpanel_activity_description",
+                        "Merged from jobs, batches, proofreading, and quality records. Showing the latest 50 events.",
+                      )}
                     </p>
                   </div>
                   {isJobsLoading && (
-                    <span className="text-xs text-slate-400">Loading…</span>
+                    <span className="text-xs text-slate-400">
+                      {localize(
+                        "rightpanel_activity_loading",
+                        "Loading…",
+                      )}
+                    </span>
                   )}
                 </header>
                 <div className="mt-3 space-y-2 text-xs text-slate-600">
                   {activityEntries.length === 0 && (
-                    <p>No activity captured yet for this project.</p>
+                    <p>
+                      {localize(
+                        "rightpanel_activity_empty",
+                        "No activity captured yet for this project.",
+                      )}
+                    </p>
                   )}
                   {activityEntries.map((entry) => (
                     <p
@@ -2004,19 +1913,33 @@ export const RightPanel = ({
             <div className="space-y-4 p-4 text-sm text-slate-700">
               <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="text-base font-semibold text-slate-800">
-                  Terms of use
+                  {localize("rightpanel_terms_heading", "Terms of use")}
                 </h3>
                 <p className="mt-2 text-sm text-slate-600">
-                  Preview of the upcoming legal document. Place the finalized
-                  markdown file at{" "}
+                  {localize(
+                    "rightpanel_terms_preview_hint",
+                    "Preview of the upcoming legal document.",
+                  )}
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {localize(
+                    "rightpanel_terms_instruction_prefix",
+                    "Place the finalized markdown file at",
+                  )}{" "}
                   <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
                     docs/legal/terms.md
                   </code>{" "}
-                  and this panel will render it in a future update.
+                  {localize(
+                    "rightpanel_terms_instruction_suffix",
+                    "and this panel will render it in a future update.",
+                  )}
                 </p>
                 <p className="mt-2 text-xs text-slate-500">
-                  Current placeholder last updated{" "}
-                  {new Date().toLocaleDateString()}.
+                  {localize(
+                    "rightpanel_terms_last_updated",
+                    "Current placeholder last updated {{date}}.",
+                    { date: new Date().toLocaleDateString() },
+                  )}
                 </p>
               </section>
             </div>
@@ -2025,26 +1948,42 @@ export const RightPanel = ({
             <div className="space-y-4 p-4 text-sm text-slate-700">
               <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 className="text-base font-semibold text-slate-800">
-                  Privacy notice
+                  {localize("rightpanel_privacy_heading", "Privacy notice")}
                 </h3>
                 <p className="mt-2 text-sm text-slate-600">
-                  The canonical policy will be read from{" "}
+                  {localize(
+                    "rightpanel_privacy_preview_prefix",
+                    "The canonical policy will be read from",
+                  )}{" "}
                   <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
                     docs/legal/privacy.md
                   </code>
-                  . Until then, use this placeholder to verify layout and links.
+                  .
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {localize(
+                    "rightpanel_privacy_preview_suffix",
+                    "Until then, use this placeholder to verify layout and links.",
+                  )}
                 </p>
                 <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-500">
                   <li>
-                    Collection: translation manuscripts, quality scores,
-                    proofreading decisions.
+                    {localize(
+                      "rightpanel_privacy_bullet_collection",
+                      "Collection: translation manuscripts, quality scores, proofreading decisions.",
+                    )}
                   </li>
                   <li>
-                    Processing: OpenAI endpoints configured per project plan.
+                    {localize(
+                      "rightpanel_privacy_bullet_processing",
+                      "Processing: OpenAI endpoints configured per project plan.",
+                    )}
                   </li>
                   <li>
-                    Retention: project artifacts kept for 90 days unless
-                    extended by editors.
+                    {localize(
+                      "rightpanel_privacy_bullet_retention",
+                      "Retention: project artifacts kept for 90 days unless extended by editors.",
+                    )}
                   </li>
                 </ul>
               </section>
@@ -2079,17 +2018,24 @@ export const RightPanel = ({
                   {originTitle?.trim() ? originTitle.trim() : "—"}
                 </span>
                 {originAuthor?.trim() ? (
-                  <span className="text-slate-500"> · {originAuthor.trim()}</span>
+                  <span className="text-slate-500">
+                    {" "}
+                    · {originAuthor.trim()}
+                  </span>
                 ) : null}
               </span>
               {originFilename ? (
                 <span className="text-xs text-slate-400">{originFilename}</span>
               ) : null}
             </div>
-            {(originMetricLabels.length || originTimestampLabel) ? (
+            {originMetricLabels.length || originTimestampLabel ? (
               <p className="text-sm text-slate-600">
-                {originMetricLabels.length ? originMetricLabels.join(" · ") : null}
-                {originMetricLabels.length && originTimestampLabel ? " · " : null}
+                {originMetricLabels.length
+                  ? originMetricLabels.join(" · ")
+                  : null}
+                {originMetricLabels.length && originTimestampLabel
+                  ? " · "
+                  : null}
                 {originTimestampLabel
                   ? localize(
                       "rightpanel_summary_metric_updated",
@@ -2118,7 +2064,10 @@ export const RightPanel = ({
       ) : null}
       {isNotesModalOpen ? (
         <Modal
-          title={localize('rightpanel_translation_notes_title', 'Translation notes')}
+          title={localize(
+            "rightpanel_translation_notes_title",
+            "Translation notes",
+          )}
           onClose={handleCloseNotesModal}
           maxWidthClass="max-w-4xl"
         >
@@ -2153,11 +2102,14 @@ export const RightPanel = ({
                   {translationTitle?.trim() ? translationTitle.trim() : "—"}
                 </span>
                 {translationAuthor?.trim() ? (
-                  <span className="text-slate-500"> · {translationAuthor.trim()}</span>
+                  <span className="text-slate-500">
+                    {" "}
+                    · {translationAuthor.trim()}
+                  </span>
                 ) : null}
               </span>
             </div>
-            {(translationMetricLabels.length || translationTimestampLabel) ? (
+            {translationMetricLabels.length || translationTimestampLabel ? (
               <p className="text-sm text-slate-600">
                 {translationMetricLabels.length
                   ? translationMetricLabels.join(" · ")

@@ -7,10 +7,6 @@ import {
   Loader2,
   XCircle,
   Check,
-  Layers,
-  Sparkles,
-  Heart,
-  Shield,
   BookOpenCheck,
   PenSquare,
   type LucideIcon,
@@ -62,26 +58,13 @@ interface AggregatedModel {
 
 const PLAIN_SEGMENT_SEPARATOR = '\n\n';
 
-const LEGACY_STAGE_ORDER: TranslationStageKey[] = [
-  'literal',
-  'style',
-  'emotion',
-  'qa',
-];
-
 const V2_STAGE_ORDER: TranslationStageKey[] = [
   'draft',
   'revise',
   'micro-check',
 ];
 
-const V2_STAGE_SET = new Set(V2_STAGE_ORDER);
-
 const STAGE_META: Record<TranslationStageKey, { icon: LucideIcon; fallback: string; toneClass: string }> = {
-  literal: { icon: Layers, fallback: 'Literal pass', toneClass: 'text-sky-600' },
-  style: { icon: Sparkles, fallback: 'Style pass', toneClass: 'text-indigo-600' },
-  emotion: { icon: Heart, fallback: 'Emotion pass', toneClass: 'text-rose-600' },
-  qa: { icon: Shield, fallback: 'QA review', toneClass: 'text-emerald-600' },
   draft: { icon: BookOpenCheck, fallback: 'Draft pass', toneClass: 'text-sky-600' },
   revise: { icon: PenSquare, fallback: 'Revise pass', toneClass: 'text-indigo-600' },
   'micro-check': {
@@ -336,7 +319,7 @@ const readHighlightDebugFlag = (): boolean => {
     }
     const normalized = raw.toString().trim().toLowerCase();
     return normalized === '1' || normalized === 'true' || normalized === 'yes';
-  } catch (error) {
+  } catch {
     return false;
   }
 };
@@ -816,12 +799,7 @@ export const DualEditorPanel = ({
     [knownAvailableStages],
   );
 
-  const stageOrder = useMemo(() => {
-    const hasV2Stage = knownAvailableStages.some((stage) =>
-      V2_STAGE_SET.has(stage),
-    );
-    return hasV2Stage ? V2_STAGE_ORDER : LEGACY_STAGE_ORDER;
-  }, [knownAvailableStages]);
+  const stageOrder = useMemo(() => V2_STAGE_ORDER, []);
 
   const handleStageButtonClick = useCallback(
     (stageKey: TranslationStageKey) => {

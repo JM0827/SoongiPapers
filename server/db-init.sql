@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS translation_drafts (
   project_id UUID NOT NULL REFERENCES translationprojects(project_id) ON DELETE CASCADE,
   job_id TEXT NOT NULL,
   workflow_run_id UUID,
-  stage TEXT NOT NULL CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check')),
+  stage TEXT NOT NULL CHECK (stage IN ('draft','revise','micro-check')),
   batch_id UUID,
   segment_index INT NOT NULL,
   segment_id TEXT,
@@ -310,3 +310,22 @@ CREATE TABLE IF NOT EXISTS proofread_runs (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proofread_runs_dedupe
   ON proofread_runs (project_id, translation_file_id, memory_version, final_text_hash);
+
+CREATE TABLE IF NOT EXISTS proofread_stream_metrics (
+  run_id TEXT PRIMARY KEY,
+  project_id UUID,
+  connection_count INT NOT NULL DEFAULT 0,
+  reconnect_attempts INT NOT NULL DEFAULT 0,
+  last_connection_at TIMESTAMPTZ,
+  last_disconnection_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  last_event_at TIMESTAMPTZ,
+  last_event_type TEXT,
+  fallback_count INT NOT NULL DEFAULT 0,
+  last_fallback_at TIMESTAMPTZ,
+  last_fallback_reason TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proofread_stream_metrics_project
+  ON proofread_stream_metrics (project_id);

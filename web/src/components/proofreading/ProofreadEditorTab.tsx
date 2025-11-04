@@ -1,20 +1,32 @@
-import { useState } from 'react';
-import { Loader2, ChevronDown, ChevronRight, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
-import { useProofreadEditorContext } from '../../context/proofreadEditor';
-import { DualEditorPanel } from './DualEditorPanel';
-import { ProofreadIssueTray } from './ProofreadIssueTray';
-import { ProofreadActivityFeed } from './ProofreadActivityFeed';
-import type { DocumentProfileSummary, DocumentSummaryFallback } from '../../types/domain';
+import { useState } from "react";
+import {
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  PanelLeftOpen,
+  PanelLeftClose,
+} from "lucide-react";
+import { useProofreadEditorContext } from "../../context/proofreadEditor";
+import { DualEditorPanel } from "./DualEditorPanel";
+import { ProofreadIssueTray } from "./ProofreadIssueTray";
+import { ProofreadActivityFeed } from "./ProofreadActivityFeed";
+import type {
+  DocumentProfileSummary,
+  DocumentSummaryFallback,
+} from "../../types/domain";
 
 const formatSegmentLabel = (index: number) =>
-  `Segment ${String(index + 1).padStart(3, '0')}`;
+  `Segment ${String(index + 1).padStart(3, "0")}`;
 
 interface SegmentNavigatorProps {
   isCollapsed: boolean;
   onToggleSidebar: () => void;
 }
 
-const SegmentNavigator = ({ isCollapsed, onToggleSidebar }: SegmentNavigatorProps) => {
+const SegmentNavigator = ({
+  isCollapsed,
+  onToggleSidebar,
+}: SegmentNavigatorProps) => {
   const {
     segments,
     collapsedSegmentIds,
@@ -63,58 +75,64 @@ const SegmentNavigator = ({ isCollapsed, onToggleSidebar }: SegmentNavigatorProp
           </button>
         </header>
         <ul className="flex flex-1 flex-col divide-y divide-slate-100 overflow-y-auto text-sm text-slate-600">
-        {segments.map((segment) => {
-          const isSelected = segment.segmentId === selectedSegmentId;
-          const isCollapsed = collapsedSegmentIds[segment.segmentId] ?? false;
-          const isDirty = Boolean(dirtySegments[segment.segmentId]);
-          const handleSelect = () => selectSegment(segment.segmentId);
-          const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              handleSelect();
-            }
-          };
-          return (
-            <li key={segment.segmentId}>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={handleSelect}
-                onKeyDown={handleKeyDown}
-                className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 ${
-                  isSelected ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide">
-                    <span>{formatSegmentLabel(segment.segmentIndex)}</span>
-                    {isDirty && (
-                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                        Unsaved
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleSegmentCollapse(segment.segmentId);
-                  }}
-                  className="rounded p-1 text-slate-400 transition hover:bg-slate-100"
-                  aria-label={isCollapsed ? 'Expand segment' : 'Collapse segment'}
+          {segments.map((segment) => {
+            const isSelected = segment.segmentId === selectedSegmentId;
+            const isCollapsed = collapsedSegmentIds[segment.segmentId] ?? false;
+            const isDirty = Boolean(dirtySegments[segment.segmentId]);
+            const handleSelect = () => selectSegment(segment.segmentId);
+            const handleKeyDown = (
+              event: React.KeyboardEvent<HTMLDivElement>,
+            ) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleSelect();
+              }
+            };
+            return (
+              <li key={segment.segmentId}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleSelect}
+                  onKeyDown={handleKeyDown}
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 ${
+                    isSelected
+                      ? "bg-indigo-50 text-indigo-700"
+                      : "hover:bg-slate-50"
+                  }`}
                 >
-                  {isCollapsed ? (
-                    <ChevronRight className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide">
+                      <span>{formatSegmentLabel(segment.segmentIndex)}</span>
+                      {isDirty && (
+                        <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                          Unsaved
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleSegmentCollapse(segment.segmentId);
+                    }}
+                    className="rounded p-1 text-slate-400 transition hover:bg-slate-100"
+                    aria-label={
+                      isCollapsed ? "Expand segment" : "Collapse segment"
+                    }
+                  >
+                    {isCollapsed ? (
+                      <ChevronRight className="h-4 w-4" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       </div>
       <div className="flex-1 overflow-hidden">
         <div className="flex h-full min-h-0 flex-col gap-3">
@@ -153,11 +171,11 @@ export const ProofreadEditorTab = ({
 
   return (
     <div
-      className={`grid h-full w-full ${isSidebarCollapsed ? 'gap-2' : 'gap-4'} overflow-hidden`}
+      className={`grid h-full w-full ${isSidebarCollapsed ? "gap-2" : "gap-4"} overflow-hidden`}
       style={{
         gridTemplateColumns: isSidebarCollapsed
-          ? 'max-content 1fr'
-          : 'minmax(12rem,16rem) 1fr',
+          ? "max-content 1fr"
+          : "minmax(12rem,16rem) 1fr",
       }}
     >
       <div id="proofread-editor-sidebar" className="flex h-full flex-col">
@@ -210,7 +228,8 @@ export const ProofreadEditorTab = ({
         {featureToggles.originOnly && showOriginNotice && (
           <div className="flex items-start justify-between gap-3 rounded border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
             <p className="flex-1">
-              번역본이 아직 생성되지 않아 원작만 표시됩니다. 번역이 완료되면 자동으로 편집 기능이 활성화됩니다.
+              번역본이 아직 생성되지 않아 원작만 표시됩니다. 번역이 완료되면
+              자동으로 편집 기능이 활성화됩니다.
             </p>
             <button
               type="button"

@@ -1,12 +1,12 @@
-import { Types } from 'mongoose';
-import TranslationFile from '../models/TranslationFile';
+import { Types } from "mongoose";
+import TranslationFile from "../models/TranslationFile";
 import TranslationSegment, {
   type TranslationSegmentDocument,
-} from '../models/TranslationSegment';
-import Proofreading from '../models/Proofreading';
-import OriginFile from '../models/OriginFile';
-import { segmentOriginText } from '../agents/translation/segmentationAgent';
-import { emitProofreadEditorUpdate } from './proofreadEditorEvents';
+} from "../models/TranslationSegment";
+import Proofreading from "../models/Proofreading";
+import OriginFile from "../models/OriginFile";
+import { segmentOriginText } from "../agents/translation/segmentationAgent";
+import { emitProofreadEditorUpdate } from "./proofreadEditorEvents";
 
 export interface ProofreadEditorDatasetSummary {
   id: string;
@@ -66,7 +66,7 @@ const ensureObjectId = (value: string | Types.ObjectId): Types.ObjectId =>
 
 export interface ProofreadEditorPatchSegmentInput {
   segmentId: string;
-  column: 'origin' | 'translation';
+  column: "origin" | "translation";
   text: string;
 }
 
@@ -92,7 +92,7 @@ export async function buildProofreadEditorDataset(
 
   if (translationFileId) {
     if (!Types.ObjectId.isValid(translationFileId)) {
-      throw new Error('Invalid translationFileId');
+      throw new Error("Invalid translationFileId");
     }
     translationFile = await TranslationFile.findOne({
       _id: ensureObjectId(translationFileId),
@@ -122,10 +122,12 @@ export async function buildProofreadEditorDataset(
       .exec();
 
     if (!originDoc) {
-      throw new Error('Translation file not found for proofread editor dataset');
+      throw new Error(
+        "Translation file not found for proofread editor dataset",
+      );
     }
 
-    const originText = originDoc.text_content ?? '';
+    const originText = originDoc.text_content ?? "";
     let originSegments: { id: string; index: number; text: string }[] = [];
 
     if (originText.trim()) {
@@ -142,7 +144,7 @@ export async function buildProofreadEditorDataset(
       } catch (error) {
         originSegments = [
           {
-            id: 'seg-0001',
+            id: "seg-0001",
             index: 0,
             text: originText.trim(),
           },
@@ -162,7 +164,7 @@ export async function buildProofreadEditorDataset(
           lastSavedAt: toIsoString(originDoc.updated_at),
         },
         translation: {
-          text: '',
+          text: "",
           lastSavedAt: null,
         },
         issues: [],
@@ -185,8 +187,8 @@ export async function buildProofreadEditorDataset(
       projectId,
       translationFileId: datasetId,
       jobId: originDoc.job_id ?? null,
-      variant: 'origin-only',
-      source: 'origin_file',
+      variant: "origin-only",
+      source: "origin_file",
       updatedAt: toIsoString(originDoc.updated_at),
       segmentCount: segmentPayloads.length,
       originVersion: toIsoString(originDoc.updated_at),
@@ -218,7 +220,7 @@ export async function buildProofreadEditorDataset(
   const segments = await TranslationSegment.find({
     project_id: projectId,
     translation_file_id: translationFile._id,
-    variant: 'final',
+    variant: "final",
   })
     .sort({ segment_index: 1 })
     .exec();
@@ -264,7 +266,7 @@ export async function buildProofreadEditorDataset(
     translationFileId: fileId,
     jobId: fileJobId,
     variant: translationFile.variant ?? null,
-    source: translationFile.source_hash ? 'translation_file' : null,
+    source: translationFile.source_hash ? "translation_file" : null,
     updatedAt: toIsoString(translationFile.updated_at),
     segmentCount: segmentPayloads.length,
     originVersion: toIsoString(translationFile.updated_at),
@@ -291,15 +293,18 @@ const joinSegments = (values: TranslationSegmentDocument[]): string =>
   values
     .sort((a, b) => a.segment_index - b.segment_index)
     .map((segment) => segment.translation_segment)
-    .join('\n\n');
+    .join("\n\n");
 
 const joinOriginSegments = (values: TranslationSegmentDocument[]): string =>
   values
     .sort((a, b) => a.segment_index - b.segment_index)
     .map((segment) => segment.origin_segment)
-    .join('\n\n');
+    .join("\n\n");
 
-const sameInstant = (expected: string | null, actual: Date | null | undefined) => {
+const sameInstant = (
+  expected: string | null,
+  actual: Date | null | undefined,
+) => {
   if (!expected) return false;
   if (!actual) return false;
   try {
@@ -323,11 +328,11 @@ export async function saveProofreadEditorSegments(
   } = payload;
 
   if (!Types.ObjectId.isValid(translationFileId)) {
-    throw new Error('Invalid translationFileId');
+    throw new Error("Invalid translationFileId");
   }
 
   if (!segments.length) {
-    throw new Error('No segments provided');
+    throw new Error("No segments provided");
   }
 
   const translationFile = await TranslationFile.findOne({
@@ -336,7 +341,7 @@ export async function saveProofreadEditorSegments(
   }).exec();
 
   if (!translationFile) {
-    throw new Error('Translation file not found');
+    throw new Error("Translation file not found");
   }
 
   if (
@@ -346,7 +351,7 @@ export async function saveProofreadEditorSegments(
     const currentVersion = translationFile.updated_at
       ? translationFile.updated_at.toISOString()
       : null;
-    const conflict = new Error('Document version conflict');
+    const conflict = new Error("Document version conflict");
     (conflict as Error & { status?: number; details?: unknown }).status = 409;
     (conflict as Error & { status?: number; details?: unknown }).details = {
       documentVersion: currentVersion,
@@ -354,22 +359,24 @@ export async function saveProofreadEditorSegments(
     throw conflict;
   }
 
-  const segmentIds = Array.from(new Set(segments.map((segment) => segment.segmentId)));
+  const segmentIds = Array.from(
+    new Set(segments.map((segment) => segment.segmentId)),
+  );
 
   const segmentDocs = await TranslationSegment.find({
     project_id: projectId,
     translation_file_id: translationFile._id,
-    variant: 'final',
+    variant: "final",
     segment_id: { $in: segmentIds },
   }).exec();
 
   if (segmentDocs.length !== segmentIds.length) {
-    throw new Error('One or more segments could not be found');
+    throw new Error("One or more segments could not be found");
   }
 
   const now = new Date();
 
-  const segmentById = new Map<string, typeof segmentDocs[number]>();
+  const segmentById = new Map<string, (typeof segmentDocs)[number]>();
   segmentDocs.forEach((segmentDoc) => {
     segmentById.set(segmentDoc.segment_id, segmentDoc);
   });
@@ -379,7 +386,7 @@ export async function saveProofreadEditorSegments(
     if (!target) {
       throw new Error(`Segment ${segmentInput.segmentId} not found`);
     }
-    if (segmentInput.column === 'origin') {
+    if (segmentInput.column === "origin") {
       target.origin_segment = segmentInput.text;
     } else {
       target.translation_segment = segmentInput.text;
@@ -392,7 +399,7 @@ export async function saveProofreadEditorSegments(
   const updatedSegments = await TranslationSegment.find({
     project_id: projectId,
     translation_file_id: translationFile._id,
-    variant: 'final',
+    variant: "final",
   })
     .sort({ segment_index: 1 })
     .exec();
@@ -401,7 +408,8 @@ export async function saveProofreadEditorSegments(
   const aggregatedOrigin = joinOriginSegments(updatedSegments);
 
   translationFile.translated_content = aggregatedTranslation;
-  translationFile.origin_content = aggregatedOrigin || translationFile.origin_content;
+  translationFile.origin_content =
+    aggregatedOrigin || translationFile.origin_content;
   translationFile.updated_at = now;
   await translationFile.save();
 

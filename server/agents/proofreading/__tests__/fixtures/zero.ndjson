@@ -1,0 +1,32 @@
+{
+  "type": "items",
+  "data": {
+    "page": {
+      "version": "v2",
+      "run_id": "run_zero",
+      "chunk_id": "consistency:0",
+      "tier": "quick",
+      "model": "gpt-5-mini-2025-08-07",
+      "latency_ms": 205,
+      "prompt_tokens": 90,
+      "completion_tokens": 32,
+      "truncated": false,
+      "warnings": [],
+      "index_base": 0,
+      "offset_semantics": "[start,end)",
+      "stats": {
+        "item_count": 0,
+        "avg_item_bytes": 0
+      },
+      "metrics": {
+        "downshift_count": 0,
+        "forced_pagination": false,
+        "cursor_retry_count": 0
+      },
+      "items": [],
+      "has_more": false,
+      "next_cursor": "",
+      "provider_response_id": "resp_zero"
+    }
+  }
+}

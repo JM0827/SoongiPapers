@@ -99,9 +99,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
   const [generationProgress, setGenerationProgress] = useState<
     GenerationProgressChip[]
   >([]);
-  const [uploadedCoverUrl, setUploadedCoverUrl] = useState<string | null>(
-    null,
-  );
+  const [uploadedCoverUrl, setUploadedCoverUrl] = useState<string | null>(null);
   const uploadedCoverObjectUrlRef = useRef<string | null>(null);
   const [isTranslationDialogOpen, setIsTranslationDialogOpen] = useState(false);
 
@@ -149,9 +147,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     } catch (err) {
       setEbookDetails(null);
       setEbookError(
-        err instanceof Error
-          ? err.message
-          : t("export.summary.error.fetch"),
+        err instanceof Error ? err.message : t("export.summary.error.fetch"),
       );
     } finally {
       setEbookLoading(false);
@@ -242,7 +238,9 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       setSelectedTranslationId(null);
       return;
     }
-    void loadTranslationOptions(result?.recommendation?.translationFileId ?? null);
+    void loadTranslationOptions(
+      result?.recommendation?.translationFileId ?? null,
+    );
   }, [
     loadTranslationOptions,
     projectId,
@@ -368,7 +366,10 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     isRegeneratingCover ||
     coverLoading;
   const coverImageSrc =
-    uploadedCoverUrl || coverPreviewUrl || coverInfo?.fallbackUrl || fallbackCover;
+    uploadedCoverUrl ||
+    coverPreviewUrl ||
+    coverInfo?.fallbackUrl ||
+    fallbackCover;
   const latestVersion = ebookDetails?.latestVersion ?? null;
   const latestAsset = latestVersion?.asset ?? null;
   const metadata = ebookDetails?.metadata ?? {
@@ -409,8 +410,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
         changed = true;
       }
       if (!prev.identifier) {
-        const identifier =
-          ebookDetails?.ebook?.ebookId ?? projectId ?? null;
+        const identifier = ebookDetails?.ebook?.ebookId ?? projectId ?? null;
         if (identifier) {
           next.identifier = identifier;
           changed = true;
@@ -464,7 +464,13 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       wantEPUB: formats.epub,
       accepted: rightsAccepted,
     }),
-    [formats.epub, formats.pdf, metadataDraft, rightsAccepted, translationSummary],
+    [
+      formats.epub,
+      formats.pdf,
+      metadataDraft,
+      rightsAccepted,
+      translationSummary,
+    ],
   );
 
   const readiness = useMemo(
@@ -525,7 +531,9 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       (chip) => chip.status === "done",
     ).length;
     const errored = generationProgress.some((chip) => chip.status === "error");
-    const running = generationProgress.some((chip) => chip.status === "running");
+    const running = generationProgress.some(
+      (chip) => chip.status === "running",
+    );
     if (errored) {
       return (completed / total) * 100;
     }
@@ -614,9 +622,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
         } catch (err) {
           setGenerationProgress((chips) =>
             chips.map((chip) =>
-              chip.format === format
-                ? { ...chip, status: "error" }
-                : chip,
+              chip.format === format ? { ...chip, status: "error" } : chip,
             ),
           );
           throw err;
@@ -683,17 +689,14 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     [],
   );
 
-  const handleSnapshotChange = useCallback(
-    (draft: EssentialsSnapshot) => {
-      setFormats({ pdf: draft.wantPDF, epub: draft.wantEPUB });
-      setRightsAccepted(draft.accepted);
-      setMetadataDraft((prev) => ({
-        ...prev,
-        ...draft.meta,
-      }));
-    },
-    [],
-  );
+  const handleSnapshotChange = useCallback((draft: EssentialsSnapshot) => {
+    setFormats({ pdf: draft.wantPDF, epub: draft.wantEPUB });
+    setRightsAccepted(draft.accepted);
+    setMetadataDraft((prev) => ({
+      ...prev,
+      ...draft.meta,
+    }));
+  }, []);
 
   const openTranslationPicker = useCallback(() => {
     setIsTranslationDialogOpen(true);
@@ -749,14 +752,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       }
       setDownloadLoading(false);
     }
-  }, [
-    downloadAssetId,
-    downloadFilename,
-    downloadUrl,
-    projectId,
-    t,
-    token,
-  ]);
+  }, [downloadAssetId, downloadFilename, downloadUrl, projectId, t, token]);
 
   const downloadAvailable = downloadAssetId !== null || Boolean(downloadUrl);
   const downloadLabel = downloadLoading
@@ -912,9 +908,7 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
                     result?.recommendation?.translationFileId ===
                     option.translationFileId;
                   const timestamp =
-                    option.completedAt ??
-                    option.updatedAt ??
-                    option.createdAt;
+                    option.completedAt ?? option.updatedAt ?? option.createdAt;
                   return (
                     <label
                       key={option.translationFileId}
@@ -931,7 +925,9 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
                             name="translation-choice"
                             checked={isSelected}
                             onChange={() => {
-                              setSelectedTranslationId(option.translationFileId);
+                              setSelectedTranslationId(
+                                option.translationFileId,
+                              );
                               closeTranslationPicker();
                             }}
                           />

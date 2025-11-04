@@ -42,7 +42,7 @@ async function ensureTranslationDraftSchema(): Promise<void> {
       [],
     );
     await query(
-      "ALTER TABLE translation_drafts ADD CONSTRAINT translation_drafts_stage_check CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check'))",
+      "ALTER TABLE translation_drafts ADD CONSTRAINT translation_drafts_stage_check CHECK (stage IN ('draft','revise','micro-check'))",
       [],
     );
   } catch (error) {
@@ -97,7 +97,7 @@ function serializeRecord(
   const candidates = result.candidates ?? null;
 
   const needsReview =
-    job.stage === "qa" || job.stage === "micro-check"
+    job.stage === "micro-check"
       ? !(guards?.allOk ?? true)
       : false;
 
@@ -112,9 +112,10 @@ function serializeRecord(
     guardsJson: guards ? JSON.stringify(guards) : null,
     notesJson: notes ? JSON.stringify(notes) : null,
     spanPairsJson: spanPairs ? JSON.stringify(spanPairs) : null,
-    candidatesJson: Array.isArray(candidates) && candidates.length
-      ? JSON.stringify(candidates)
-      : null,
+    candidatesJson:
+      Array.isArray(candidates) && candidates.length
+        ? JSON.stringify(candidates)
+        : null,
     needsReview,
   };
 }
@@ -186,7 +187,7 @@ export async function persistStageResults(
       retry_count,
       updated_at
     )
-    VALUES ${values.join(', ')}
+    VALUES ${values.join(", ")}
     ON CONFLICT (job_id, stage, segment_index)
     DO UPDATE SET
       text_target = EXCLUDED.text_target,

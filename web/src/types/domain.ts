@@ -98,14 +98,7 @@ export interface TranslationFinalSummary {
   sourceHash?: string | null;
 }
 
-export type TranslationStageKey =
-  | "literal"
-  | "style"
-  | "emotion"
-  | "qa"
-  | "draft"
-  | "revise"
-  | "micro-check";
+export type TranslationStageKey = "draft" | "revise" | "micro-check";
 
 export type WorkflowType = "translation" | "proofread" | "quality";
 
@@ -247,6 +240,16 @@ export interface ProofreadingBucket {
 
 export interface ProofreadingReportSummary {
   countsBySubfeature?: Record<string, number>;
+  tierIssueCounts?: Record<string, number>;
+  tier_issue_counts?: Record<string, number>;
+  itemCount?: number;
+  item_count?: number;
+  downshiftCount?: number;
+  downshift_count?: number;
+  forcedPaginationCount?: number;
+  forced_pagination_count?: number;
+  cursorRetryCount?: number;
+  cursor_retry_count?: number;
   notes_ko?: string;
   notes_en?: string;
 }
@@ -368,6 +371,52 @@ export interface ProofreadEditorResponse {
   featureToggles: Record<string, boolean>;
 }
 
+export interface ProofreadStreamMeta {
+  runId: string;
+  projectId: string | null;
+  connectionCount: number;
+  reconnectAttempts: number;
+  lastConnectionAt: string | null;
+  lastDisconnectionAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastEventAt: string | null;
+  lastEventType: string | null;
+  fallbackCount: number;
+  lastFallbackAt: string | null;
+  lastFallbackReason: string | null;
+}
+
+export interface ProofreadRunSummary {
+  projectId: string;
+  runId: string | null;
+  runStatus: string | null;
+  runCreatedAt: string | null;
+  runCompletedAt: string | null;
+  lastLogAt: string | null;
+  jobId: string | null;
+  translationFileId: string | null;
+  memoryVersion: number | null;
+  finalTextHash: string | null;
+  proofreading: {
+    id: string | null;
+    status: string | null;
+    createdAt: string | null;
+    completedAt: string | null;
+  };
+  workflowRun: {
+    runId: string;
+    status: string;
+    label: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  report: ProofreadingReport | null;
+  tierReports: Partial<Record<"quick" | "deep", ProofreadingReport>>;
+  updatedAt: string | null;
+  streamMeta: ProofreadStreamMeta | null;
+}
+
 export interface ProofreadingLogEntry {
   id: string;
   projectId: string;
@@ -391,6 +440,9 @@ export interface ProofreadingLogEntry {
   verbosity: string;
   reasoningEffort: string;
   createdAt: string;
+  downshiftAttempts: number;
+  forcedPagination: number;
+  cursorRetry: number;
 }
 
 export interface TranslationDraftAdminRun {
@@ -414,7 +466,7 @@ export interface TranslationDraftAdminRun {
 
 export interface ProofreadEditorPatchSegmentInput {
   segmentId: string;
-  column: 'origin' | 'translation';
+  column: "origin" | "translation";
   text: string;
 }
 
@@ -454,7 +506,7 @@ export interface TranslationStageDraftResponse {
 }
 
 export interface ProofreadEditorConflictResponse {
-  code: 'CONFLICT';
+  code: "CONFLICT";
   message: string;
   documentVersion?: string;
   serverSegments?: ProofreadEditorSegmentPayload[];
@@ -462,7 +514,7 @@ export interface ProofreadEditorConflictResponse {
 }
 
 export interface ProofreadEditorStreamEvent {
-  type: 'proofread.update' | 'proofread.ready';
+  type: "proofread.update" | "proofread.ready";
   projectId: string;
   translationFileId?: string | null;
   jobId?: string | null;
@@ -505,9 +557,17 @@ export interface DocumentProfileSummary {
       gender: string | null;
       traits: string[];
     }>;
-    namedEntities: Array<{ name: string; targetName: string | null; frequency: number }>;
+    namedEntities: Array<{
+      name: string;
+      targetName: string | null;
+      frequency: number;
+    }>;
     timePeriod: string | null;
-    locations: Array<{ name: string; targetName: string | null; frequency: number }>;
+    locations: Array<{
+      name: string;
+      targetName: string | null;
+      frequency: number;
+    }>;
     measurementUnits: Array<{ source: string; target: string | null }>;
     linguisticFeatures: Array<{ source: string; target: string | null }>;
   } | null;
@@ -536,13 +596,13 @@ export interface DocumentSummaryFallback {
   language: string | null;
 }
 
-export type OriginPrepUploadStatus = 'missing' | 'uploaded';
+export type OriginPrepUploadStatus = "missing" | "uploaded";
 export type OriginPrepAnalysisStatus =
-  | 'missing'
-  | 'running'
-  | 'stale'
-  | 'complete';
-export type OriginPrepNotesStatus = 'missing' | 'stale' | 'complete';
+  | "missing"
+  | "running"
+  | "stale"
+  | "complete";
+export type OriginPrepNotesStatus = "missing" | "stale" | "complete";
 
 export interface OriginPrepSnapshot {
   projectId: string;
@@ -572,7 +632,7 @@ export interface OriginPrepSnapshot {
     hasContent: boolean;
   };
   blockingReasons: Array<{
-    step: 'upload' | 'analysis' | 'notes';
+    step: "upload" | "analysis" | "notes";
     status:
       | OriginPrepUploadStatus
       | OriginPrepAnalysisStatus
@@ -1010,7 +1070,7 @@ export interface ChatResponse {
 }
 
 export interface ChatStreamCompleteEvent {
-  type: 'chat.complete';
+  type: "chat.complete";
   reply: string;
   actions: ChatAction[];
   profileUpdates?: Record<string, unknown> | null;
@@ -1026,9 +1086,9 @@ export interface ChatStreamCompleteEvent {
 }
 
 export type ChatStreamEvent =
-  | { type: 'chat.delta'; text: string }
-  | { type: 'chat.error'; message: string }
-  | { type: 'chat.end' }
+  | { type: "chat.delta"; text: string }
+  | { type: "chat.error"; message: string }
+  | { type: "chat.end" }
   | ChatStreamCompleteEvent;
 
 export interface ChatHistoryItem {

@@ -1,8 +1,30 @@
 import { MongoClient, Db } from "mongodb";
 
+import type {
+  ProofreadingReport,
+  ResultBucket,
+  Spec,
+} from "../agents/proofreading/config";
+
 let client: MongoClient | null = null;
 let db: Db | null = null;
 let testDbOverride: Db | null = null;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const readStringField = (
+  record: Record<string, unknown>,
+  ...keys: string[]
+): string | null => {
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string") {
+      return candidate;
+    }
+  }
+  return null;
+};
 
 export function __setTestMongoDb(dbOverride: Db | null): void {
   testDbOverride = dbOverride;
@@ -47,10 +69,7 @@ export async function getMongoDoc(project_id: string, job_id: string) {
     if (byProject) {
       const needsJobBackfill = !byProject.job_id;
       if (needsJobBackfill) {
-        await col.updateOne(
-          { _id: byProject._id },
-          { $set: { job_id } },
-        );
+        await col.updateOne({ _id: byProject._id }, { $set: { job_id } });
         byProject.job_id = job_id;
         console.warn(
           "[proofreading] Backfilled translation_files.job_id for project",
@@ -69,10 +88,16 @@ export async function getMongoDoc(project_id: string, job_id: string) {
     throw new Error(`translation_files not found: ${project_id}/${job_id}`);
   }
 
-  const origin_content =
-    (doc as any).origin_content ?? (doc as any).originContent ?? null;
-  const translated_content =
-    (doc as any).translated_content ?? (doc as any).translatedContent ?? null;
+  if (!isRecord(doc)) {
+    throw new Error("translation_files document has unexpected shape");
+  }
+
+  const origin_content = readStringField(doc, "origin_content", "originContent");
+  const translated_content = readStringField(
+    doc,
+    "translated_content",
+    "translatedContent",
+  );
 
   if (!origin_content || !translated_content) {
     throw new Error("origin_content or translated_content missing.");
@@ -84,9 +109,9 @@ export async function saveProofreadingDoc(payload: {
   project_id: string;
   job_id: string;
   proofreading_id: string;
-  spec: any;
-  report: any;
-  tierReports?: Partial<Record<"quick" | "deep", any>>;
+  spec: Spec;
+  report: ProofreadingReport;
+  tierReports?: Partial<Record<"quick" | "deep", ProofreadingReport>>;
 }) {
   const m = await getMongo();
   const col = m.collection("proofreading_files");
@@ -114,6 +139,16 @@ type ApplyProofreadingParams = {
   translatedContent: string;
 };
 
+type ProofreadingMongoDoc = {
+  proofreading_id: string;
+  project_id: string;
+  job_id: string;
+  report: ProofreadingReport;
+  quick_report: ProofreadingReport | null;
+  deep_report: ProofreadingReport | null;
+  applied_issue_ids?: string[];
+};
+
 export async function applyProofreadingChanges({
   proofreading_id,
   appliedIssueIds,
@@ -123,18 +158,20 @@ export async function applyProofreadingChanges({
   const proofreadingCol = m.collection("proofreading_files");
   const translationCol = m.collection("translation_files");
 
-  const doc = await proofreadingCol.findOne({ proofreading_id });
+  const doc = (await proofreadingCol.findOne({
+    proofreading_id,
+  })) as ProofreadingMongoDoc | null;
   if (!doc)
     throw new Error(`Proofreading document not found: ${proofreading_id}`);
 
   const appliedSet = new Set(appliedIssueIds);
   const now = new Date();
 
-  const updateReportResults = (results: any[] | undefined) =>
+  const updateReportResults = (results?: ResultBucket[]): ResultBucket[] =>
     (results ?? []).map((bucket) => ({
       ...bucket,
-      items: (bucket.items ?? []).map((item: any) => {
-        if (item?.id && appliedSet.has(item.id)) {
+      items: bucket.items.map((item) => {
+        if (item.id && appliedSet.has(item.id)) {
           if (item.status !== "applied") {
             return {
               ...item,

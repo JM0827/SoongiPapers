@@ -1,4 +1,10 @@
-import { Queue, Worker, type JobsOptions, type Processor, type Job } from "bullmq";
+import {
+  Queue,
+  Worker,
+  type JobsOptions,
+  type Processor,
+  type Job,
+} from "bullmq";
 import { createRedisClient } from "./redis";
 import type { OriginSegment } from "../agents/translation/segmentationAgent";
 import type { SequentialTranslationStageConfig } from "../agents/translation";

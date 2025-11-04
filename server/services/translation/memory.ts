@@ -9,14 +9,12 @@ export interface ProjectMemoryRecord {
 }
 
 function createBaseMemory(seed?: Partial<ProjectMemory>): ProjectMemory {
-  const baseTermMap: Partial<ProjectMemory["term_map"]> =
-    seed?.term_map ?? {};
+  const baseTermMap: Partial<ProjectMemory["term_map"]> = seed?.term_map ?? {};
   return {
     style_profile: {
       register: seed?.style_profile?.register ?? "literary",
       rhythm: seed?.style_profile?.rhythm ?? "balanced",
-      avg_sentence_tokens:
-        seed?.style_profile?.avg_sentence_tokens ?? 18,
+      avg_sentence_tokens: seed?.style_profile?.avg_sentence_tokens ?? 18,
     },
     time_period: seed?.time_period,
     character_sheet: seed?.character_sheet ?? [],
@@ -127,7 +125,9 @@ export async function fetchProjectMemory(
           LIMIT 1`,
         [projectId, memoryVersion],
       );
-      const versionedMemory = versioned.rows?.[0]?.memory as ProjectMemory | undefined;
+      const versionedMemory = versioned.rows?.[0]?.memory as
+        | ProjectMemory
+        | undefined;
       if (versionedMemory) {
         return versionedMemory;
       }

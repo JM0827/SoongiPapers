@@ -1,8 +1,5 @@
-import Fastify, {
-  FastifyReply,
-  FastifyRequest,
-  FastifyInstance,
-} from "fastify";
+import Fastify, { FastifyRequest, FastifyInstance } from "fastify";
+import type { FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import fastifyOauth2 from "@fastify/oauth2";
 import multipart from "@fastify/multipart";
@@ -14,7 +11,6 @@ import type {
 } from "@fastify/multipart";
 import * as jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import { OpenAI } from "openai";
 
 import { requireAuthAndPlanCheck } from "./middleware/auth";
 import TranslationFile from "./models/TranslationFile";
@@ -41,18 +37,22 @@ import {
   generateTranslationDraft,
   generateTranslationRevision,
   type OriginSegment,
-  type ResponseVerbosity,
-  type ResponseReasoningEffort,
   type ProjectMemory,
   type SequentialStageJob,
   type SequentialStageJobSegment,
   type SequentialStageResult,
 } from "./agents/translation";
-import type { TranslationDraftAgentSegmentResult } from "./agents/translation/translationDraftAgent";
+import {
+  mergeAgentMeta,
+  mergeDraftSegmentResults,
+  splitOriginSegmentForRetry,
+} from "./agents/translation/segmentRetryHelpers";
 import evaluationRoutes from "./routes/evaluation";
 import proofreadingRoutes from "./routes/proofreading";
 import proofreadEditorRoutes from "./routes/proofreadEditor";
 import translationDraftRoutes from "./routes/translationDrafts";
+import translationStreamRoutes from "./routes/translationStream";
+import proofreadStreamRoutes from "./routes/proofreadStream";
 import dictionaryRoutes from "./routes/dictionary";
 import chatRoutes from "./routes/chat";
 import editingRoutes from "./routes/editing";
@@ -79,8 +79,283 @@ import {
   type TranslationV2Job,
   removeTranslationV2Job,
 } from "./services/translationV2Queue";
+import {
+  emitTranslationStage,
+  emitTranslationPage,
+  emitTranslationComplete,
+  emitTranslationError,
+  translationRunId,
+} from "./services/translationEvents";
+import type { AgentItemsResponseV2 } from "./services/responsesSchemas";
 import { ensureProjectMemory } from "./services/translation/memory";
 import cleanText from "./utils/cleanText";
+
+type OAuth2AccessToken = {
+  token: {
+    access_token: string;
+  };
+};
+
+interface ProjectMeta {
+  author?: string | null;
+  translator?: string | null;
+  writer?: string | null;
+  writerNote?: string | null;
+  translatorNote?: string | null;
+  draftTitle?: string | null;
+  bookTitle?: string | null;
+  [key: string]: unknown;
+}
+
+type ProjectUserConsent = Record<string, unknown>;
+
+interface TranslationProjectRow {
+  project_id: string;
+  user_id: string;
+  title: string | null;
+  description: string | null;
+  intention: string | null;
+  book_title: string | null;
+  author_name: string | null;
+  translator_name: string | null;
+  memo: string | null;
+  meta: ProjectMeta | string | null;
+  user_consent: ProjectUserConsent | string | null;
+  status: string | null;
+  origin_lang: string | null;
+  target_lang: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}
+
+interface ProjectOverview {
+  project_id: string;
+  user_id: string;
+  title: string | null;
+  book_title: string | null;
+  author_name: string | null;
+  translator_name: string | null;
+  description: string | null;
+  intention: string | null;
+  memo: string | null;
+  meta: ProjectMeta;
+  user_consent: ProjectUserConsent | null;
+  status: string | null;
+  origin_lang: string | null;
+  target_lang: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}
+
+interface GoogleUserInfo {
+  id: string;
+  email: string;
+  given_name: string;
+  family_name: string;
+  picture?: string;
+}
+
+interface AuthenticatedRequest extends FastifyRequest {
+  user_id?: string;
+  user?: { user_id?: string };
+}
+
+interface ProjectCreationPayload {
+  title?: string | null;
+  description?: string | null;
+  intention?: string | null;
+  book_title?: string | null;
+  author_name?: string | null;
+  translator_name?: string | null;
+  memo?: string | null;
+  meta?: ProjectMeta | string | null;
+  user_consent?: ProjectUserConsent | string | null;
+  status?: string | null;
+  origin_lang?: string | null;
+  target_lang?: string | null;
+}
+
+interface AnalyzePipelineBody {
+  documentId?: string;
+}
+
+interface TranslatePipelineBody {
+  documentId?: string;
+  originalText?: string;
+  targetLang?: string;
+  project_id?: string;
+  created_by?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+  workflowLabel?: string | null;
+  workflowAllowParallel?: boolean;
+}
+
+interface EbookGenerationBody {
+  projectId?: string;
+  translationFileId?: string | null;
+  format?: string | null;
+  jobId?: string | null;
+}
+
+interface LeanQualityAssessment {
+  jobId?: string | null;
+  job_id?: string | null;
+  qualityResult?: { overallScore?: number | null } | null;
+  timestamp?: Date | string | null;
+  [key: string]: unknown;
+}
+
+interface LeanTranslationFile {
+  job_id?: string | null;
+  jobId?: string | null;
+  completed_at?: Date | string | null;
+  updated_at?: Date | string | null;
+  [key: string]: unknown;
+}
+
+interface TranslationBatchRow {
+  id: string;
+  job_id: string;
+  batch_index: number;
+  status: string;
+  started_at: Date | null;
+  finished_at: Date | null;
+  error: string | null;
+  mongo_batch_id: string | null;
+}
+
+interface JobDocumentIdRow {
+  document_id: string | null;
+}
+
+interface JobSummaryRow {
+  id: string;
+  project_id: string;
+  status: string;
+  workflow_run_id: string | null;
+}
+
+interface ProjectMetadataRow {
+  origin_lang: string | null;
+  target_lang: string | null;
+  origin_file: string | null;
+  title: string | null;
+  book_title: string | null;
+  author_name: string | null;
+  description: string | null;
+  memo: string | null;
+}
+
+interface TranslationProjectExistsRow {
+  project_id: string;
+}
+
+interface ProjectUsageTotalsRow {
+  total_input_tokens: string | null;
+  total_output_tokens: string | null;
+  total_cost: string | null;
+  updated_at: Date | null;
+}
+
+interface JobUsageRow {
+  job_id: string | null;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  total_cost: string | null;
+  first_event: Date | null;
+  last_event: Date | null;
+}
+
+interface JobListRow {
+  id: string;
+  document_id: string | null;
+  type: string;
+  status: string;
+  created_at: Date | string;
+  updated_at: Date | string | null;
+  finished_at: Date | string | null;
+  project_id: string | null;
+  origin_lang: string | null;
+  target_lang: string | null;
+}
+
+interface DraftStageSummaryRow {
+  job_id: string;
+  stage: string;
+  segment_count: number;
+  needs_review_count: number;
+}
+
+interface GuardFailureRow {
+  job_id: string;
+  guard_key: string | null;
+  failed_count: number;
+}
+
+interface GuardDetailRow {
+  job_id: string;
+  segment_index: number | null;
+  segment_identifier: string | null;
+  guards: Record<string, unknown> | null;
+  notes: Record<string, unknown> | null;
+  needs_review: boolean;
+}
+
+interface UsageEventSummaryRow {
+  event_type: string | null;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  total_cost: string | null;
+}
+
+interface TranslationFileSummary {
+  id: string;
+  project_id?: string | null;
+  job_id?: string | null;
+  completed_at: Date | string | null;
+  segments: number | null;
+  source_hash: string | null;
+}
+
+interface TranslationBatchSummary {
+  id: string;
+  batch_index: number;
+  status: string;
+  started_at: Date | string | null;
+  finished_at: Date | string | null;
+  error: string | null;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const getRequestUserId = (req: FastifyRequest): string | null => {
+  const authReq = req as AuthenticatedRequest;
+  const direct = authReq.user_id;
+  if (typeof direct === "string" && direct.trim().length) {
+    return direct;
+  }
+  const fromUser = authReq.user?.user_id;
+  if (typeof fromUser === "string" && fromUser.trim().length) {
+    return fromUser;
+  }
+  return null;
+};
+
+const ensureUserId = (
+  req: FastifyRequest,
+  reply: FastifyReply,
+): string | null => {
+  const userId = getRequestUserId(req);
+  if (!userId) {
+    if (!reply.sent) {
+      reply.status(401).send({ error: "User not authenticated" });
+    }
+    return null;
+  }
+  return userId;
+};
 
 import { pool, query } from "./db";
 import { nanoid } from "nanoid";
@@ -99,28 +374,32 @@ import {
   UnsupportedOriginFileError,
 } from "./services/origin/extractor";
 
-const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
-const NODE_ENV = (process.env.NODE_ENV ?? 'development').toLowerCase();
-const IS_PRODUCTION = NODE_ENV === 'production';
+const HTTPS_ENABLED = process.env.HTTPS_ENABLED === "true";
+const NODE_ENV = (process.env.NODE_ENV ?? "development").toLowerCase();
+const IS_PRODUCTION = NODE_ENV === "production";
 
 type LoggerOption = boolean | Record<string, unknown>;
 
 function resolveLoggerOption(): LoggerOption {
-  const loggerFlag = (process.env.FASTIFY_LOGGER ?? 'true').trim().toLowerCase();
-  if (loggerFlag === 'false' || loggerFlag === '0') {
+  const loggerFlag = (process.env.FASTIFY_LOGGER ?? "true")
+    .trim()
+    .toLowerCase();
+  if (loggerFlag === "false" || loggerFlag === "0") {
     return false;
   }
   return {
-    level: process.env.LOG_LEVEL ?? (IS_PRODUCTION ? 'info' : 'warn'),
+    level: process.env.LOG_LEVEL ?? (IS_PRODUCTION ? "info" : "warn"),
   };
 }
 
 function shouldDisableRequestLogging(): boolean {
-  const requestLogFlag = (process.env.FASTIFY_DISABLE_REQUEST_LOGS ?? '').trim().toLowerCase();
-  if (requestLogFlag === 'true' || requestLogFlag === '1') {
+  const requestLogFlag = (process.env.FASTIFY_DISABLE_REQUEST_LOGS ?? "")
+    .trim()
+    .toLowerCase();
+  if (requestLogFlag === "true" || requestLogFlag === "1") {
     return true;
   }
-  if (requestLogFlag === 'false' || requestLogFlag === '0') {
+  if (requestLogFlag === "false" || requestLogFlag === "0") {
     return false;
   }
   return !IS_PRODUCTION;
@@ -132,7 +411,7 @@ const baseFastifyOptions = {
 };
 
 const DEFAULT_V2_CANDIDATE_COUNT = (() => {
-  const parsed = Number(process.env.TRANSLATION_DRAFT_CANDIDATES ?? '2');
+  const parsed = Number(process.env.TRANSLATION_DRAFT_CANDIDATES ?? "2");
   if (!Number.isFinite(parsed)) {
     return 2;
   }
@@ -143,14 +422,15 @@ let app: FastifyInstance;
 
 const V2_PIPELINE_STAGES = ["draft", "revise", "micro-check"] as const;
 
-const DEFAULT_DRAFT_MAX_OUTPUT_TOKENS = 2600;
-const DRAFT_MAX_OUTPUT_TOKENS_CAP = 9000;
+const DEFAULT_DRAFT_MAX_OUTPUT_TOKENS =  Number(process.env.TRANSLATION_DRAFT_MAX_OUTPUT_TOKENS_V2) || 3600;
+const DRAFT_MAX_OUTPUT_TOKENS_CAP = Number(process.env.TRANSLATION_DRAFT_MAX_OUTPUT_TOKENS_CAP_V2) || 7000;
 const DRAFT_TOKEN_BUDGET_FACTOR = 2.0;
-const DEFAULT_REVISE_MAX_OUTPUT_TOKENS = 1800;
-const REVISE_MAX_OUTPUT_TOKENS_CAP = 4800;
+
+const DEFAULT_REVISE_MAX_OUTPUT_TOKENS = Number(process.env.TRANSLATION_REVISE_MAX_OUTPUT_TOKENS_V2) || 3200;
+const REVISE_MAX_OUTPUT_TOKENS_CAP = Number(process.env.TRANSLATION_REVISE_MAX_OUTPUT_TOKENS_CAP_V2) || 7000;
 const REVISE_TOKEN_BUDGET_FACTOR = 1.4;
-const MIN_SEGMENT_SPLIT_LENGTH = 120;
-const MAX_SEGMENTS_PER_REQUEST = 3;
+
+const MAX_SEGMENTS_PER_REQUEST = Number(process.env.MAX_SEGMENTS_PER_REQUEST) ?? 1;
 
 function sumEstimatedTokens(texts: string[]): number {
   return texts.reduce((total, text) => total + estimateTokens(text), 0);
@@ -166,23 +446,173 @@ function computeMaxOutputTokensForTexts(
     return fallback;
   }
   const estimated = Math.ceil(sumEstimatedTokens(texts) * factor);
-  const candidate = Number.isFinite(estimated) && estimated > 0 ? estimated : fallback;
+  const candidate =
+    Number.isFinite(estimated) && estimated > 0 ? estimated : fallback;
   return Math.min(Math.max(fallback, candidate), cap);
 }
 
 type DraftAgentResult = Awaited<ReturnType<typeof generateTranslationDraft>>;
 
 type DraftAggregation = {
-  segments: DraftAgentResult['segments'];
-  usage: DraftAgentResult['usage'];
-  meta: DraftAgentResult['meta'];
+  segments: DraftAgentResult["segments"];
+  usage: DraftAgentResult["usage"];
+  meta: DraftAgentResult["meta"];
   model: string;
 };
+
+type TranslationSegmentText = {
+  segmentId: string;
+  text: string;
+};
+
+function extractDraftSegmentTexts(
+  segments: DraftAgentResult["segments"],
+): TranslationSegmentText[] {
+  return segments
+    .map((segment) => {
+      const id =
+        (segment as { segment_id?: string }).segment_id ??
+        (segment as { segmentId?: string }).segmentId ??
+        "";
+      const text =
+        (segment as { translation_segment?: string }).translation_segment ??
+        (segment as { translation?: string }).translation ??
+        "";
+      return { segmentId: id, text: text.trim() };
+    })
+    .filter((entry) => entry.segmentId && entry.text.length);
+}
+
+type ReviseAgentResult = Awaited<ReturnType<typeof generateTranslationRevision>>;
+
+function extractReviseSegmentTexts(
+  segments: ReviseAgentResult["segments"],
+): TranslationSegmentText[] {
+  return segments
+    .map((segment) => {
+      const id = (segment as { segment_id?: string }).segment_id ?? "";
+      const text =
+        (segment as { revised_segment?: string }).revised_segment ??
+        (segment as { translation_segment?: string }).translation_segment ??
+        "";
+      return { segmentId: id, text: text.trim() };
+    })
+    .filter((entry) => entry.segmentId && entry.text.length);
+}
+
+function buildTranslationEnvelope(params: {
+  runId: string;
+  stage: string;
+  jobId: string;
+  model: string;
+  mergedText: string;
+  originSegments: OriginSegment[];
+  segmentTexts: TranslationSegmentText[];
+  usage: { inputTokens: number | null; outputTokens: number | null };
+  meta: {
+    truncated: boolean;
+    retryCount: number;
+    fallbackModelUsed: boolean;
+    jsonRepairApplied: boolean;
+  };
+  latencyMs: number;
+}): { envelope: AgentItemsResponseV2; itemCount: number } {
+  const {
+    runId,
+    stage,
+    jobId,
+    model,
+    mergedText,
+    originSegments,
+    segmentTexts,
+    usage,
+    meta,
+    latencyMs,
+  } = params;
+
+  const textLength = mergedText.length;
+  const map = new Map(segmentTexts.map((entry) => [entry.segmentId, entry.text]));
+  const items: AgentItemsResponseV2["items"] = [];
+  let searchCursor = 0;
+
+  originSegments.forEach((origin, index) => {
+    const translated = map.get(origin.id)?.trim();
+    if (!translated) return;
+    const bounded = translated.slice(0, textLength);
+    let start = mergedText.indexOf(bounded, searchCursor);
+    if (start === -1) {
+      start = mergedText.indexOf(bounded);
+    }
+    if (start === -1) {
+      return;
+    }
+    const end = start + bounded.length;
+    searchCursor = end;
+
+    const severity = stage === "draft" ? "suggestion" : "warning";
+    const snippet =
+      bounded.length > 160 ? `${bounded.slice(0, 157)}…` : bounded;
+
+    items.push({
+      uid: `${origin.id}:${stage}`,
+      k: `${stage}_segment`,
+      s: severity as AgentItemsResponseV2["items"][number]["s"],
+      r: snippet,
+      t: "replace",
+      i: [origin.index ?? index, origin.index ?? index],
+      o: [start, end],
+      fix: { text: bounded },
+      cid: origin.id,
+      side: "tgt",
+    });
+  });
+
+  const warnings: string[] = [];
+  if (meta.fallbackModelUsed) warnings.push("fallback_model_used");
+  if (meta.jsonRepairApplied) warnings.push("json_repair_applied");
+
+  const envelope: AgentItemsResponseV2 = {
+    version: "v2",
+    run_id: runId,
+    chunk_id: `${stage}:${jobId}`,
+    tier: stage,
+    model,
+    latency_ms: Math.max(0, latencyMs),
+    prompt_tokens: usage.inputTokens ?? 0,
+    completion_tokens: usage.outputTokens ?? 0,
+    finish_reason: meta.truncated ? "length" : "stop",
+    truncated: Boolean(meta.truncated),
+    partial: meta.retryCount > 0 ? true : undefined,
+    warnings,
+    index_base: 0,
+    offset_semantics: "[start,end)",
+    stats: {
+      item_count: items.length,
+      avg_item_bytes: items.length
+        ? Math.floor(
+            items.reduce((total, item) => total + Buffer.byteLength(item.r, "utf8"), 0) /
+              items.length,
+          )
+        : 0,
+    },
+    metrics: {
+      downshift_count: Math.max(0, meta.retryCount ?? 0),
+      forced_pagination: false,
+      cursor_retry_count: 0,
+    },
+    items,
+    has_more: false,
+    next_cursor: "",
+    provider_response_id: null,
+  };
+
+  return { envelope, itemCount: items.length };
+}
 
 async function runDraftStageWithAdaptiveRetries(
   baseOptions: Omit<
     Parameters<typeof generateTranslationDraft>[0],
-    'originSegments' | 'maxOutputTokens'
+    "originSegments" | "maxOutputTokens"
   >,
   originSegments: OriginSegment[],
 ): Promise<DraftAgentResult> {
@@ -200,7 +630,9 @@ async function runDraftStageWithAdaptiveRetries(
     },
   };
 
-  async function draftRecursive(segments: OriginSegment[]): Promise<DraftAggregation> {
+  async function draftRecursive(
+    segments: OriginSegment[],
+  ): Promise<DraftAggregation> {
     if (segments.length > MAX_SEGMENTS_PER_REQUEST) {
       const mid = Math.floor(segments.length / 2);
       const leftSegments = segments.slice(0, mid);
@@ -211,10 +643,10 @@ async function runDraftStageWithAdaptiveRetries(
           jobId: baseOptions.jobId,
           projectId: baseOptions.projectId,
           segmentCount: segments.length,
-          reason: 'segment_count',
+          reason: "segment_count",
           maxSegmentsPerRequest: MAX_SEGMENTS_PER_REQUEST,
         },
-        '[TRANSLATION_V2] Splitting draft segments before request',
+        "[TRANSLATION_V2] Splitting draft segments before request",
       );
 
       const left = await draftRecursive(leftSegments);
@@ -226,27 +658,19 @@ async function runDraftStageWithAdaptiveRetries(
           inputTokens: left.usage.inputTokens + right.usage.inputTokens,
           outputTokens: left.usage.outputTokens + right.usage.outputTokens,
         },
-        meta: {
-          verbosity: left.meta.verbosity,
-          reasoningEffort: left.meta.reasoningEffort,
-          maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
-          attempts: left.meta.attempts + right.meta.attempts,
-          retryCount: left.meta.retryCount + right.meta.retryCount,
-          truncated: false,
-          fallbackModelUsed:
-            left.meta.fallbackModelUsed || right.meta.fallbackModelUsed,
-        },
+        meta: mergeAgentMeta(left.meta, right.meta),
         model: left.model,
       };
     }
 
     const subsetMaxTokens = computeMaxOutputTokensForTexts(
-      segments.map((segment) => segment.text ?? ''),
+      segments.map((segment) => segment.text ?? ""),
       DRAFT_TOKEN_BUDGET_FACTOR,
       DEFAULT_DRAFT_MAX_OUTPUT_TOKENS,
       DRAFT_MAX_OUTPUT_TOKENS_CAP,
     );
-    const subsetCandidateCount = segments.length <= 2 ? 1 : baseOptions.candidateCount ?? 1;
+    const subsetCandidateCount =
+      segments.length <= 2 ? 1 : (baseOptions.candidateCount ?? 1);
 
     const result = await generateTranslationDraft({
       ...baseOptions,
@@ -276,9 +700,9 @@ async function runDraftStageWithAdaptiveRetries(
             originalLength: original.text.length,
             maxOutputTokens: subsetMaxTokens,
           },
-          '[TRANSLATION_V2] Draft truncated even after single-segment retry',
+          "[TRANSLATION_V2] Draft truncated even after single-segment retry",
         );
-        throw new Error('draft_truncated');
+        throw new Error("draft_truncated");
       }
 
       app.log.debug(
@@ -292,7 +716,7 @@ async function runDraftStageWithAdaptiveRetries(
             length: piece.text.length,
           })),
         },
-        '[TRANSLATION_V2] Splitting long segment for retry',
+        "[TRANSLATION_V2] Splitting long segment for retry",
       );
 
       const subdivisionAggregation = await draftRecursive(subdivisions);
@@ -322,7 +746,7 @@ async function runDraftStageWithAdaptiveRetries(
         candidateCount: subsetCandidateCount,
         segmentLengths: segments.map((segment) => segment.text.length),
       },
-      '[TRANSLATION_V2] Draft subset truncated; splitting segments',
+      "[TRANSLATION_V2] Draft subset truncated; splitting segments",
     );
 
     const left = await draftRecursive(leftSegments);
@@ -334,16 +758,7 @@ async function runDraftStageWithAdaptiveRetries(
         inputTokens: left.usage.inputTokens + right.usage.inputTokens,
         outputTokens: left.usage.outputTokens + right.usage.outputTokens,
       },
-      meta: {
-        verbosity: left.meta.verbosity,
-        reasoningEffort: left.meta.reasoningEffort,
-        maxOutputTokens: Math.max(left.meta.maxOutputTokens, right.meta.maxOutputTokens),
-        attempts: left.meta.attempts + right.meta.attempts,
-        retryCount: left.meta.retryCount + right.meta.retryCount,
-        truncated: false,
-        fallbackModelUsed:
-          left.meta.fallbackModelUsed || right.meta.fallbackModelUsed,
-      },
+      meta: mergeAgentMeta(left.meta, right.meta),
       model: left.model,
     };
   }
@@ -351,18 +766,19 @@ async function runDraftStageWithAdaptiveRetries(
 
 function buildMergedDraftText(
   originSegments: OriginSegment[],
-  translatedSegments: DraftAgentResult['segments'],
+  translatedSegments: DraftAgentResult["segments"],
 ): string {
   const translationMap = new Map<string, string>(
     translatedSegments.map((segment, index) => {
       const key =
         (segment as { segment_id?: string }).segment_id ??
         (segment as { segmentId?: string }).segmentId ??
-        originSegments[index]?.id ?? '';
+        originSegments[index]?.id ??
+        "";
       const value =
         (segment as { translation_segment?: string }).translation_segment ??
         (segment as { translation?: string }).translation ??
-        '';
+        "";
       return [key, value];
     }),
   );
@@ -371,9 +787,9 @@ function buildMergedDraftText(
     const translation =
       translationMap.get(origin.id) ??
       translatedSegments[index]?.translation_segment ??
-      '';
+      "";
     return {
-      text: typeof translation === 'string' ? translation.trim() : '',
+      text: typeof translation === "string" ? translation.trim() : "",
       paragraphIndex: origin.paragraphIndex ?? 0,
     };
   });
@@ -386,122 +802,15 @@ function buildMergedDraftText(
       const previous = index > 0 ? sentenceList[index - 1] : null;
       const needsBreak =
         previous && previous.paragraphIndex !== current.paragraphIndex;
-      const separator = index === 0 ? '' : needsBreak ? '\n\n' : '\n';
+      const separator = index === 0 ? "" : needsBreak ? "\n\n" : "\n";
       return `${acc}${separator}${current.text}`;
-    }, '')
+    }, "")
     .trim();
-}
-
-function splitOriginSegmentForRetry(segment: OriginSegment): OriginSegment[] {
-  const text = segment.text ?? '';
-  const trimmed = text.trim();
-  if (trimmed.length <= MIN_SEGMENT_SPLIT_LENGTH) {
-    return [segment];
-  }
-
-  const pieces: OriginSegment[] = [];
-  let remaining = trimmed;
-  let counter = 0;
-
-  while (remaining.length > MIN_SEGMENT_SPLIT_LENGTH * 1.5) {
-    const midpoint = Math.floor(remaining.length / 2);
-    const newlineBreak = remaining.lastIndexOf('\n', midpoint);
-    const punctuationBreak = Math.max(
-      remaining.lastIndexOf('. ', midpoint),
-      remaining.lastIndexOf('。', midpoint),
-      remaining.lastIndexOf('! ', midpoint),
-      remaining.lastIndexOf('? ', midpoint),
-    );
-
-    let pivot = Math.max(newlineBreak, punctuationBreak);
-    if (pivot < MIN_SEGMENT_SPLIT_LENGTH) {
-      pivot = midpoint;
-    }
-
-    const chunk = remaining.slice(0, pivot).trim();
-    if (!chunk.length) {
-      break;
-    }
-
-    pieces.push({
-      ...segment,
-      id: `${segment.id}::${String.fromCharCode(97 + counter)}`,
-      index: segment.index * 10 + counter,
-      text: chunk,
-    });
-    remaining = remaining.slice(pivot).trimStart();
-    counter += 1;
-  }
-
-  if (remaining.length) {
-    pieces.push({
-      ...segment,
-      id: `${segment.id}::${String.fromCharCode(97 + counter)}`,
-      index: segment.index * 10 + counter,
-      text: remaining.trim(),
-    });
-  }
-
-  return pieces.length ? pieces : [segment];
-}
-
-function mergeDraftSegmentResults(
-  original: OriginSegment,
-  partialSegments: TranslationDraftAgentSegmentResult[],
-): TranslationDraftAgentSegmentResult {
-  const prefix = `${original.id}::`;
-  const relevant = partialSegments.filter((segment) =>
-    segment.segment_id.startsWith(prefix),
-  );
-
-  if (!relevant.length) {
-    return {
-      segment_id: original.id,
-      origin_segment: original.text,
-      translation_segment: original.text,
-      notes: [],
-      spanPairs: [
-        {
-          source_span_id: original.id,
-          source_start: 0,
-          source_end: original.text.length,
-          target_start: 0,
-          target_end: original.text.length,
-        },
-      ],
-      candidates: [],
-    };
-  }
-
-  const translation = relevant
-    .map((segment) => segment.translation_segment?.trim() ?? '')
-    .filter((value) => value.length)
-    .join(' ')
-    .trim();
-
-  const notes = relevant.flatMap((segment) => segment.notes ?? []);
-
-  return {
-    segment_id: original.id,
-    origin_segment: original.text,
-    translation_segment: translation || original.text,
-    notes,
-    spanPairs: [
-      {
-        source_span_id: original.id,
-        source_start: 0,
-        source_end: original.text.length,
-        target_start: 0,
-        target_end: (translation || original.text).length,
-      },
-    ],
-    candidates: [],
-  };
 }
 
 if (HTTPS_ENABLED) {
-  const keyPath = path.join(process.cwd(), 'certs', 'server.key');
-  const certPath = path.join(process.cwd(), 'certs', 'server.crt');
+  const keyPath = path.join(process.cwd(), "certs", "server.key");
+  const certPath = path.join(process.cwd(), "certs", "server.crt");
 
   try {
     const httpsOptions = {
@@ -514,7 +823,7 @@ if (HTTPS_ENABLED) {
       https: httpsOptions,
     });
   } catch (sslError) {
-    console.warn('[STARTUP] SSL certificates not found, falling back to HTTP');
+    console.warn("[STARTUP] SSL certificates not found, falling back to HTTP");
     app = Fastify(baseFastifyOptions);
   }
 } else {
@@ -746,25 +1055,6 @@ app.register(multipart, {
   },
 });
 
-// Define Document model ONCE at top-level
-const Document =
-  mongoose.models.Document ||
-  mongoose.model(
-    "Document",
-    new mongoose.Schema(
-      {
-        documentId: String,
-        user_id: String,
-        originalText: String,
-        translatedText: String,
-        created_at: { type: Date, default: Date.now },
-        updated_at: { type: Date, default: Date.now },
-        translation_finished_at: Date,
-      },
-      { collection: "documents" },
-    ),
-  );
-
 const OriginFile =
   mongoose.models.OriginFile ||
   mongoose.model(
@@ -841,7 +1131,7 @@ app.register(fastifyOauth2, {
       id: process.env.GOOGLE_CLIENT_ID!,
       secret: process.env.GOOGLE_CLIENT_SECRET!,
     },
-    auth: (fastifyOauth2 as any).GOOGLE_CONFIGURATION,
+    auth: fastifyOauth2.GOOGLE_CONFIGURATION,
   },
   startRedirectPath: "/api/auth/google",
   callbackUri: process.env.GOOGLE_CALLBACK_URL!,
@@ -853,8 +1143,10 @@ app.register(evaluationRoutes);
 app.register(proofreadingRoutes);
 app.register(proofreadEditorRoutes);
 app.register(adminRoutes);
-app.register(translationDraftRoutes);
-app.register(dictionaryRoutes);
+  app.register(translationDraftRoutes);
+  app.register(translationStreamRoutes);
+  app.register(proofreadStreamRoutes);
+  app.register(dictionaryRoutes);
 app.register(chatRoutes);
 app.register(editingRoutes);
 app.register(modelsRoutes);
@@ -863,22 +1155,54 @@ app.register(ebooksRoutes);
 app.register(workflowRoutes, { prefix: "/api" });
 app.register(memoryRoutes);
 
-function mapProjectRow(row: any) {
-  let meta: Record<string, any> = {};
-  if (row.meta) {
-    if (typeof row.meta === "object") {
-      meta = row.meta as Record<string, any>;
-    } else if (typeof row.meta === "string") {
-      try {
-        meta = JSON.parse(row.meta) as Record<string, any>;
-      } catch (error) {
-        app.log?.warn?.(
-          { error, meta: row.meta },
-          "[PROJECT] Failed to parse project meta field",
-        );
+const parseProjectMeta = (raw: TranslationProjectRow["meta"]): ProjectMeta => {
+  if (!raw) return {};
+  if (isRecord(raw)) {
+    return { ...raw } as ProjectMeta;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (isRecord(parsed)) {
+        return { ...parsed } as ProjectMeta;
       }
+    } catch (error) {
+      app.log?.warn?.({ error, raw }, "[PROJECT] Invalid meta JSON");
     }
   }
+  return {};
+};
+
+const parseProjectUserConsent = (
+  raw: TranslationProjectRow["user_consent"],
+): ProjectUserConsent | null => {
+  if (!raw) return null;
+  if (isRecord(raw)) {
+    return { ...raw };
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (isRecord(parsed)) {
+        return { ...parsed };
+      }
+    } catch (error) {
+      app.log?.warn?.({ error, raw }, "[PROJECT] Invalid user consent JSON");
+    }
+  }
+  return null;
+};
+
+const stringifyProjectMeta = (
+  meta: ProjectCreationPayload["meta"] | TranslationProjectRow["meta"],
+): string => {
+  if (!meta) return JSON.stringify({});
+  if (typeof meta === "string") return meta;
+  return JSON.stringify(meta);
+};
+
+function mapProjectRow(row: TranslationProjectRow): ProjectOverview {
+  const meta = parseProjectMeta(row.meta);
 
   const authorName = row.author_name ?? meta.author ?? null;
   if (authorName !== null && authorName !== undefined) {
@@ -893,22 +1217,7 @@ function mapProjectRow(row: any) {
     meta.translator = row.translator_name;
   }
 
-  let userConsent: Record<string, any> | null = null;
-  if (row.user_consent) {
-    if (typeof row.user_consent === "object") {
-      userConsent = row.user_consent as Record<string, any>;
-    } else if (typeof row.user_consent === "string") {
-      try {
-        const parsed = JSON.parse(row.user_consent) as Record<string, any>;
-        userConsent = parsed;
-      } catch (error) {
-        app.log?.warn?.(
-          { error, userConsent: row.user_consent },
-          "[PROJECT] Failed to parse project user_consent field",
-        );
-      }
-    }
-  }
+  const userConsent = parseProjectUserConsent(row.user_consent);
 
   return {
     project_id: row.project_id,
@@ -936,7 +1245,7 @@ const trimOrNull = (value: unknown): string | null => {
   return trimmed.length ? trimmed : null;
 };
 
-const serializeUserConsent = (value: any): string => {
+const serializeUserConsent = (value: ProjectUserConsent | string | null | undefined): string => {
   if (value === null || value === undefined) {
     return JSON.stringify({});
   }
@@ -946,7 +1255,10 @@ const serializeUserConsent = (value: any): string => {
   try {
     return JSON.stringify(value);
   } catch (error) {
-    app.log?.warn?.({ error, value }, "[PROJECT] Failed to serialize user_consent");
+    app.log?.warn?.(
+      { error, value },
+      "[PROJECT] Failed to serialize user_consent",
+    );
     return JSON.stringify({});
   }
 };
@@ -957,7 +1269,7 @@ async function getUserDisplayName(userId: string): Promise<string | null> {
       `SELECT first_name FROM users WHERE user_id = $1 LIMIT 1`,
       [userId],
     );
-    const name = rows?.[0]?.name;
+    const name = rows?.[0]?.first_name ?? rows?.[0]?.name ?? null;
     return typeof name === "string" ? name.trim() : null;
   } catch (error) {
     app.log?.warn?.(
@@ -972,7 +1284,13 @@ async function getUserDisplayName(userId: string): Promise<string | null> {
 app.get("/api/auth/google/callback", async (req, reply) => {
   try {
     const { token } = await (
-      app as any
+      app as unknown as FastifyInstance & {
+        googleOAuth2: {
+          getAccessTokenFromAuthorizationCodeFlow(
+            request: FastifyRequest,
+          ): Promise<OAuth2AccessToken>;
+        };
+      }
     ).googleOAuth2.getAccessTokenFromAuthorizationCodeFlow(req);
     const userInfoRes = await fetch(
       "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -980,7 +1298,17 @@ app.get("/api/auth/google/callback", async (req, reply) => {
         headers: { Authorization: `Bearer ${token.access_token}` },
       },
     );
-    const userInfo = (await userInfoRes.json()) as any;
+    const rawUserInfo = (await userInfoRes.json()) as Partial<GoogleUserInfo>;
+    if (!rawUserInfo?.id || !rawUserInfo.email) {
+      throw new Error("Missing user information from Google OAuth response");
+    }
+    const userInfo: GoogleUserInfo = {
+      id: rawUserInfo.id,
+      email: rawUserInfo.email,
+      given_name: rawUserInfo.given_name ?? "",
+      family_name: rawUserInfo.family_name ?? "",
+      picture: rawUserInfo.picture,
+    };
 
     const upsert = await query(
       `INSERT INTO users (user_id, first_name, last_name, email, photo)
@@ -1011,19 +1339,24 @@ app.get("/api/auth/google/callback", async (req, reply) => {
       const redirectUrl = new URL(redirectTarget);
       redirectUrl.searchParams.set("jwt", jwtToken);
       reply.redirect(redirectUrl.toString());
-    } catch (err) {
-      app.log.error({ err, redirectTarget }, "[AUTH] Invalid redirect target");
+    } catch (error) {
+      app.log.error(
+        { error, redirectTarget },
+        "[AUTH] Invalid redirect target",
+      );
       reply.redirect("/oauth-error?reason=bad_redirect");
     }
-  } catch (e: any) {
-    reply.status(500).send({ error: "OAuth callback failed: " + e.message });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "OAuth callback failed";
+    reply.status(500).send({ error: `OAuth callback failed: ${message}` });
   }
 });
 
 // Get current user info from JWT
 app.get("/api/auth/me", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   try {
     const authHeader = req.headers.authorization;
@@ -1039,6 +1372,9 @@ app.get("/api/auth/me", async (req, reply) => {
     };
 
     const userIdToLookup = decoded.user_id || decoded.userId;
+    if (!userIdToLookup) {
+      return reply.status(401).send({ error: "Invalid token" });
+    }
 
     const { rows } = await query(
       "SELECT user_id, first_name, last_name, nick_name, email, photo FROM users WHERE user_id = $1",
@@ -1066,9 +1402,10 @@ app.get("/api/auth/me", async (req, reply) => {
 // Projects CRUD
 app.get("/api/projects", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   try {
     const { rows } = await query(
@@ -1088,9 +1425,10 @@ app.get("/api/projects", async (req, reply) => {
 
 app.get("/api/user/preferences", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   try {
     const { rows } = await query(
@@ -1108,20 +1446,21 @@ app.get("/api/user/preferences", async (req, reply) => {
 
 app.put("/api/user/preferences", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
-  const body = req.body as { preferred_language?: string | null } | undefined;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
+  const body = ((req.body ?? {}) as { preferred_language?: string | null });
   const preferredLanguage =
     typeof body?.preferred_language === "string"
       ? body.preferred_language.trim() || null
       : null;
 
   try {
-    await query(
-      `UPDATE users SET preferred_language = $1 WHERE user_id = $2`,
-      [preferredLanguage, userId],
-    );
+    await query(`UPDATE users SET preferred_language = $1 WHERE user_id = $2`, [
+      preferredLanguage,
+      userId,
+    ]);
 
     reply.send({ ok: true, preferred_language: preferredLanguage });
   } catch (error) {
@@ -1132,9 +1471,10 @@ app.put("/api/user/preferences", async (req, reply) => {
 
 app.get("/api/projects/latest", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   try {
     const { rows } = await query(
@@ -1155,10 +1495,11 @@ app.get("/api/projects/latest", async (req, reply) => {
 
 app.get("/api/projects/:projectId", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   try {
     const { rows } = await query(
@@ -1182,23 +1523,11 @@ app.get("/api/projects/:projectId", async (req, reply) => {
 
 app.post("/api/projects", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
-  const body = req.body as Partial<{
-    title: string;
-    description: string;
-    intention: string;
-    book_title: string;
-    author_name: string;
-    translator_name: string;
-    memo: string;
-    meta: any;
-    user_consent: any;
-    status: string;
-    origin_lang: string;
-    target_lang: string;
-  }>;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
+  const body = ((req.body ?? {}) as ProjectCreationPayload);
 
   const requestedTitle = trimOrNull(body?.title);
 
@@ -1230,7 +1559,7 @@ app.post("/api/projects", async (req, reply) => {
         authorName,
         translatorName,
         body.memo ?? "",
-        JSON.stringify(body.meta ?? {}),
+        stringifyProjectMeta(body.meta ?? null),
         serializeUserConsent(body.user_consent),
         body.status ?? "active",
         body.origin_lang ?? "Korean",
@@ -1252,24 +1581,12 @@ app.post("/api/projects", async (req, reply) => {
 
 app.put("/api/projects/:projectId", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const userId = (req as any).user_id;
-  const body = req.body as Partial<{
-    title: string;
-    description: string;
-    intention: string;
-    book_title: string;
-    author_name: string;
-    translator_name: string;
-    memo: string;
-    meta: any;
-    user_consent: any;
-    status: string;
-    origin_lang: string;
-    target_lang: string;
-  }>;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
+  const body = ((req.body ?? {}) as ProjectCreationPayload);
 
   try {
     const existing = await query(
@@ -1285,27 +1602,8 @@ app.put("/api/projects/:projectId", async (req, reply) => {
     }
 
     const current = existing.rows[0];
-    const currentMeta = (() => {
-      if (!current.meta) return {} as Record<string, any>;
-      if (typeof current.meta === "object")
-        return current.meta as Record<string, any>;
-      try {
-        return JSON.parse(current.meta as string);
-      } catch (err) {
-        return {} as Record<string, any>;
-      }
-    })();
-
-    const currentUserConsent = (() => {
-      if (!current.user_consent) return {} as Record<string, any>;
-      if (typeof current.user_consent === "object")
-        return current.user_consent as Record<string, any>;
-      try {
-        return JSON.parse(current.user_consent as string);
-      } catch (err) {
-        return {} as Record<string, any>;
-      }
-    })();
+    const currentMeta = parseProjectMeta(current.meta);
+    const currentUserConsent = parseProjectUserConsent(current.user_consent);
 
     const currentBookTitle = current.book_title ?? current.title ?? null;
     const currentAuthorName = current.author_name ?? currentMeta.author ?? null;
@@ -1334,6 +1632,8 @@ app.put("/api/projects/:projectId", async (req, reply) => {
       nextTranslatorName = await getUserDisplayName(userId);
     }
 
+    const nextMetaPayload =
+      body.meta !== undefined ? body.meta : current.meta ?? currentMeta;
     const { rows } = await query(
       `UPDATE translationprojects
          SET title = $1,
@@ -1359,8 +1659,10 @@ app.put("/api/projects/:projectId", async (req, reply) => {
         nextAuthorName,
         nextTranslatorName,
         body.memo ?? current.memo,
-        JSON.stringify(body.meta ?? currentMeta ?? {}),
-        serializeUserConsent(body.user_consent ?? currentUserConsent ?? {}),
+        stringifyProjectMeta(nextMetaPayload),
+        serializeUserConsent(
+          body.user_consent ?? current.user_consent ?? currentUserConsent ?? {},
+        ),
         body.status ?? current.status,
         body.origin_lang ?? current.origin_lang,
         body.target_lang ?? current.target_lang,
@@ -1405,10 +1707,10 @@ const getFieldValue = (
 
 app.put("/api/projects/:projectId/origin", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const userId = (req as any).user_id as string | undefined;
+  const userId = getRequestUserId(req) ?? undefined;
 
   const now = new Date();
 
@@ -1526,18 +1828,18 @@ app.put("/api/projects/:projectId/origin", async (req, reply) => {
           filename,
           mimeType: filePart.mimetype,
         });
-      } catch (err: any) {
-        if (err instanceof OriginFileTooLargeError) {
-          return reply.status(413).send({ error: err.message });
+      } catch (error) {
+        if (error instanceof OriginFileTooLargeError) {
+          return reply.status(413).send({ error: error.message });
         }
-        if (err instanceof UnsupportedOriginFileError) {
-          return reply.status(400).send({ error: err.message });
+        if (error instanceof UnsupportedOriginFileError) {
+          return reply.status(400).send({ error: error.message });
         }
-        app.log.error({ err, projectId }, "[ORIGIN] File extraction failed");
+        app.log.error({ error, projectId }, "[ORIGIN] File extraction failed");
         return reply.status(500).send({
           error:
-            err instanceof Error
-              ? err.message
+            error instanceof Error
+              ? error.message
               : "Failed to extract text from uploaded file",
         });
       }
@@ -1569,8 +1871,11 @@ app.put("/api/projects/:projectId/origin", async (req, reply) => {
             },
           },
         });
-      } catch (error: any) {
-        if (error.message === "content cannot be empty") {
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "content cannot be empty"
+        ) {
           return reply
             .status(400)
             .send({ error: "No textual content was extracted from the file" });
@@ -1641,8 +1946,8 @@ app.put("/api/projects/:projectId/origin", async (req, reply) => {
         },
       },
     });
-  } catch (error: any) {
-    if (error.message === "content cannot be empty") {
+  } catch (error) {
+    if (error instanceof Error && error.message === "content cannot be empty") {
       return reply.status(400).send({ error: "content cannot be empty" });
     }
     app.log.error(
@@ -1660,11 +1965,11 @@ app.put("/api/projects/:projectId/origin", async (req, reply) => {
 
 app.put("/api/projects/:projectId/translation", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const body = req.body as { content?: string; jobId?: string };
-  const userId = (req as any).user_id as string | undefined;
+  const body = ((req.body ?? {}) as { content?: string; jobId?: string });
+  const userId = getRequestUserId(req) ?? undefined;
 
   if (typeof body?.content !== "string") {
     return reply
@@ -1676,7 +1981,9 @@ app.put("/api/projects/:projectId/translation", async (req, reply) => {
   const content = body.content as string;
   const normalizedContent = content.replace(/\r\n?/g, "\n");
   try {
-    const filter: any = { project_id: projectId };
+    const filter: { project_id: string; job_id?: string } = {
+      project_id: projectId,
+    };
     if (body?.jobId) {
       filter.job_id = body.jobId;
     }
@@ -1866,7 +2173,7 @@ app.put("/api/projects/:projectId/translation", async (req, reply) => {
         translated_content: updatedTranslation,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     app.log.error(
       error,
       `[TRANSLATION] Failed to update translation for project ${projectId}`,
@@ -1879,13 +2186,13 @@ app.get(
   "/api/projects/:projectId/translation/:translationFileId/segments",
   async (req, reply) => {
     await requireAuthAndPlanCheck(req, reply);
-    if ((reply as any).sent) return;
+    if (reply.sent) return;
 
     const { projectId, translationFileId } = req.params as {
       projectId: string;
       translationFileId: string;
     };
-    const userId = (req as any).user_id as string | undefined;
+    const userId = getRequestUserId(req) ?? undefined;
 
     try {
       if (userId) {
@@ -1928,12 +2235,12 @@ app.get(
   },
 );
 
-
 app.get("/api/jobs", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
   const { projectId, status, limit } = (req.query ?? {}) as {
     projectId?: string;
     status?: string;
@@ -1942,7 +2249,7 @@ app.get("/api/jobs", async (req, reply) => {
 
   try {
     const filters: string[] = ["j.user_id = $1"];
-    const params: any[] = [userId];
+    const params: Array<string | number> = [userId];
 
     if (projectId) {
       params.push(projectId);
@@ -1983,9 +2290,10 @@ app.get("/api/jobs", async (req, reply) => {
 
 app.get("/api/jobs/:jobId", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
   const { jobId } = req.params as { jobId: string };
 
   try {
@@ -2011,12 +2319,11 @@ app.get("/api/jobs/:jobId", async (req, reply) => {
   }
 });
 
-
 // List all translation batches for a job (progress/status)
 app.get("/api/jobs/:jobId/batches", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
-  const { jobId } = req.params as any;
+  if (reply.sent) return;
+  const { jobId } = req.params as { jobId: string };
   // Get all batches for this job from PostgreSQL
   const { rows } = await query(
     "SELECT id, batch_index, status, started_at, finished_at, error FROM translation_batches WHERE job_id = $1 ORDER BY batch_index",
@@ -2028,8 +2335,8 @@ app.get("/api/jobs/:jobId/batches", async (req, reply) => {
 // Fetch a single batch's details and result (from MongoDB)
 app.get("/api/batches/:batchId", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
-  const { batchId } = req.params as any;
+  if (reply.sent) return;
+  const { batchId } = req.params as { batchId: string };
   // Find batch metadata in PostgreSQL
   const { rows } = await query(
     "SELECT * FROM translation_batches WHERE id = $1",
@@ -2057,8 +2364,8 @@ app.get("/api/batches/:batchId", async (req, reply) => {
 // Retry failed batch
 app.post("/api/batches/:batchId/retry", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
-  const { batchId } = req.params as any;
+  if (reply.sent) return;
+  const { batchId } = req.params as { batchId: string };
 
   try {
     // Reset batch status to queued for retry
@@ -2082,7 +2389,7 @@ app.post("/api/batches/:batchId/retry", async (req, reply) => {
 
     console.log(`[RETRY] Reset batch ${batchId} for retry`);
     reply.send({ message: "Batch reset for retry", batch });
-  } catch (error: any) {
+  } catch (error) {
     console.error("[RETRY] Error resetting batch:", error);
     reply.status(500).send({ error: "Failed to reset batch for retry" });
   }
@@ -2093,16 +2400,11 @@ app.get("/api/health/postgres", async (req, reply) => {
   try {
     const result = await query("SELECT 1 as ok");
     reply.send({ postgres: result.rows[0].ok === 1 ? "ok" : "fail" });
-  } catch (e: any) {
-    reply.status(500).send({ error: e.message });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to query postgres";
+    reply.status(500).send({ error: message });
   }
-});
-
-// Instantiate OpenAI client BEFORE worker loop with timeout configuration
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "",
-  timeout: 60000, // 60 second timeout
-  maxRetries: 2,
 });
 
 // Enqueue helper
@@ -2251,9 +2553,13 @@ async function enqueueProfileAnalysisJob({
 
 app.post("/api/pipeline/analyze", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
-  const { documentId } = req.body as any;
-  const user_id = (req as any).user_id;
+  if (reply.sent) return;
+  const { documentId } = req.body as AnalyzePipelineBody;
+  const user_id = ensureUserId(req, reply);
+  if (!user_id) return;
+  if (!documentId) {
+    return reply.status(400).send({ error: "documentId is required" });
+  }
   const jobId = await enqueue({
     documentId,
     type: "analyze",
@@ -2265,7 +2571,7 @@ app.post("/api/pipeline/analyze", async (req, reply) => {
 // Accepts: { documentId, originalText, targetLang }
 app.post("/api/pipeline/translate", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
   const {
     documentId,
     originalText,
@@ -2276,8 +2582,9 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     updated_by,
     workflowLabel,
     workflowAllowParallel,
-  } = req.body as any;
-  const user_id = (req as any).user_id;
+  } = req.body as TranslatePipelineBody;
+  const user_id = ensureUserId(req, reply);
+  if (!user_id) return;
 
   if (!originalText || !documentId) {
     return reply
@@ -2287,7 +2594,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
 
   if (project_id) {
     let originPrepSnapshot;
-    let unmet: Array<'analysis' | 'notes'> = [];
+    let unmet: Array<"analysis" | "notes"> = [];
     try {
       const result = await ensureTranslationPrereqs(project_id);
       originPrepSnapshot = result.originPrep;
@@ -2304,7 +2611,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
 
     if (unmet.length) {
       return reply.status(409).send({
-        error: 'translation_prereq_incomplete',
+        error: "translation_prereq_incomplete",
         unmet,
         originPrep: originPrepSnapshot,
       });
@@ -2331,7 +2638,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       .send({ error: "원작을 분할하지 못했습니다. 내용을 확인해 주세요." });
   }
 
-  let projectMetadata: any = null;
+  let projectMetadata: ProjectMetadataRow | null = null;
   if (project_id) {
     try {
       const { rows } = await query(
@@ -2428,12 +2735,12 @@ app.post("/api/pipeline/translate", async (req, reply) => {
 
   if (project_id && !originDocId) {
     try {
-      const latestOrigin = (await OriginFile.findOne({ project_id })
+      const latestOrigin = await OriginFile.findOne({ project_id })
         .sort({ updated_at: -1 })
         .select({ _id: 1 })
-        .lean()) as { _id?: unknown } | null;
+        .lean<{ _id?: string }>();
       if (latestOrigin?._id) {
-        originDocId = String(latestOrigin._id as any);
+        originDocId = latestOrigin._id;
       }
     } catch (err) {
       app.log.warn(
@@ -2449,9 +2756,9 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       type: "translate",
       user_id,
       project_id,
-      created_by,
-      updated_at,
-      updated_by,
+      created_by: created_by ?? undefined,
+      updated_at: updated_at ?? undefined,
+      updated_by: updated_by ?? undefined,
       workflow_run_id: workflowRun?.runId ?? null,
     });
 
@@ -2504,7 +2811,8 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   const projectTitle =
     projectMetadata?.book_title ?? projectMetadata?.title ?? null;
   const authorName = projectMetadata?.author_name ?? null;
-  const synopsis = projectMetadata?.description ?? projectMetadata?.memo ?? null;
+  const synopsis =
+    projectMetadata?.description ?? projectMetadata?.memo ?? null;
 
   try {
     await query(
@@ -2568,121 +2876,111 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   });
 });
 
-app.post(
-  "/api/projects/:projectId/origin/reanalyze",
-  async (req, reply) => {
-    await requireAuthAndPlanCheck(req, reply);
-    if ((reply as any).sent) return;
+app.post("/api/projects/:projectId/origin/reanalyze", async (req, reply) => {
+  await requireAuthAndPlanCheck(req, reply);
+  if (reply.sent) return;
 
-    const { projectId } = req.params as { projectId: string };
-    const userId = (req as any).user_id as string | undefined;
-    if (!projectId || !userId) {
-      return reply.status(400).send({ error: "Invalid request" });
+  const { projectId } = req.params as { projectId: string };
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
+  if (!projectId) {
+    return reply.status(400).send({ error: "Invalid request" });
+  }
+
+  try {
+    const { rows } = await query(
+      `SELECT 1 FROM translationprojects WHERE project_id = $1 AND user_id = $2 LIMIT 1`,
+      [projectId, userId],
+    );
+    if (!rows.length) {
+      return reply.status(404).send({ error: "Project not found" });
     }
+  } catch (error) {
+    req.log.error(
+      { err: error, projectId },
+      "[PROFILE] Failed to validate project access",
+    );
+    return reply.status(500).send({ error: "Failed to validate project" });
+  }
 
-    try {
-      const { rows } = await query(
-        `SELECT 1 FROM translationprojects WHERE project_id = $1 AND user_id = $2 LIMIT 1`,
-        [projectId, userId],
-      );
-      if (!rows.length) {
-        return reply.status(404).send({ error: "Project not found" });
-      }
-    } catch (error) {
-      req.log.error(
-        { err: error, projectId },
-        "[PROFILE] Failed to validate project access",
-      );
-      return reply.status(500).send({ error: "Failed to validate project" });
+  let hasQueuedOriginJob = false;
+  try {
+    const { rows } = await query(
+      `SELECT document_id FROM jobs WHERE project_id = $1 AND type = 'profile' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 10`,
+      [projectId],
+    );
+    hasQueuedOriginJob = rows.some((row) => {
+      const payloadRaw = row?.document_id;
+      if (typeof payloadRaw !== "string") return false;
+      const payload = parseProfileJobPayload(payloadRaw);
+      return payload?.variant === "origin";
+    });
+  } catch (error) {
+    req.log.warn(
+      { err: error, projectId },
+      "[PROFILE] Failed to inspect queued origin jobs",
+    );
+  }
+
+  if (hasQueuedOriginJob) {
+    return reply.status(409).send({ error: "origin_analysis_in_progress" });
+  }
+
+  let originDocId: string | null = null;
+  try {
+    const originDoc = await OriginFile.findOne({ project_id: projectId })
+      .sort({ updated_at: -1 })
+      .lean<{ _id?: string }>()
+      .exec();
+    if (!originDoc) {
+      return reply.status(404).send({ error: "Origin manuscript not found" });
     }
+    originDocId =
+      typeof originDoc._id !== "undefined" ? String(originDoc._id) : null;
+  } catch (error) {
+    req.log.error(
+      { err: error, projectId },
+      "[PROFILE] Failed to load origin document",
+    );
+    return reply.status(500).send({ error: "Failed to load origin document" });
+  }
 
-    let hasQueuedOriginJob = false;
-    try {
-      const { rows } = await query(
-        `SELECT document_id FROM jobs WHERE project_id = $1 AND type = 'profile' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 10`,
-        [projectId],
-      );
-      hasQueuedOriginJob = rows.some((row) => {
-        const payloadRaw = row?.document_id;
-        if (typeof payloadRaw !== "string") return false;
-        const payload = parseProfileJobPayload(payloadRaw);
-        return payload?.variant === "origin";
-      });
-    } catch (error) {
-      req.log.warn(
-        { err: error, projectId },
-        "[PROFILE] Failed to inspect queued origin jobs",
-      );
-    }
+  try {
+    const jobId = await enqueueProfileAnalysisJob({
+      projectId,
+      userId,
+      payload: {
+        variant: "origin",
+        originFileId: originDocId ?? undefined,
+        triggeredBy: "manual-refresh",
+      },
+    });
 
-    if (hasQueuedOriginJob) {
-      return reply
-        .status(409)
-        .send({ error: "origin_analysis_in_progress" });
-    }
-
-    let originDocId: string | null = null;
-    try {
-      const originDoc = (await OriginFile.findOne({ project_id: projectId })
-        .sort({ updated_at: -1 })
-        .lean()
-        .exec()) as { _id?: unknown } | null;
-      if (!originDoc) {
-        return reply
-          .status(404)
-          .send({ error: "Origin manuscript not found" });
-      }
-      originDocId =
-        originDoc && typeof originDoc._id !== "undefined"
-          ? String(originDoc._id)
-          : null;
-    } catch (error) {
-      req.log.error(
-        { err: error, projectId },
-        "[PROFILE] Failed to load origin document",
-      );
-      return reply
-        .status(500)
-        .send({ error: "Failed to load origin document" });
-    }
-
-    try {
-      const jobId = await enqueueProfileAnalysisJob({
-        projectId,
-        userId,
-        payload: {
-          variant: "origin",
-          originFileId: originDocId ?? undefined,
-          triggeredBy: "manual-refresh",
-        },
-      });
-
-      return reply.send({ jobId });
-    } catch (error) {
-      req.log.error(
-        { err: error, projectId },
-        "[PROFILE] Failed to enqueue origin profile job",
-      );
-      return reply
-        .status(500)
-        .send({ error: "Failed to enqueue origin analysis" });
-    }
-  },
-);
+    return reply.send({ jobId });
+  } catch (error) {
+    req.log.error(
+      { err: error, projectId },
+      "[PROFILE] Failed to enqueue origin profile job",
+    );
+    return reply
+      .status(500)
+      .send({ error: "Failed to enqueue origin analysis" });
+  }
+});
 
 app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const body = req.body as {
+  const body = ((req.body ?? {}) as {
     jobId?: string | null;
     workflowRunId?: string | null;
     reason?: string | null;
-  };
-  const userId = (req as any).user_id as string | undefined;
-
-  if (!projectId || !userId) {
+  });
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
+  if (!projectId) {
     return reply.status(400).send({ error: "Invalid cancellation request" });
   }
 
@@ -2697,7 +2995,10 @@ app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
       return reply.status(404).send({ error: "Project not found" });
     }
   } catch (error) {
-    req.log.error({ err: error, projectId }, "[TRANSLATION] Failed to validate project ownership");
+    req.log.error(
+      { err: error, projectId },
+      "[TRANSLATION] Failed to validate project ownership",
+    );
     return reply.status(500).send({ error: "Failed to validate project" });
   }
 
@@ -2738,9 +3039,7 @@ app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
   }
 
   if (!jobRow) {
-    return reply
-      .status(404)
-      .send({ error: "No active translation job found" });
+    return reply.status(404).send({ error: "No active translation job found" });
   }
 
   try {
@@ -2784,10 +3083,12 @@ app.post("/api/projects/:projectId/translation/cancel", async (req, reply) => {
 
 app.post("/api/ebook/generate", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
-  const { projectId, translationFileId, format, jobId } = req.body as any;
-  const userId = (req as any).user_id;
+  const { projectId, translationFileId, format, jobId } =
+    req.body as EbookGenerationBody;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   if (!projectId) {
     return reply.status(400).send({ error: "projectId is required" });
@@ -2805,18 +3106,7 @@ app.post("/api/ebook/generate", async (req, reply) => {
     return reply.status(404).send({ error: "Project not found" });
   }
 
-  let projectMeta: Record<string, any> = {};
-  if (projectRow.meta) {
-    if (typeof projectRow.meta === "string") {
-      try {
-        projectMeta = JSON.parse(projectRow.meta);
-      } catch (error) {
-        projectMeta = {};
-      }
-    } else if (typeof projectRow.meta === "object") {
-      projectMeta = projectRow.meta as Record<string, any>;
-    }
-  }
+  const projectMeta = parseProjectMeta(projectRow.meta);
 
   if (!translationFileId) {
     const recommendation = await findBestTranslationForProject(projectId);
@@ -3155,10 +3445,11 @@ app.post("/api/ebook/generate", async (req, reply) => {
 
 app.get("/api/usage/:projectId", async (req, reply) => {
   await requireAuthAndPlanCheck(req, reply);
-  if ((reply as any).sent) return;
+  if (reply.sent) return;
 
   const { projectId } = req.params as { projectId: string };
-  const userId = (req as any).user_id;
+  const userId = ensureUserId(req, reply);
+  if (!userId) return;
 
   const { rows: projectRows } = await query(
     `SELECT project_id FROM translationprojects WHERE project_id = $1 AND user_id = $2 LIMIT 1`,
@@ -3210,7 +3501,7 @@ app.get("/api/usage/:projectId", async (req, reply) => {
       totalCost: Number(totalsRow?.total_cost ?? 0),
       updatedAt: totalsRow?.updated_at ?? null,
     },
-    jobs: jobsRes.rows.map((row: any) => ({
+    jobs: jobsRes.rows.map((row) => ({
       jobId: row.job_id,
       inputTokens: Number(row.input_tokens ?? 0),
       outputTokens: Number(row.output_tokens ?? 0),
@@ -3218,7 +3509,7 @@ app.get("/api/usage/:projectId", async (req, reply) => {
       firstEventAt: row.first_event,
       lastEventAt: row.last_event,
     })),
-    eventsByType: typeRes.rows.map((row: any) => ({
+    eventsByType: typeRes.rows.map((row) => ({
       eventType: row.event_type,
       inputTokens: Number(row.input_tokens ?? 0),
       outputTokens: Number(row.output_tokens ?? 0),
@@ -3441,9 +3732,9 @@ function startProfileWorker() {
         "UPDATE jobs SET status = $1, finished_at = now(), updated_at = now(), last_error = NULL WHERE id = $2",
         ["done", job.id],
       );
-    } catch (error: any) {
+    } catch (error) {
       const message =
-        typeof error?.message === "string" ? error.message : String(error);
+        error instanceof Error ? error.message : String(error);
       if (job?.id) {
         try {
           await client.query(
@@ -3495,9 +3786,9 @@ function startCoverWorker() {
       }
 
       await coverService.processCoverJob(job.id, payload, job.user_id ?? null);
-    } catch (error: any) {
+    } catch (error) {
       const message =
-        typeof error?.message === "string" ? error.message : String(error);
+        error instanceof Error ? error.message : String(error);
       app.log.error({ err: error, jobId: job?.id }, "[COVER] Job failed");
       if (job?.id) {
         try {
@@ -3530,11 +3821,13 @@ async function failWorkflowRunSafe(
 ) {
   if (!workflowRunId) return;
   try {
-    await failWorkflowRun(workflowRunId, { error: errorMessage ?? 'translation_v2_failed' });
+    await failWorkflowRun(workflowRunId, {
+      error: errorMessage ?? "translation_v2_failed",
+    });
   } catch (error) {
     app.log.warn(
       { err: error, runId: workflowRunId },
-      '[TRANSLATE] Failed to mark workflow run failure (v2)',
+      "[TRANSLATE] Failed to mark workflow run failure (v2)",
     );
   }
 }
@@ -3549,8 +3842,21 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
 
   const startedAt = Date.now();
   let failureReason: string | null = null;
+  let activeStage: string | null = null;
+  const runId = translationRunId(data.jobId);
 
   try {
+    activeStage = "draft";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      status: "in_progress",
+      label: "Draft",
+      chunkId: `draft:${data.jobId}`,
+    });
+    const draftStageStartedAt = Date.now();
     const draftResult = await runDraftStageWithAdaptiveRetries(
       {
         projectId: data.projectId,
@@ -3565,12 +3871,39 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         authorName: data.authorName ?? null,
         synopsis: data.synopsis ?? null,
         register: data.register ?? null,
-        model: process.env.TRANSLATION_DRAFT_MODEL_V2 ?? 'gpt-5',
+        model: process.env.TRANSLATION_DRAFT_MODEL_V2 ?? "gpt-5",
         deliberationModel:
-          process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2 ?? 'gpt-5-mini',
+          process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2 ?? "gpt-5-mini",
       },
       data.originSegments,
     );
+    const draftDuration = Date.now() - draftStageStartedAt;
+    const draftSegmentTexts = extractDraftSegmentTexts(draftResult.segments);
+    const { envelope: draftEnvelope, itemCount: draftItemCount } =
+      buildTranslationEnvelope({
+        runId,
+        stage: "draft",
+        jobId: data.jobId,
+        model: draftResult.model,
+        mergedText: draftResult.mergedText,
+        originSegments: data.originSegments,
+        segmentTexts: draftSegmentTexts,
+        usage: draftResult.usage,
+        meta: {
+          truncated: draftResult.meta.truncated,
+          retryCount: draftResult.meta.retryCount,
+          fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+          jsonRepairApplied: draftResult.meta.jsonRepairApplied,
+        },
+        latencyMs: draftDuration,
+      });
+    emitTranslationPage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      envelope: draftEnvelope,
+    });
 
     if (await isJobCancelled(data.jobId)) {
       return;
@@ -3597,33 +3930,36 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     await recordTokenUsage(app.log, {
       project_id: data.projectId,
       job_id: data.jobId,
-      event_type: 'translate_v2_draft',
+      event_type: "translate_v2_draft",
       model: draftResult.model,
       input_tokens: draftResult.usage.inputTokens,
       output_tokens: draftResult.usage.outputTokens,
       duration_ms: Date.now() - startedAt,
       metadata: {
-        stage: 'draft',
+        stage: "draft",
         verbosity: draftResult.meta.verbosity,
         reasoningEffort: draftResult.meta.reasoningEffort,
         maxOutputTokens: draftResult.meta.maxOutputTokens,
         retryCount: draftResult.meta.retryCount,
         truncated: draftResult.meta.truncated,
         fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+        downshiftCount: draftResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: draftResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: draftResult.meta.cursorRetryCount ?? 0,
       },
     });
 
     if (draftResult.meta.truncated) {
-      failureReason = 'draft_truncated';
+      failureReason = "draft_truncated";
       app.log.warn(
         {
           jobId: data.jobId,
           projectId: data.projectId,
           maxOutputTokens: draftResult.meta.maxOutputTokens,
         },
-        '[TRANSLATION_V2] Draft output truncated; aborting job',
+        "[TRANSLATION_V2] Draft output truncated; aborting job",
       );
-      throw new Error('draft_truncated');
+      throw new Error("draft_truncated");
     }
 
     const stageJob: SequentialStageJob = {
@@ -3631,7 +3967,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
       sourceHash: data.sourceHash,
-      stage: 'draft',
+      stage: "draft",
       memoryVersion: 1,
       config: sequentialConfig,
       segmentBatch,
@@ -3642,7 +3978,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
 
     const stageResults: SequentialStageResult[] = draftResult.segments.map(
       (segment) => ({
-        stage: 'draft',
+        stage: "draft",
         segmentId: segment.segment_id,
         textTarget: segment.translation_segment,
         notes: segment.notes,
@@ -3671,6 +4007,28 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       `[TRANSLATION_V2] Draft stage completed for job ${data.jobId}`,
     );
 
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      status: "done",
+      label: "Draft",
+      itemCount: draftItemCount,
+      chunkId: `draft:${data.jobId}`,
+    });
+    activeStage = null;
+
+    activeStage = "revise";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      status: "in_progress",
+      label: "Revise",
+      chunkId: `revise:${data.jobId}`,
+    });
     const reviseStartedAt = Date.now();
     const revisionResult = await generateTranslationRevision({
       projectId: data.projectId,
@@ -3680,7 +4038,9 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       draftSegments: draftResult.segments,
       translationNotes: data.translationNotes ?? null,
       maxOutputTokens: computeMaxOutputTokensForTexts(
-        draftResult.segments.map((segment) => segment.translation_segment ?? ''),
+        draftResult.segments.map(
+          (segment) => segment.translation_segment ?? "",
+        ),
         REVISE_TOKEN_BUDGET_FACTOR,
         DEFAULT_REVISE_MAX_OUTPUT_TOKENS,
         REVISE_MAX_OUTPUT_TOKENS_CAP,
@@ -3694,33 +4054,66 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     await recordTokenUsage(app.log, {
       project_id: data.projectId,
       job_id: data.jobId,
-      event_type: 'translate_v2_revise',
+      event_type: "translate_v2_revise",
       model: revisionResult.model,
       input_tokens: revisionResult.usage.inputTokens,
       output_tokens: revisionResult.usage.outputTokens,
       duration_ms: Date.now() - reviseStartedAt,
       metadata: {
-        stage: 'revise',
+        stage: "revise",
         verbosity: revisionResult.meta.verbosity,
         reasoningEffort: revisionResult.meta.reasoningEffort,
         maxOutputTokens: revisionResult.meta.maxOutputTokens,
         retryCount: revisionResult.meta.retryCount,
         truncated: revisionResult.meta.truncated,
         fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+        downshiftCount: revisionResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: revisionResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: revisionResult.meta.cursorRetryCount ?? 0,
       },
     });
 
+    const reviseDuration = Date.now() - reviseStartedAt;
+    const reviseSegmentTexts = extractReviseSegmentTexts(
+      revisionResult.segments,
+    );
+    const { envelope: reviseEnvelope, itemCount: reviseItemCount } =
+      buildTranslationEnvelope({
+        runId,
+        stage: "revise",
+        jobId: data.jobId,
+        model: revisionResult.model,
+        mergedText: revisionResult.mergedText,
+        originSegments: data.originSegments,
+        segmentTexts: reviseSegmentTexts,
+        usage: revisionResult.usage,
+        meta: {
+          truncated: revisionResult.meta.truncated,
+          retryCount: revisionResult.meta.retryCount,
+          fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+          jsonRepairApplied: revisionResult.meta.jsonRepairApplied,
+        },
+        latencyMs: reviseDuration,
+      });
+    emitTranslationPage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      envelope: reviseEnvelope,
+    });
+
     if (revisionResult.meta.truncated) {
-      failureReason = 'revise_truncated';
+      failureReason = "revise_truncated";
       app.log.warn(
         {
           jobId: data.jobId,
           projectId: data.projectId,
           maxOutputTokens: revisionResult.meta.maxOutputTokens,
         },
-        '[TRANSLATION_V2] Revise output truncated; aborting job',
+        "[TRANSLATION_V2] Revise output truncated; aborting job",
       );
-      throw new Error('revise_truncated');
+      throw new Error("revise_truncated");
     }
 
     const reviseStageJob: SequentialStageJob = {
@@ -3728,7 +4121,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
       sourceHash: data.sourceHash,
-      stage: 'revise',
+      stage: "revise",
       memoryVersion: 1,
       config: sequentialConfig,
       segmentBatch,
@@ -3737,9 +4130,9 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       translationNotes: data.translationNotes ?? undefined,
     };
 
-    const reviseStageResults: SequentialStageResult[] = revisionResult.segments.map(
-      (segment) => ({
-        stage: 'revise',
+    const reviseStageResults: SequentialStageResult[] =
+      revisionResult.segments.map((segment) => ({
+        stage: "revise",
         segmentId: segment.segment_id,
         textTarget: segment.revised_segment,
         spanPairs: segment.span_pairs?.map((pair) => ({
@@ -3752,8 +4145,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         notes: {
           meta: revisionResult.meta,
         },
-      }),
-    );
+      }));
 
     await persistStageResults(reviseStageJob, reviseStageResults);
 
@@ -3761,9 +4153,32 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       `[TRANSLATION_V2] Revise stage completed for job ${data.jobId}`,
     );
 
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      status: "done",
+      label: "Revise",
+      itemCount: reviseItemCount,
+      chunkId: `revise:${data.jobId}`,
+    });
+    activeStage = null;
+
     if (await isJobCancelled(data.jobId)) {
       return;
     }
+
+    activeStage = "micro-check";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "micro-check",
+      status: "in_progress",
+      label: "Micro-check",
+      chunkId: `micro-check:${data.jobId}`,
+    });
 
     const microCheckResult = runMicroChecks({
       originSegments: data.originSegments,
@@ -3775,7 +4190,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
       sourceHash: data.sourceHash,
-      stage: 'micro-check',
+      stage: "micro-check",
       memoryVersion: 1,
       config: sequentialConfig,
       segmentBatch,
@@ -3784,21 +4199,31 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       translationNotes: data.translationNotes ?? undefined,
     };
 
-    const microStageResults: SequentialStageResult[] = microCheckResult.segments.map(
-      (segment) => ({
-        stage: 'micro-check',
+    const microStageResults: SequentialStageResult[] =
+      microCheckResult.segments.map((segment) => ({
+        stage: "micro-check",
         segmentId: segment.segmentId,
         textTarget: segment.textTarget,
         guards: segment.guards,
         notes: segment.notes,
-      }),
-    );
+      }));
 
     await persistStageResults(microStageJob, microStageResults);
 
     app.log.info(
       `[TRANSLATION_V2] Micro-check stage completed for job ${data.jobId} (violations: ${microCheckResult.violationCount})`,
     );
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "micro-check",
+      status: "done",
+      label: "Micro-check",
+      itemCount: microCheckResult.segments.length,
+      chunkId: `micro-check:${data.jobId}`,
+    });
+    activeStage = null;
 
     const finalText = revisionResult.mergedText;
     const originText = reconstructOriginText(data.originSegments);
@@ -3810,12 +4235,12 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       {
         project_id: data.projectId,
         job_id: data.jobId,
-        variant: 'final',
+        variant: "final",
         is_final: true,
         source_hash: data.sourceHash ?? null,
         synthesis_draft_ids: [],
         origin_filename: originFilename,
-        origin_file_size: Buffer.byteLength(originText, 'utf8'),
+        origin_file_size: Buffer.byteLength(originText, "utf8"),
         origin_content: originText,
         translated_content: finalText,
         batch_count: revisionResult.segments.length,
@@ -3829,7 +4254,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
 
     await TranslationSegment.deleteMany({
       translation_file_id: translationFile._id,
-      variant: 'final',
+      variant: "final",
     });
 
     const microMap = new Map(
@@ -3843,10 +4268,10 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
           project_id: data.projectId,
           translation_file_id: translationFile._id,
           job_id: data.jobId,
-          variant: 'final',
+          variant: "final",
           segment_id: segment.segment_id,
           segment_index: index,
-          origin_segment: data.originSegments[index]?.text ?? '',
+          origin_segment: data.originSegments[index]?.text ?? "",
           translation_segment: segment.revised_segment,
           source_draft_ids: [],
           synthesis_notes: {
@@ -3867,17 +4292,48 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       } catch (workflowError) {
         app.log.warn(
           { err: workflowError, runId: data.workflowRunId },
-          '[TRANSLATE] Failed to mark workflow run success (v2)',
+          "[TRANSLATE] Failed to mark workflow run success (v2)",
         );
       }
     }
+
+    emitTranslationComplete({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      translationFileId: translationFile?._id
+        ? translationFile._id.toString()
+        : null,
+      completedAt: new Date().toISOString(),
+    });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : 'Failed to run translation v2 job';
+      error instanceof Error
+        ? error.message
+        : "Failed to run translation v2 job";
     failureReason = message;
+    if (activeStage) {
+      emitTranslationStage({
+        projectId: data.projectId,
+        jobId: data.jobId,
+        runId,
+        stage: activeStage,
+        status: "error",
+        message,
+      });
+    }
+    emitTranslationError({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      message,
+      stage: activeStage,
+      retryable: false,
+    });
+    activeStage = null;
     app.log.error(
       { err: error, jobId: data.jobId, projectId: data.projectId },
-      '[TRANSLATION_V2] Draft stage failed',
+      "[TRANSLATION_V2] Translation job failed",
     );
   }
 
@@ -3905,19 +4361,19 @@ async function clearStaleTranslationWorkflowRun(
 
   try {
     await failWorkflowRun(conflictRun.runId, {
-      error: 'auto_cleared_stale_translation_workflow',
+      error: "auto_cleared_stale_translation_workflow",
     });
     app.log.warn(
       {
         runId: conflictRun.runId,
         projectId,
       },
-      '[TRANSLATE] Cleared stale translation workflow run',
+      "[TRANSLATE] Cleared stale translation workflow run",
     );
   } catch (error) {
     app.log.warn(
       { err: error, runId: conflictRun.runId, projectId },
-      '[TRANSLATE] Failed to clear stale translation workflow run',
+      "[TRANSLATE] Failed to clear stale translation workflow run",
     );
     return false;
   }
@@ -3988,30 +4444,29 @@ async function logTranslationCancellation(params: {
     );
   } catch (error) {
     const code = (error as { code?: string } | null)?.code ?? null;
-    if (code === '42P01' || code === '42703') {
+    if (code === "42P01" || code === "42703") {
       app.log.warn(
         { err: error, jobId },
-        '[TRANSLATION] translation_cancellation_logs table or columns missing; please create it to record cancellations.',
+        "[TRANSLATION] translation_cancellation_logs table or columns missing; please create it to record cancellations.",
       );
     } else {
       app.log.warn(
         { err: error, jobId },
-        '[TRANSLATION] Failed to log translation cancellation',
+        "[TRANSLATION] Failed to log translation cancellation",
       );
     }
   }
 }
 
-
-async function buildJobsPayload(jobRows: any[]) {
+async function buildJobsPayload(jobRows: JobListRow[]) {
   if (!jobRows.length) {
     return [];
   }
 
-  const jobIds = jobRows.map((row: any) => row.id);
-  const batchMap: Record<string, any[]> = {};
+  const jobIds = jobRows.map((row) => row.id);
+  const batchMap: Record<string, TranslationBatchSummary[]> = {};
   const draftMap: Record<string, any[]> = {};
-  const translationMap = new Map<string, any>();
+  const translationMap = new Map<string, TranslationFileSummary>();
 
   const stageSummaryMap = new Map<
     string,
@@ -4088,8 +4543,8 @@ async function buildJobsPayload(jobRows: any[]) {
   );
 
   for (const row of stageRows) {
-    const jobId = row.job_id as string;
-    const stage = row.stage as string;
+    const jobId = row.job_id;
+    const stage = row.stage;
     const segmentCount = Number(row.segment_count ?? 0);
     const needsReviewCount = Number(row.needs_review_count ?? 0);
 
@@ -4106,14 +4561,10 @@ async function buildJobsPayload(jobRows: any[]) {
     }
 
     entry.stageCounts[stage] = segmentCount;
-    if (
-      stage === "literal" ||
-      stage === "draft" ||
-      entry.totalSegments === 0
-    ) {
+    if (stage === "draft" || entry.totalSegments === 0) {
       entry.totalSegments = segmentCount;
     }
-    if (stage === "qa" || stage === "micro-check") {
+    if (stage === "micro-check") {
       entry.needsReviewCount = needsReviewCount;
     }
   }
@@ -4125,15 +4576,15 @@ async function buildJobsPayload(jobRows: any[]) {
            FROM (
              SELECT job_id, jsonb_each_text(guards) AS kv
                FROM translation_drafts
-              WHERE job_id = ANY($1::text[]) AND stage IN ('qa','micro-check')
+          WHERE job_id = ANY($1::text[]) AND stage = 'micro-check'
            ) guard_values
           GROUP BY job_id, guard_key`,
     [jobIds],
   );
 
   for (const row of guardRows) {
-    const jobId = row.job_id as string;
-    const guardKey = row.guard_key as string;
+    const jobId = row.job_id;
+    const guardKey = row.guard_key ?? undefined;
     const failedCount = Number(row.failed_count ?? 0);
     if (!guardKey) continue;
     let entry = stageSummaryMap.get(jobId);
@@ -4158,16 +4609,16 @@ async function buildJobsPayload(jobRows: any[]) {
                 notes,
                 needs_review
            FROM translation_drafts
-          WHERE job_id = ANY($1::text[]) AND stage IN ('qa','micro-check') AND needs_review = true
+          WHERE job_id = ANY($1::text[]) AND stage = 'micro-check' AND needs_review = true
           ORDER BY segment_index ASC`,
     [jobIds],
   );
 
   for (const row of guardDetailRows) {
-    const jobId = row.job_id as string;
+    const jobId = row.job_id;
     const entry = stageSummaryMap.get(jobId);
     if (!entry) continue;
-    const notes = row.notes as Record<string, unknown> | null;
+    const notes = row.notes;
     const guardFindingsRaw = Array.isArray(notes?.guardFindings)
       ? (notes!.guardFindings as unknown[])
       : [];
@@ -4177,7 +4628,8 @@ async function buildJobsPayload(jobRows: any[]) {
           return null;
         }
         const record = finding as Record<string, unknown>;
-        const summary = typeof record.summary === "string" ? record.summary : null;
+        const summary =
+          typeof record.summary === "string" ? record.summary : null;
         if (!summary) return null;
         const mapped: Record<string, unknown> = {
           summary,
@@ -4197,13 +4649,13 @@ async function buildJobsPayload(jobRows: any[]) {
       })
       .filter((value): value is Record<string, unknown> => Boolean(value));
     const segmentId =
-      typeof row.segment_identifier === "string"
+      typeof row.segment_identifier === "string" && row.segment_identifier
         ? row.segment_identifier
         : `segment-${row.segment_index ?? 0}`;
     entry.flaggedSegments.push({
       segmentIndex: Number(row.segment_index ?? 0),
       segmentId,
-      guards: (row.guards as Record<string, unknown> | null) ?? null,
+      guards: row.guards ?? null,
       guardFindings,
     });
   }
@@ -4216,7 +4668,7 @@ async function buildJobsPayload(jobRows: any[]) {
     .lean();
 
   for (const tf of translationFiles) {
-    const summary = {
+    const summary: TranslationFileSummary = {
       id: String(tf._id),
       project_id: tf.project_id,
       job_id: tf.job_id,
@@ -4227,7 +4679,7 @@ async function buildJobsPayload(jobRows: any[]) {
     translationMap.set(tf.job_id, summary);
   }
 
-  return jobRows.map((row: any) => ({
+  return jobRows.map((row) => ({
     id: row.id,
     document_id: row.document_id,
     type: row.type,
@@ -4245,20 +4697,18 @@ async function buildJobsPayload(jobRows: any[]) {
   }));
 }
 
-function buildSequentialSummary(
-  entry?: {
-    stageCounts: Record<string, number>;
-    totalSegments: number;
-    needsReviewCount: number;
-    guardFailures: Record<string, number>;
-    flaggedSegments: Array<{
-      segmentIndex: number;
-      segmentId: string;
-      guards: Record<string, unknown> | null;
-      guardFindings: unknown;
-    }>;
-  },
-) {
+function buildSequentialSummary(entry?: {
+  stageCounts: Record<string, number>;
+  totalSegments: number;
+  needsReviewCount: number;
+  guardFailures: Record<string, number>;
+  flaggedSegments: Array<{
+    segmentIndex: number;
+    segmentId: string;
+    guards: Record<string, unknown> | null;
+    guardFindings: unknown;
+  }>;
+}) {
   if (!entry) {
     return null;
   }
@@ -4281,8 +4731,9 @@ function buildSequentialSummary(
   let currentStage: string | null = null;
   if (totalSegments > 0) {
     currentStage =
-      pipelineStages.find((stage) => (stageCounts[stage] ?? 0) < totalSegments) ??
-      pipelineStages[pipelineStages.length - 1];
+      pipelineStages.find(
+        (stage) => (stageCounts[stage] ?? 0) < totalSegments,
+      ) ?? pipelineStages[pipelineStages.length - 1];
   }
 
   return {
@@ -4350,7 +4801,11 @@ function buildMemorySeed(
     });
   }
 
-  const namedEntities: Array<{ name: string; targetName: string | null; type: string }> = [];
+  const namedEntities: Array<{
+    name: string;
+    targetName: string | null;
+    type: string;
+  }> = [];
   notes?.namedEntities?.forEach((entity) => {
     namedEntities.push({
       name: entity.name,
@@ -4397,7 +4852,9 @@ function buildMemorySeed(
       if (feature.target) {
         targetFeatures[key] = feature.target;
       }
-      registerTerm(feature.source, feature.target ?? undefined, { force: true });
+      registerTerm(feature.source, feature.target ?? undefined, {
+        force: true,
+      });
     });
     seed.linguistic_features = {
       source: sourceFeatures,
@@ -4421,41 +4878,41 @@ function buildMemorySeed(
 }
 
 // --- No-op SSE broadcasters (removed SSE support but keep function stubs) ---
-function broadcastJobProgress(_user_id: string, _jobData: any) {
+function broadcastJobProgress(_user_id: string, _jobData: unknown) {
   // SSE removed: keep as no-op to avoid changing worker logic
   app.log.debug("broadcastJobProgress called (SSE disabled)");
 }
 
-function broadcastBatchUpdate(_user_id: string, _batchData: any) {
+function broadcastBatchUpdate(_user_id: string, _batchData: unknown) {
   app.log.debug("broadcastBatchUpdate called (SSE disabled)");
 }
 
 interface TranslationRecommendation {
-  translation: any;
+  translation: LeanTranslationFile;
   score: number;
-  qualityAssessment?: any;
+  qualityAssessment?: LeanQualityAssessment | null;
 }
 
 async function findBestTranslationForProject(
   projectId: string,
 ): Promise<TranslationRecommendation | null> {
-  const translations = await TranslationFile.find({
+  const translations = (await TranslationFile.find({
     project_id: projectId,
     is_final: true,
   })
     .sort({ completed_at: -1 })
     .lean()
-    .exec();
+    .exec()) as LeanTranslationFile[];
 
   if (!translations?.length) return null;
 
-  const qualityDocs = await QualityAssessment.find({ projectId })
+  const qualityDocs = (await QualityAssessment.find({ projectId })
     .sort({ timestamp: -1 })
     .lean()
-    .exec();
+    .exec()) as LeanQualityAssessment[];
 
-  const qualityByJob = new Map<string, any>();
-  for (const qa of qualityDocs as any[]) {
+  const qualityByJob = new Map<string, LeanQualityAssessment>();
+  for (const qa of qualityDocs) {
     const jobId = qa.jobId || qa.job_id;
     if (jobId && !qualityByJob.has(jobId)) {
       qualityByJob.set(jobId, qa);
@@ -4464,7 +4921,7 @@ async function findBestTranslationForProject(
 
   let best: TranslationRecommendation | null = null;
 
-  for (const tf of translations as any[]) {
+  for (const tf of translations) {
     const jobId = tf.job_id || tf.jobId || null;
     const qa = (jobId && qualityByJob.get(jobId)) || qualityDocs[0] || null;
     const score = qa?.qualityResult?.overallScore ?? 0;
@@ -4519,7 +4976,7 @@ async function bootstrap() {
 
     const PORT = Number(process.env.PORT || 8080);
     await app.listen({ port: PORT, host: "0.0.0.0" });
-    
+
     const protocol = HTTPS_ENABLED ? "HTTPS" : "HTTP";
     app.log.info(`[STARTUP] ${protocol} Server started on port ${PORT}`);
   } catch (err) {

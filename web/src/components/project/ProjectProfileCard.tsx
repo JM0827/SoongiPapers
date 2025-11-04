@@ -195,7 +195,8 @@ const deriveDraft = (
   };
 };
 
-const buildMemoFromDraft = (draft: ProfileDraft) => draft.translatorNotes.trim();
+const buildMemoFromDraft = (draft: ProfileDraft) =>
+  draft.translatorNotes.trim();
 
 const sanitizeDraft = (draft: ProfileDraft): ProfileDraft => ({
   bookTitleKo: draft.bookTitleKo.trim(),
@@ -213,12 +214,11 @@ const sanitizeDraft = (draft: ProfileDraft): ProfileDraft => ({
 
 const computeStatusSnapshot = (draft: ProfileDraft): ProfileStatusSnapshot => {
   const sanitized = sanitizeDraft(draft);
-  const requiredFilled = (
+  const requiredFilled =
     sanitized.bookTitleKo.length > 0 &&
     sanitized.bookTitleEn.length > 0 &&
     sanitized.authorNameKo.length > 0 &&
-    sanitized.translatorName.length > 0
-  );
+    sanitized.translatorName.length > 0;
   return {
     consent: sanitized.copyrightConsent,
     requiredFilled,
@@ -270,7 +270,8 @@ const buildUserConsentRecord = (params: {
   } as UserConsentRecord;
 
   const version =
-    typeof historical.version === "number" && Number.isFinite(historical.version)
+    typeof historical.version === "number" &&
+    Number.isFinite(historical.version)
       ? historical.version
       : 1;
 
@@ -281,7 +282,9 @@ const buildUserConsentRecord = (params: {
       (typeof historical.userName === "string" ? historical.userName : null),
     originTitle:
       draft.bookTitleKo ||
-      (typeof historical.originTitle === "string" ? historical.originTitle : null),
+      (typeof historical.originTitle === "string"
+        ? historical.originTitle
+        : null),
     translatedTitle:
       draft.bookTitleEn ||
       (typeof historical.translatedTitle === "string"
@@ -289,7 +292,9 @@ const buildUserConsentRecord = (params: {
         : null),
     authorName:
       draft.authorNameKo ||
-      (typeof historical.authorName === "string" ? historical.authorName : null),
+      (typeof historical.authorName === "string"
+        ? historical.authorName
+        : null),
     translatorName:
       draft.translatorName ||
       (typeof historical.translatorName === "string"
@@ -299,7 +304,8 @@ const buildUserConsentRecord = (params: {
 
   if (consented) {
     const existingConsentTimestamp =
-      historical.consented === true && typeof historical.consentedAt === "string"
+      historical.consented === true &&
+      typeof historical.consentedAt === "string"
         ? historical.consentedAt
         : null;
     return {
@@ -350,7 +356,10 @@ export const ProjectProfileCard = ({
     deriveDraft(content ?? null, projectSummary ?? null, userName),
   );
   const draftRef = useRef<ProfileDraft>(draft);
-  const statusSnapshotRef = useRef<ProfileStatusSnapshot | null>(null);
+  const statusSnapshotRef = useRef<{
+    projectId: string | null;
+    snapshot: ProfileStatusSnapshot | null;
+  }>({ projectId: null, snapshot: null });
   const [status, setStatus] = useState<
     "idle" | "dirty" | "saving" | "saved" | "error"
   >("idle");
@@ -418,20 +427,32 @@ export const ProjectProfileCard = ({
 
   useEffect(() => {
     const previous = statusSnapshotRef.current;
+    const currentProjectId = projectId ?? null;
     if (!onStatusChange) {
-      statusSnapshotRef.current = statusSnapshot;
+      statusSnapshotRef.current = {
+        projectId: currentProjectId,
+        snapshot: statusSnapshot,
+      };
       return;
     }
-    if (
-      !previous ||
-      previous.complete !== statusSnapshot.complete ||
-      previous.consent !== statusSnapshot.consent ||
-      previous.requiredFilled !== statusSnapshot.requiredFilled
-    ) {
+
+    const previousSnapshot = previous.snapshot;
+    const projectChanged = previous.projectId !== currentProjectId;
+    const snapshotChanged =
+      !previousSnapshot ||
+      previousSnapshot.complete !== statusSnapshot.complete ||
+      previousSnapshot.consent !== statusSnapshot.consent ||
+      previousSnapshot.requiredFilled !== statusSnapshot.requiredFilled;
+
+    if (projectChanged || snapshotChanged) {
       onStatusChange(statusSnapshot);
     }
-    statusSnapshotRef.current = statusSnapshot;
-  }, [statusSnapshot, onStatusChange]);
+
+    statusSnapshotRef.current = {
+      projectId: currentProjectId,
+      snapshot: statusSnapshot,
+    };
+  }, [projectId, statusSnapshot, onStatusChange]);
 
   useEffect(() => {
     setLastSavedAt(null);
@@ -497,7 +518,9 @@ export const ProjectProfileCard = ({
 
       const translatorValueRaw = sanitized.translatorName || userName || "";
       const translatorValue = translatorValueRaw.trim();
-      const effectiveTranslator = translatorValue.length ? translatorValue : null;
+      const effectiveTranslator = translatorValue.length
+        ? translatorValue
+        : null;
       const payloadMemo = buildMemoFromDraft(sanitized);
       const profileMeta = parseMeta(content?.projectProfile?.meta ?? null);
       const summaryMeta = parseMeta(projectSummary?.meta ?? null);
@@ -591,13 +614,12 @@ export const ProjectProfileCard = ({
   );
 
   const handleFieldChange = useCallback(
-    (
-      key: keyof ProfileDraft,
-    ) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      const value = event.target.value;
-      const next = { ...draftRef.current, [key]: value };
-      scheduleSave(next);
-    },
+    (key: keyof ProfileDraft) =>
+      (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const value = event.target.value;
+        const next = { ...draftRef.current, [key]: value };
+        scheduleSave(next);
+      },
     [scheduleSave],
   );
 
@@ -611,13 +633,17 @@ export const ProjectProfileCard = ({
 
   type StatusTone = "info" | "warn" | "success" | "error";
 
-  const statusInfo = useMemo<
-    { icon: JSX.Element; label: string; tone: StatusTone } | null
-  >(() => {
+  const statusInfo = useMemo<{
+    icon: JSX.Element;
+    label: string;
+    tone: StatusTone;
+  } | null>(() => {
     switch (status) {
       case "saving":
         return {
-          icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />,
+          icon: (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+          ),
           label: localize("project_profile_status_saving", "Saving…"),
           tone: "info" as const,
         };
@@ -626,10 +652,7 @@ export const ProjectProfileCard = ({
           icon: <AlertCircle className="h-3.5 w-3.5 text-rose-500" />,
           label:
             error ??
-            localize(
-              "project_profile_status_error",
-              "Failed to save profile.",
-            ),
+            localize("project_profile_status_error", "Failed to save profile."),
           tone: "error" as const,
         };
       default:
@@ -641,10 +664,7 @@ export const ProjectProfileCard = ({
     "project_consent_label",
     "Original copyright consent",
   );
-  const consentStatusEnabled = localize(
-    "project_consent_received",
-    "Received",
-  );
+  const consentStatusEnabled = localize("project_consent_received", "Received");
   const consentStatusDisabled = localize(
     "project_consent_not_received",
     "Not received",

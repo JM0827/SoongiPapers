@@ -12,7 +12,6 @@ import mongoose from "mongoose";
 import TranslationFile from "../models/TranslationFile";
 import OriginFile from "../models/OriginFile";
 import TranslationBatch from "../models/TranslationBatch";
-import Proofreading from "../models/Proofreading";
 import DocumentProfile, {
   normalizeTranslationNotes,
 } from "../models/DocumentProfile";
@@ -25,11 +24,184 @@ import {
   WorkflowRunRecord,
 } from "../services/workflowManager";
 import { loadOriginPrepSnapshot } from "../services/originPrep";
+import { NdjsonStreamWriter } from "../lib/ndjsonStream";
+
+interface AuthenticatedRequest extends FastifyRequest {
+  user_id?: string;
+  user?: { user_id?: string };
+}
+
+type ProjectMeta = {
+  author?: string | null;
+  translator?: string | null;
+  writer?: string | null;
+  writerNote?: string | null;
+  translatorNote?: string | null;
+  context?: string | null;
+  notes?: string | null;
+  translationDirection?: string | null;
+  draftTitle?: string | null;
+  [key: string]: unknown;
+};
+
+interface TranslationProjectRow {
+  project_id: string;
+  user_id: string;
+  title: string | null;
+  description: string | null;
+  intention: string | null;
+  book_title: string | null;
+  author_name: string | null;
+  translator_name: string | null;
+  memo: string | null;
+  meta: ProjectMeta | string | null;
+  status: string | null;
+  origin_lang: string | null;
+  target_lang: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}
+
+interface TranslationBatchDbRow {
+  id: string;
+  batch_index: number;
+  status: string;
+  started_at: Date | null;
+  finished_at: Date | null;
+  error: string | null;
+  mongo_batch_id: string | null;
+}
+
+interface TranslationBatchSummary {
+  batchId: string;
+  index: number;
+  status: string;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  error: string | null;
+  mongoBatchId: string | null;
+}
+
+interface TranslationFileDoc {
+  _id?: unknown;
+  project_id?: string;
+  job_id?: string;
+  origin_content?: string;
+  origin_filename?: string;
+  translated_content?: string;
+  batch_count?: number;
+  completed_batches?: number;
+  translation_method?: string;
+  completed_at?: Date | string | null;
+  updated_at?: Date | string | null;
+  [key: string]: unknown;
+}
+
+interface OriginFileDoc {
+  _id?: unknown;
+  project_id?: string;
+  job_id?: string;
+  text_content?: string;
+  origin_content?: string;
+  updated_at?: Date | string | null;
+  created_at?: Date | string | null;
+  language?: string | null;
+  original_filename?: string | null;
+  [key: string]: unknown;
+}
+
+interface ProofreadingDoc {
+  proofreading_id?: string;
+  applied_issue_ids?: string[];
+  report?: unknown;
+  quick_report?: unknown;
+  deep_report?: unknown;
+  applied_translated_content?: string | null;
+  updated_at?: Date | string | null;
+  created_at?: Date | string | null;
+  status?: string;
+  stage?: string;
+  job_id?: string;
+  _id?: unknown;
+  translated_text?: string | null;
+}
+
+interface QualityAssessmentDoc {
+  assessmentId?: string;
+  jobId?: string | null;
+  job_id?: string | null;
+  projectId?: string;
+  userId?: string;
+  timestamp?: Date | string;
+  qualityResult?: {
+    overallScore?: number;
+    quantitative?: Record<string, { score?: number }>;
+    [key: string]: unknown;
+  } | null;
+}
+
+interface QualityHistoryDoc {
+  assessmentId?: string;
+  timestamp?: Date | string;
+  qualityResult?: QualityAssessmentDoc["qualityResult"];
+}
+
+interface EbookRow {
+  ebook_id: string;
+  status: string;
+  updated_at: Date | string | null;
+}
+
+interface EbookVersionRow {
+  ebook_version_id: string;
+  version_number: number;
+  export_format: string;
+  created_at: Date | string;
+  updated_at: Date | string | null;
+}
+
+interface EbookAssetRow {
+  ebook_asset_id: string;
+  file_name: string | null;
+  public_url: string | null;
+  mime_type: string | null;
+  file_path: string | null;
+  size_bytes: number | null;
+  checksum: string | null;
+  updated_at: Date | string | null;
+}
+
+interface JobDocumentIdRow {
+  document_id: string | null;
+}
+
+interface TranslationJobSummary {
+  jobId: string;
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+  status: string;
+  type: string;
+  batchCount: number;
+  completedBatchCount: number;
+  errorBatchCount: number;
+  batches: TranslationBatchSummary[];
+}
+
+const toIsoString = (value: Date | string | null | undefined): string | null => {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+};
+
+type UnknownObject = Record<string, unknown>;
 
 // ---------- helpers ----------
 function getUserId(request: FastifyRequest): string | null {
-  const anyReq = request as any;
-  return anyReq?.user?.user_id ?? anyReq?.user_id ?? null;
+  const authReq = request as AuthenticatedRequest;
+  if (typeof authReq.user_id === "string" && authReq.user_id.trim()) {
+    return authReq.user_id;
+  }
+  const nestedId = authReq.user?.user_id;
+  return typeof nestedId === "string" && nestedId.trim() ? nestedId : null;
 }
 
 function ok<T>(reply: FastifyReply, data: T) {
@@ -40,34 +212,39 @@ function fail(reply: FastifyReply, status: number, message: string) {
   return reply.status(status).send({ success: false, error: message });
 }
 
-function serializeDocumentProfile(doc: any) {
-  if (!doc) return null;
+function serializeDocumentProfile(doc: unknown) {
+  if (!doc || typeof doc !== "object") return null;
+  const record = doc as Record<string, unknown>;
   return {
-    id: String(doc._id),
-    projectId: doc.project_id,
-    type: doc.type,
-    version: doc.version,
-    language: doc.language ?? null,
-    jobId: doc.job_id ?? null,
-    metrics: doc.metrics,
-    summary: doc.summary,
+    id: String(record._id),
+    projectId: record.project_id ?? null,
+    type: record.type ?? null,
+    version: record.version ?? null,
+    language: record.language ?? null,
+    jobId: record.job_id ?? null,
+    metrics: record.metrics ?? null,
+    summary: record.summary ?? null,
     references: {
-      originFileId: doc.origin_file_id ? String(doc.origin_file_id) : null,
-      translationFileId: doc.translation_file_id
-        ? String(doc.translation_file_id)
+      originFileId: record.origin_file_id
+        ? String(record.origin_file_id)
         : null,
-      qualityAssessmentId: doc.quality_assessment_id
-        ? String(doc.quality_assessment_id)
+      translationFileId: record.translation_file_id
+        ? String(record.translation_file_id)
         : null,
-      proofreadingId: doc.proofreading_id ? String(doc.proofreading_id) : null,
+      qualityAssessmentId: record.quality_assessment_id
+        ? String(record.quality_assessment_id)
+        : null,
+      proofreadingId: record.proofreading_id ? String(record.proofreading_id) : null,
     },
-    translationNotes: normalizeTranslationNotes(doc.translation_notes ?? null),
+    translationNotes: normalizeTranslationNotes(
+      (record.translation_notes as unknown) ?? null,
+    ),
     source: {
-      hash: doc.source_hash ?? null,
-      preview: doc.source_preview ?? null,
+      hash: record.source_hash ?? null,
+      preview: record.source_preview ?? null,
     },
-    createdAt: doc.created_at ?? doc.createdAt ?? null,
-    updatedAt: doc.updated_at ?? doc.updatedAt ?? null,
+    createdAt: (record.created_at as Date | string | null) ?? null,
+    updatedAt: (record.updated_at as Date | string | null) ?? null,
   };
 }
 
@@ -154,15 +331,19 @@ async function loadProjectProfile(projectId: string, userId: string) {
     );
 
     if (!rows || rows.length === 0) return null;
-    const row = rows[0];
+    const row = rows[0] as TranslationProjectRow;
     const parsed = parseProjectMemo(row.memo ?? null);
-    let storedMeta: any = {};
+    let storedMeta: ProjectMeta = {};
     if (row.meta) {
-      if (typeof row.meta === "object") storedMeta = row.meta;
-      else {
+      if (typeof row.meta === "object") {
+        storedMeta = row.meta as ProjectMeta;
+      } else if (typeof row.meta === "string") {
         try {
-          storedMeta = JSON.parse(row.meta);
-        } catch (err) {
+          const parsedMeta = JSON.parse(row.meta) as ProjectMeta;
+          if (parsedMeta && typeof parsedMeta === "object") {
+            storedMeta = parsedMeta;
+          }
+        } catch (_error) {
           storedMeta = {};
         }
       }
@@ -194,7 +375,7 @@ async function loadProjectProfile(projectId: string, userId: string) {
         draftTitle: storedMeta.draftTitle ?? null,
       },
     };
-  } catch (e) {
+  } catch (_error) {
     return {
       id: projectId,
       title: `Project ${projectId}`,
@@ -241,15 +422,20 @@ async function loadLatestJob(projectId: string, _userId: string) {
     );
 
     // Map batches
-    const batches = (batchRows || []).map((b: any) => ({
-      batchId: b.id,
-      index: b.batch_index,
-      status: b.status,
-      startedAt: b.started_at,
-      finishedAt: b.finished_at,
-      error: b.error,
-      mongoBatchId: b.mongo_batch_id || null,
-    }));
+    const batches: TranslationBatchSummary[] = (batchRows || [])
+      .map((b) => {
+        const batch = b as TranslationBatchDbRow;
+        return {
+          batchId: batch.id,
+          index: batch.batch_index,
+          status: batch.status,
+          startedAt: batch.started_at,
+          finishedAt: batch.finished_at,
+          error: batch.error,
+          mongoBatchId: batch.mongo_batch_id,
+        };
+      })
+      .filter(Boolean);
 
     return {
       jobId: job.job_id,
@@ -258,12 +444,12 @@ async function loadLatestJob(projectId: string, _userId: string) {
       status: job.status,
       type: job.type,
       batchCount: batches.length,
-      completedBatchCount: batches.filter((x: any) => x.status === "done")
+      completedBatchCount: batches.filter((batch) => batch.status === "done")
         .length,
-      errorBatchCount: batches.filter((x: any) => x.status === "failed").length,
+      errorBatchCount: batches.filter((batch) => batch.status === "failed").length,
       batches,
     };
-  } catch (e) {
+  } catch (_error) {
     return null;
   }
 }
@@ -272,16 +458,18 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
   // Load latest translation file document from MongoDB
   try {
     // Prefer translation_files by project+job if jobId provided
-    let tf: any = null;
+    let tf: TranslationFileDoc | null = null;
     if (jobId) {
-      tf = await TranslationFile.findOne({
+      tf = (await TranslationFile.findOne({
         project_id: projectId,
         job_id: jobId,
       })
         .lean()
-        .exec();
+        .exec()) as TranslationFileDoc | null;
       if (!tf) {
-        tf = await TranslationFile.findOne({ job_id: jobId }).lean().exec();
+        tf = (await TranslationFile.findOne({ job_id: jobId })
+          .lean()
+          .exec()) as TranslationFileDoc | null;
       }
       if (tf && tf.project_id !== projectId) {
         try {
@@ -310,13 +498,15 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
     }
 
     if (!tf) {
-      let originDocFallback: any = null;
+      let originDocFallback: OriginFileDoc | null = null;
       try {
-        originDocFallback = await OriginFile.findOne({ project_id: projectId })
+        originDocFallback = (await OriginFile.findOne({
+          project_id: projectId,
+        })
           .sort({ updated_at: -1 })
           .lean()
-          .exec();
-      } catch (err) {
+          .exec()) as OriginFileDoc | null;
+      } catch (_error) {
         originDocFallback = null;
       }
 
@@ -341,9 +531,9 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
     }
 
     const proofCol = mongoose.connection?.db?.collection("proofreading_files");
-    let proofDoc: any = null;
+    let proofDoc: ProofreadingDoc | null = null;
     if (proofCol) {
-      const proofQuery: Record<string, any> = { project_id: projectId };
+      const proofQuery: Record<string, string> = { project_id: projectId };
       if (jobId) proofQuery.job_id = jobId;
       proofDoc = await proofCol
         .find(proofQuery)
@@ -356,6 +546,8 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
     const translationContent =
       appliedTranslation || tf.translated_content || "";
     const originTimestamp = tf.updated_at ?? tf.completed_at ?? null;
+    const batchCount = tf.batch_count ?? 0;
+    const completedBatches = tf.completed_batches ?? 0;
 
     return {
       origin: {
@@ -369,13 +561,13 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
         timestamp: tf.updated_at ?? tf.completed_at ?? null,
         language: null,
         method: tf.translation_method || "N/A",
-        isPartial: tf.completed_batches < tf.batch_count,
+        isPartial: batchCount > completedBatches,
         jobId: tf.job_id,
         translationFileId: tf._id ? String(tf._id) : null,
       },
       meta: {
-        batch_count: tf.batch_count,
-        completed_batches: tf.completed_batches,
+        batch_count: batchCount,
+        completed_batches: completedBatches,
       },
       proofreading: proofDoc
         ? {
@@ -389,7 +581,7 @@ async function loadContent(projectId: string, _userId: string, jobId?: string) {
           }
         : null,
     };
-  } catch (e) {
+  } catch (_error) {
     return { origin: null, translation: null };
   }
 }
@@ -400,26 +592,26 @@ async function loadLatestQuality(
   jobId?: string,
 ) {
   // Prefer job-scoped quality assessment when jobId present
-  let q: any = null;
+  let q: QualityAssessmentDoc | null = null;
   try {
     if (jobId) {
-      q = await QualityAssessment.findOne({ projectId, jobId })
+      q = (await QualityAssessment.findOne({ projectId, jobId })
         .sort({ timestamp: -1 })
         .lean()
-        .exec();
+        .exec()) as QualityAssessmentDoc | null;
       if (q) return q;
     }
-  } catch (e) {
+  } catch (_error) {
     // ignore and fallback
   }
 
   try {
-    q = await QualityAssessment.findOne({ projectId, userId })
+    q = (await QualityAssessment.findOne({ projectId, userId })
       .sort({ timestamp: -1 })
       .lean()
-      .exec();
+      .exec()) as QualityAssessmentDoc | null;
     return q ?? null;
-  } catch (e) {
+  } catch (_error) {
     return null;
   }
 }
@@ -430,44 +622,46 @@ async function loadProofreading(projectId: string, jobId?: string) {
     if (!mongo) return null;
 
     const collection = mongo.collection("proofreading_files");
-    const query: Record<string, any> = { project_id: projectId };
+    const query: { project_id: string; job_id?: string } = {
+      project_id: projectId,
+    };
     if (jobId) query.job_id = jobId;
 
-    const doc = await collection
+    const doc = (await collection
       .find(query)
       .sort({ updated_at: -1, created_at: -1 })
       .limit(1)
-      .next();
+      .next()) as ProofreadingDoc | null;
 
     return doc ?? null;
-  } catch (e) {
+  } catch (_error) {
     return null;
   }
 }
 
 async function loadQualityHistory(projectId: string, userId: string) {
   // Return all assessments for the project across jobs/users so trend charts reflect project-wide history
-  const items = await QualityAssessment.find({ projectId })
+  const items = (await QualityAssessment.find({ projectId })
     .sort({ timestamp: 1 })
     .select("timestamp qualityResult assessmentId")
     .lean()
-    .exec();
+    .exec()) as QualityHistoryDoc[];
 
-  return items.map((a: any, i: number) => ({
-    assessmentId: a.assessmentId,
-    timestamp: a.timestamp,
-    assessmentNumber: i + 1,
-    overallScore: a.qualityResult?.overallScore ?? 0,
-    quantitative: a.qualityResult?.quantitative
+  return items.map((assessment, index) => ({
+    assessmentId: assessment.assessmentId,
+    timestamp: assessment.timestamp,
+    assessmentNumber: index + 1,
+    overallScore: assessment.qualityResult?.overallScore ?? 0,
+    quantitative: assessment.qualityResult?.quantitative
       ? {
-          fidelity: a.qualityResult.quantitative?.Fidelity?.score ?? 0,
-          fluency: a.qualityResult.quantitative?.Fluency?.score ?? 0,
+          fidelity: assessment.qualityResult.quantitative?.Fidelity?.score ?? 0,
+          fluency: assessment.qualityResult.quantitative?.Fluency?.score ?? 0,
           literaryStyle:
-            a.qualityResult.quantitative?.["Literary Style"]?.score ?? 0,
+            assessment.qualityResult.quantitative?.["Literary Style"]?.score ?? 0,
           culturalResonance:
-            a.qualityResult.quantitative?.["Cultural Resonance"]?.score ?? 0,
+            assessment.qualityResult.quantitative?.["Cultural Resonance"]?.score ?? 0,
           creativeAutonomy:
-            a.qualityResult.quantitative?.["Creative Autonomy"]?.score ?? 0,
+            assessment.qualityResult.quantitative?.["Creative Autonomy"]?.score ?? 0,
         }
       : null,
   }));
@@ -488,8 +682,8 @@ async function loadEbookSummary(projectId: string) {
       return null;
     }
 
-    const ebookRow = ebookRes.rows[0];
-    const ebookId = ebookRow.ebook_id as string;
+    const ebookRow = ebookRes.rows[0] as EbookRow;
+    const ebookId = ebookRow.ebook_id;
 
     const versionRes = await query(
       `SELECT ebook_version_id, version_number, export_format, created_at, updated_at
@@ -499,9 +693,9 @@ async function loadEbookSummary(projectId: string) {
         LIMIT 1`,
       [ebookId],
     );
-    const versionRow = versionRes.rows[0] ?? null;
+    const versionRow = (versionRes.rows[0] as EbookVersionRow | undefined) ?? null;
 
-    let assetRow: any = null;
+    let assetRow: EbookAssetRow | null = null;
     if (versionRow) {
       const assetRes = await query(
         `SELECT ebook_asset_id, file_name, public_url, mime_type, file_path, size_bytes, checksum, updated_at
@@ -512,13 +706,13 @@ async function loadEbookSummary(projectId: string) {
           LIMIT 1`,
         [versionRow.ebook_version_id],
       );
-      assetRow = assetRes.rows[0] ?? null;
+      assetRow = (assetRes.rows[0] as EbookAssetRow | undefined) ?? null;
     }
 
     const updatedAt =
-      ebookRow.updated_at?.toISOString?.() ??
-      versionRow?.updated_at?.toISOString?.() ??
-      versionRow?.created_at?.toISOString?.() ??
+      toIsoString(ebookRow.updated_at) ??
+      toIsoString(versionRow?.updated_at ?? null) ??
+      toIsoString(versionRow?.created_at ?? null) ??
       null;
 
     return {
@@ -629,32 +823,13 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         streamClosed = true;
       });
 
-      const flush = () => {
-        const raw = reply.raw as any;
-        if (typeof raw.flush === "function") {
-          try {
-            raw.flush();
-          } catch (err) {
-            request.log.trace(
-              { err },
-              "[QUALITY] Failed to flush NDJSON response",
-            );
-          }
-        }
-      };
+      const writer = new NdjsonStreamWriter(reply.raw, {
+        logger: request.log,
+      });
 
       const send = (payload: Record<string, unknown>) => {
         if (streamClosed) return;
-        try {
-          reply.raw.write(`${JSON.stringify(payload)}\n`);
-          flush();
-        } catch (err) {
-          streamClosed = true;
-          request.log.warn(
-            { err },
-            "[QUALITY] Failed to write NDJSON chunk",
-          );
-        }
+        writer.write(payload);
       };
 
       const serializeEvent = (event: QualityEvaluationEvent) => {
@@ -667,7 +842,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
                     name: event.error.name,
                     message: event.error.message,
                   }
-                : event.error ?? null,
+                : (event.error ?? null),
           };
         }
         return event;
@@ -734,14 +909,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         const message =
           err instanceof Error ? err.message : String(err ?? "Unknown error");
         request.log.error({ err }, "[QUALITY] Streamed evaluation failed");
-        try {
-          send({ type: "error", message });
-        } catch (writeErr) {
-          request.log.warn(
-            { err: writeErr },
-            "[QUALITY] Failed to send error event",
-          );
-        }
+        send({ type: "error", message });
 
         if (workflowRun) {
           try {
@@ -757,14 +925,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           }
         }
       } finally {
-        try {
-          reply.raw.end();
-        } catch (endErr) {
-          request.log.trace(
-            { err: endErr },
-            "[QUALITY] Failed to close NDJSON stream",
-          );
-        }
+        streamClosed = true;
+        writer.close();
       }
     },
   );
@@ -926,7 +1088,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           jobId?: string;
           sourceText: string;
           translatedText: string;
-          qualityResult: any;
+          qualityResult: unknown;
           translationMethod?: "auto" | "manual";
           modelUsed?: string;
         };
@@ -1056,20 +1218,20 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         const content = await loadContent(projectId, userId, latestJob?.jobId);
 
         // load origin_files (Mongo) as primary origin source
-        let originDoc: any = null;
+        let originDoc: OriginFileDoc | null = null;
         try {
-          originDoc = await OriginFile.findOne({ project_id: projectId })
+          originDoc = (await OriginFile.findOne({ project_id: projectId })
             .sort({ updated_at: -1 })
             .lean()
-            .exec();
+            .exec()) as OriginFileDoc | null;
         } catch (e) {
           originDoc = null;
         }
 
         // load batches (Postgres) with origin/translated text (metadata)
-        let batches: any[] = [];
+        let batches: TranslationBatchSummary[] = [];
         // and load actual batch documents from Mongo (actual data)
-        let mongoBatchDocs: any[] = [];
+        let mongoBatchDocs: Array<Record<string, unknown>> = [];
         try {
           // Determine jobId to query: prefer latestJob.jobId, fallback to translation file's jobId
           const deducedJobId =
@@ -1084,29 +1246,32 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
                 `SELECT id, batch_index, status, mongo_batch_id, started_at, finished_at, error FROM translation_batches WHERE job_id = $1 ORDER BY batch_index`,
                 [deducedJobId],
               );
-              batches = (rows || []).map((r: any) => ({
-                batchId: r.id,
-                batch_index: r.batch_index,
-                batch_status: r.status,
-                index: r.batch_index,
-                status: r.status,
-                mongoBatchId: r.mongo_batch_id || null,
-                startedAt: r.started_at,
-                finishedAt: r.finished_at,
-                error: r.error,
-              }));
+              batches = (rows || []).map((r) => {
+                const row = r as TranslationBatchDbRow;
+                return {
+                  batchId: row.id,
+                  batch_index: row.batch_index,
+                  batch_status: row.status,
+                  index: row.batch_index,
+                  status: row.status,
+                  mongoBatchId: row.mongo_batch_id,
+                  startedAt: row.started_at,
+                  finishedAt: row.finished_at,
+                  error: row.error,
+                };
+              });
             } catch (err) {
               batches = [];
             }
 
             // Also fetch Mongo translation batch documents (if any) for the same job
             try {
-              mongoBatchDocs = await TranslationBatch.find({
+              mongoBatchDocs = (await TranslationBatch.find({
                 job_id: deducedJobId,
               })
                 .sort({ batch_index: 1 })
                 .lean()
-                .exec();
+                .exec()) as Array<Record<string, unknown>>;
             } catch (e) {
               mongoBatchDocs = [];
             }
@@ -1121,13 +1286,13 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
                 type: "translate",
                 batchCount: batches.length,
                 completedBatchCount: batches.filter(
-                  (x: any) => x.status === "done",
+                  (batch) => batch.status === "done",
                 ).length,
                 errorBatchCount: batches.filter(
-                  (x: any) => x.status === "failed",
+                  (batch) => batch.status === "failed",
                 ).length,
                 batches,
-              } as any;
+              } as TranslationJobSummary;
             }
           }
         } catch (e) {
@@ -1136,11 +1301,23 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         }
 
         // If origin not found in origin_files, fallback to batches[0].originText
-        if (!originDoc && batches.length > 0 && batches[0].originText) {
-          originDoc = {
-            origin_content: batches[0].originText,
-            updated_at: batches[0].startedAt,
-          };
+        if (!originDoc && batches.length > 0) {
+          const firstBatch = batches[0] as unknown;
+          if (firstBatch && typeof firstBatch === "object") {
+            const firstRecord = firstBatch as Record<string, unknown>;
+            const originText =
+              typeof firstRecord.originText === "string"
+                ? firstRecord.originText
+                : null;
+            const startedAt = firstRecord.startedAt as Date | string | null;
+            if (originText) {
+              originDoc = {
+                origin_content: originText,
+                updated_at: startedAt ?? null,
+                project_id: projectId,
+              };
+            }
+          }
         }
 
         // load quality by jobId first
@@ -1151,7 +1328,7 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         );
 
         // load proofreading
-        const proofreadingDoc: any = await loadProofreading(
+        const proofreadingDoc = await loadProofreading(
           projectId,
           latestJob?.jobId,
         );
@@ -1182,13 +1359,22 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         const ebookSummary = await loadEbookSummary(projectId);
 
         // compute availability
+        const hasBatchTranslation = mongoBatchDocs.some((doc) => {
+          const translationValue =
+            typeof doc.translated_text === "string"
+              ? doc.translated_text
+              : typeof doc.translation_segment === "string"
+                ? doc.translation_segment
+                : null;
+          return Boolean(translationValue && translationValue.trim().length);
+        });
+
         const available = {
-          origin: !!(originDoc?.text_content || content.origin?.content),
+          origin: Boolean(originDoc?.text_content || content.origin?.content),
           translation:
-            !!content.translation?.content ||
-            batches.some((b) => !!b.translatedText),
-          qualityAssessment: !!qualityAssessment,
-          proofreading: !!proofreading.exists,
+            Boolean(content.translation?.content) || hasBatchTranslation,
+          qualityAssessment: Boolean(qualityAssessment),
+          proofreading: Boolean(proofreading.exists),
         };
 
         // translationStage detailed logic
@@ -1201,12 +1387,12 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         const allBatchesDone =
           hasBatches && batches.every((b) => b.status === "done");
         const someDone = hasBatches && batches.some((b) => b.status === "done");
-        const hasTranslationContent = !!(
-          content.translation && content.translation.content
+        const hasTranslationContent = Boolean(
+          content.translation && content.translation.content,
         );
 
         // If there's direct translation content in Mongo, prefer that when batches are absent
-        if (!hasBatches && hasTranslationContent) {
+        if (!hasBatches && hasTranslationContent && content.translation) {
           translationStage = content.translation.isPartial
             ? "translating"
             : "translated";
@@ -1228,12 +1414,12 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         if (proofreading.exists)
           proofreadingStage = proofreading.stage || "done";
 
-        let documentProfiles = {
-          origin: null as any,
-          translation: null as any,
-        };
-        let originProfileDoc: any = null;
-        let translationProfileDoc: any = null;
+        let documentProfiles: {
+          origin: ReturnType<typeof serializeDocumentProfile>;
+          translation: ReturnType<typeof serializeDocumentProfile>;
+        } = { origin: null, translation: null };
+        let originProfileDoc: unknown = null;
+        let translationProfileDoc: unknown = null;
         try {
           const [originProfileDocResult, translationProfileDocResult] =
             await Promise.all([
@@ -1275,8 +1461,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
                 `SELECT document_id FROM jobs WHERE type = $1 AND status IN ('queued','running') AND project_id = $2 ORDER BY created_at DESC LIMIT 5`,
                 ["profile", projectId],
               );
-              hasQueuedJob = rows.some((row: any) => {
-                const payloadRaw = row?.document_id;
+              hasQueuedJob = rows.some((row) => {
+                const payloadRaw = (row as JobDocumentIdRow)?.document_id;
                 if (typeof payloadRaw !== "string") return false;
                 try {
                   const parsed = JSON.parse(payloadRaw);
@@ -1324,8 +1510,8 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
         try {
           originPrep = await loadOriginPrepSnapshot({
             projectId,
-            originDoc,
-            originProfile: originProfileDoc,
+            originDoc: (originDoc ?? null) as UnknownObject | null,
+            originProfile: (originProfileDoc ?? null) as UnknownObject | null,
           });
         } catch (err) {
           request.log.warn(
@@ -1341,8 +1527,19 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           content: {
             origin: originDoc
               ? {
-                  content: originDoc.text_content,
-                  timestamp: originDoc.updated_at,
+                  content:
+                    (typeof originDoc.text_content === "string"
+                      ? originDoc.text_content
+                      : typeof originDoc.origin_content === "string"
+                        ? originDoc.origin_content
+                        : null) ?? null,
+                  timestamp: toIsoString(originDoc.updated_at ?? null),
+                  language:
+                    (originDoc as { language?: string | null })?.language ??
+                    null,
+                  filename:
+                    (originDoc as { original_filename?: string | null })
+                      ?.original_filename ?? null,
                 }
               : content.origin,
             translation: content.translation,

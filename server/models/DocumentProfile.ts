@@ -142,9 +142,17 @@ export type DocumentProfileDocument = {
       gender: string | null;
       traits: string[];
     }>;
-    namedEntities: Array<{ name: string; targetName: string | null; frequency: number }>;
+    namedEntities: Array<{
+      name: string;
+      targetName: string | null;
+      frequency: number;
+    }>;
     timePeriod: string | null;
-    locations: Array<{ name: string; targetName: string | null; frequency: number }>;
+    locations: Array<{
+      name: string;
+      targetName: string | null;
+      frequency: number;
+    }>;
     measurementUnits: Array<{ source: string; target: string | null }>;
     linguisticFeatures: Array<{ source: string; target: string | null }>;
   } | null;
@@ -162,7 +170,8 @@ export type TranslationNotes = NonNullable<
   DocumentProfileDocument["translation_notes"]
 >;
 
-export type TranslationMeasurementEntry = TranslationNotes["measurementUnits"][number];
+export type TranslationMeasurementEntry =
+  TranslationNotes["measurementUnits"][number];
 
 const toNullableString = (value: unknown): string | null => {
   if (typeof value === "string") {
@@ -195,7 +204,10 @@ const normalizeBilingualList = (value: unknown, limit = 50) => {
           (entry as Record<string, unknown>).target ??
             (entry as Record<string, unknown>).targetName,
         );
-        return { source, target: target ?? null } satisfies TranslationMeasurementEntry;
+        return {
+          source,
+          target: target ?? null,
+        } satisfies TranslationMeasurementEntry;
       }
       return null;
     })
@@ -220,7 +232,9 @@ export function normalizeTranslationNotes(
           const traits = Array.isArray((entry as any)?.traits)
             ? (entry as any).traits
                 .map((trait: unknown) => toNullableString(trait))
-                .filter((trait: string | null): trait is string => Boolean(trait))
+                .filter((trait: string | null): trait is string =>
+                  Boolean(trait),
+                )
             : [];
           return { name, targetName: targetName ?? null, age, gender, traits };
         })
