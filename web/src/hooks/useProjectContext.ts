@@ -161,7 +161,14 @@ const buildSnapshot = (params: {
 
   const timeline: ProjectContextSnapshot["timeline"] = [];
   const originTimelineState = (() => {
-    const filenameNote = originMeta?.filename ?? undefined;
+    const filenameNote = (() => {
+      if (originMeta?.filename) return originMeta.filename;
+      const camel = (originMeta as { fileName?: string | null } | null)?.fileName;
+      if (camel) return camel;
+      const legacy = (originMeta as { original_filename?: string | null } | null)
+        ?.original_filename;
+      return legacy ?? undefined;
+    })();
     const analysisUpdatedAt =
       originPrep?.analysis.updatedAt ??
       originPrep?.analysis.job?.updatedAt ??
@@ -327,7 +334,12 @@ const buildSnapshot = (params: {
     origin: {
       hasContent: Boolean(originMeta?.content?.trim?.()),
       lastUpdatedAt: originUpdatedAt,
-      filename: originMeta?.filename ?? null,
+      filename:
+        originMeta?.filename ??
+        (originMeta as { fileName?: string | null } | null)?.fileName ??
+        (originMeta as { original_filename?: string | null } | null)
+          ?.original_filename ??
+        null,
     },
     translation: {
       hasContent: Boolean(translationMeta?.content?.trim?.()),

@@ -47,6 +47,104 @@ type BilingualViewItem = {
   target: string | null;
 };
 
+const normalizeBilingualView = (
+  items?:
+    | Array<{ source: string; target: string | null }>
+    | Array<string | { source: string; target: string | null }>
+    | null,
+): BilingualViewItem[] => {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((entry) => {
+      if (typeof entry === "string") {
+        const source = entry.trim();
+        if (!source) return null;
+        return { source, target: null } satisfies BilingualViewItem;
+      }
+      const source = entry?.source?.trim();
+      if (!source) return null;
+      const target = entry?.target ?? null;
+      return {
+        source,
+        target: target && target.trim().length ? target.trim() : null,
+      } satisfies BilingualViewItem;
+    })
+    .filter((entry): entry is BilingualViewItem => Boolean(entry));
+};
+
+const hasPairs = (
+  items?:
+    | Array<{ source: string; target: string | null }>
+    | Array<string | { source: string; target: string | null }>
+    | null,
+) => normalizeBilingualView(items).length > 0;
+
+const renderBilingualList = (
+  items?:
+    | Array<{ source: string; target: string | null }>
+    | Array<string | { source: string; target: string | null }>
+    | null,
+) => {
+  const normalized = normalizeBilingualView(items);
+  if (!normalized.length) {
+    return null;
+  }
+  return (
+    <ul className="mt-2 space-y-2">
+      {normalized.map((entry, index) => (
+        <li
+          key={`${entry.source}-${index}`}
+          className="flex min-w-0 items-center gap-1.5 rounded border border-slate-200 bg-slate-50/60 px-3 py-1.5 text-xs text-slate-600"
+        >
+          <span className="truncate font-semibold text-slate-700">
+            {entry.source}
+          </span>
+          {entry.target ? (
+            <>
+              <span className="text-slate-400" aria-hidden="true">
+                →
+              </span>
+              <span className="truncate text-slate-500">{entry.target}</span>
+            </>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+interface NotesEditorSectionCardProps {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  showDivider?: boolean;
+}
+
+const NotesEditorSectionCard = ({
+  title,
+  description,
+  actions,
+  children,
+  showDivider = false,
+}: NotesEditorSectionCardProps) => {
+  const [isOpen, setIsOpen] = useState(true);
+  return (
+    <Collapsible
+      title={title}
+      caption={description}
+      isOpen={isOpen}
+      onToggle={() => setIsOpen((prev) => !prev)}
+      keepMounted
+      showDivider={showDivider}
+      action={actions}
+    >
+      <div className="space-y-2">{children}</div>
+    </Collapsible>
+  );
+};
+
+
 type TranslationNotesDraft = {
   timePeriod: string;
   characters: NotesCharacterDraft[];
@@ -276,38 +374,6 @@ export const TranslationNotesSection = ({
     { action: addLabel },
   );
 
-  const normalizeBilingualView = (
-    items?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ): BilingualViewItem[] => {
-    if (!Array.isArray(items)) return [];
-    return items
-      .map((entry) => {
-        if (typeof entry === "string") {
-          const source = entry.trim();
-          if (!source) return null;
-          return { source, target: null } satisfies BilingualViewItem;
-        }
-        const source = entry?.source?.trim();
-        if (!source) return null;
-        const target = entry?.target ?? null;
-        return {
-          source,
-          target: target && target.trim().length ? target.trim() : null,
-        } satisfies BilingualViewItem;
-      })
-      .filter((entry): entry is BilingualViewItem => Boolean(entry));
-  };
-
-  const hasPairs = (
-    items?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ) => normalizeBilingualView(items).length > 0;
-
   const hasNotes = Boolean(
     notes?.timePeriod ||
       (notes?.characters?.length ?? 0) > 0 ||
@@ -322,40 +388,6 @@ export const TranslationNotesSection = ({
   ) : (
     <Circle className="h-4 w-4 text-slate-300" aria-hidden="true" />
   );
-
-  const renderBilingualList = (
-    items?:
-      | Array<{ source: string; target: string | null }>
-      | Array<string | { source: string; target: string | null }>
-      | null,
-  ) => {
-    const normalized = normalizeBilingualView(items);
-    if (!normalized.length) {
-      return null;
-    }
-    return (
-      <ul className="mt-2 space-y-2">
-        {normalized.map((entry, index) => (
-          <li
-            key={`${entry.source}-${index}`}
-            className="flex min-w-0 items-center gap-1.5 rounded border border-slate-200 bg-slate-50/60 px-3 py-1.5 text-xs text-slate-600"
-          >
-            <span className="truncate font-semibold text-slate-700">
-              {entry.source}
-            </span>
-            {entry.target ? (
-              <>
-                <span className="text-slate-400" aria-hidden="true">
-                  →
-                </span>
-                <span className="truncate text-slate-500">{entry.target}</span>
-              </>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    );
-  };
 
   const handleToggle = useCallback(() => {
     setIsOpen((prev) => !prev);
@@ -614,6 +646,7 @@ export interface TranslationNotesEditorProps {
   error?: string | null;
 }
 
+
 export const TranslationNotesEditor = ({
   notes,
   localize,
@@ -622,33 +655,6 @@ export const TranslationNotesEditor = ({
   isSaving = false,
   error,
 }: TranslationNotesEditorProps) => {
-  const SectionCard = ({
-    title,
-    description,
-    actions,
-    children,
-  }: {
-    title: string;
-    description?: string;
-    actions?: ReactNode;
-    children: ReactNode;
-  }) => {
-    const [isOpen, setIsOpen] = useState(true);
-    return (
-      <Collapsible
-        title={title}
-        caption={description}
-        isOpen={isOpen}
-        onToggle={() => setIsOpen((prev) => !prev)}
-        keepMounted
-        showDivider={false}
-        action={actions}
-      >
-        <div className="space-y-2">{children}</div>
-      </Collapsible>
-    );
-  };
-
   const [draft, setDraft] = useState<TranslationNotesDraft>(() =>
     notesToDraft(notes),
   );
@@ -664,7 +670,10 @@ export const TranslationNotesEditor = ({
     "rightpanel_translation_notes_saving",
     "Saving…",
   );
-  const cancelLabel = localize("rightpanel_translation_notes_cancel", "Cancel");
+  const cancelLabel = localize(
+    "rightpanel_translation_notes_cancel",
+    "Cancel",
+  );
   const addCharacterLabel = localize(
     "rightpanel_translation_notes_add_character",
     "Add character",
@@ -673,7 +682,10 @@ export const TranslationNotesEditor = ({
     "rightpanel_translation_notes_add_entry",
     "Add",
   );
-  const removeLabel = localize("rightpanel_translation_notes_remove", "Remove");
+  const removeLabel = localize(
+    "rightpanel_translation_notes_remove",
+    "Remove",
+  );
   const timePeriodLabel = localize(
     "rightpanel_translation_notes_time_period",
     "Time period",
@@ -685,6 +697,14 @@ export const TranslationNotesEditor = ({
   const charactersLabel = localize(
     "rightpanel_translation_notes_characters",
     "Characters",
+  );
+  const namedEntitiesLabel = localize(
+    "rightpanel_translation_notes_named_entities",
+    "Named entities",
+  );
+  const locationsLabel = localize(
+    "rightpanel_translation_notes_locations",
+    "Locations",
   );
   const characterNamePlaceholder = localize(
     "rightpanel_translation_notes_name_placeholder",
@@ -730,10 +750,6 @@ export const TranslationNotesEditor = ({
     "rightpanel_translation_notes_entry_target_placeholder",
     "Translated name",
   );
-  const entryFrequencyPlaceholder = localize(
-    "rightpanel_translation_notes_entry_frequency_placeholder",
-    "Freq",
-  );
   const noEntriesLabel = localize(
     "rightpanel_translation_notes_no_entries",
     "No entries yet.",
@@ -758,6 +774,98 @@ export const TranslationNotesEditor = ({
     "rightpanel_translation_notes_error_save",
     "Failed to save notes.",
   );
+  const measurementUnitsLabel = localize(
+    "rightpanel_translation_notes_measurement_units",
+    "Measurement units",
+  );
+  const linguisticFeaturesLabel = localize(
+    "rightpanel_translation_notes_linguistic_features",
+    "Linguistic features",
+  );
+  const introLabel = localize(
+    "rightpanel_translation_notes_editor_intro",
+    "Capture terminology, references, and character notes to keep collaborators aligned.",
+  );
+  const footerHint = localize(
+    "rightpanel_translation_notes_editor_footer_hint",
+    "Saving updates the Overview tab for everyone working on this project.",
+  );
+  const addedStatusLabel = localize(
+    "rightpanel_translation_notes_editor_status_added",
+    "Added",
+  );
+  const missingStatusLabel = localize(
+    "rightpanel_translation_notes_editor_status_missing",
+    "Missing",
+  );
+
+  const summaryChips = useMemo(
+    () => {
+      const trimmed = (value: string) => value.trim().length > 0;
+      const charactersCount = draft.characters.filter((character) =>
+        character.name.trim().length > 0,
+      ).length;
+      const namedEntitiesCount = draft.namedEntities.filter((entity) =>
+        entity.name.trim().length > 0,
+      ).length;
+      const locationsCount = draft.locations.filter((location) =>
+        location.name.trim().length > 0,
+      ).length;
+      const measurementUnitsCount = draft.measurementUnits.filter((unit) =>
+        unit.source.trim().length > 0,
+      ).length;
+      const linguisticFeaturesCount = draft.linguisticFeatures.filter(
+        (feature) => feature.source.trim().length > 0,
+      ).length;
+
+      return [
+        {
+          key: "time-period" as const,
+          type: "boolean" as const,
+          label: timePeriodLabel,
+          value: trimmed(draft.timePeriod),
+        },
+        {
+          key: "characters" as const,
+          type: "count" as const,
+          label: charactersLabel,
+          value: charactersCount,
+        },
+        {
+          key: "named-entities" as const,
+          type: "count" as const,
+          label: namedEntitiesLabel,
+          value: namedEntitiesCount,
+        },
+        {
+          key: "locations" as const,
+          type: "count" as const,
+          label: locationsLabel,
+          value: locationsCount,
+        },
+        {
+          key: "measurement-units" as const,
+          type: "count" as const,
+          label: measurementUnitsLabel,
+          value: measurementUnitsCount,
+        },
+        {
+          key: "linguistic-features" as const,
+          type: "count" as const,
+          label: linguisticFeaturesLabel,
+          value: linguisticFeaturesCount,
+        },
+      ];
+    }, [
+      charactersLabel,
+      draft,
+      linguisticFeaturesLabel,
+      locationsLabel,
+      measurementUnitsLabel,
+      namedEntitiesLabel,
+      timePeriodLabel,
+    ]);
+
 
   const addPair = (
     collection: "measurementUnits" | "linguisticFeatures",
@@ -884,258 +992,274 @@ export const TranslationNotesEditor = ({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2">
-        <button
-          type="button"
-          className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-          onClick={handleCancel}
-          disabled={isSaving}
-        >
-          {cancelLabel}
-        </button>
-        <button
-          type="button"
-          className="rounded bg-slate-800 px-3 py-1 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-60"
-          onClick={handleSave}
-          disabled={isSaving}
-        >
-          {isSaving ? savingLabel : saveLabel}
-        </button>
-      </div>
-      <SectionCard
-        title={localize(
-          "rightpanel_translation_notes_context",
-          "Narrative context",
-        )}
-        description={localize(
-          "rightpanel_translation_notes_context_hint",
-          "Summaries, measurement units, and linguistic cues that downstream translators must follow.",
-        )}
-      >
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {timePeriodLabel}
-          </label>
-          <input
-            value={draft.timePeriod}
-            onChange={(event) =>
-              setDraft((prev) => ({
-                ...prev,
-                timePeriod: event.target.value,
-              }))
-            }
-            className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-            placeholder={timePeriodPlaceholder}
-          />
-        </div>
-      </SectionCard>
-      <SectionCard
-        title={charactersLabel}
-        description={localize(
-          "rightpanel_translation_notes_characters_hint",
-          "Capture key characters with both source and translated references.",
-        )}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() =>
-              setDraft((prev) => ({
-                ...prev,
-                characters: [...prev.characters, createCharacterDraft()],
-              }))
-            }
-            disabled={isSaving}
-            title={addCharacterLabel}
-            aria-label={addCharacterLabel}
-            data-collapsible-ignore
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addCharacterLabel}</span>
-          </button>
-        }
-      >
-        {draft.characters.length ? (
-          <div className="space-y-2.5">
-            {draft.characters.map((character, index) => (
-              <div
-                key={character.id}
-                className="rounded border border-slate-200 p-2.5"
+    <div className="flex max-h-[70vh] flex-col gap-4">
+      <div className="space-y-2">
+        <p className="text-sm text-slate-600">{introLabel}</p>
+        <div className="flex flex-wrap gap-2">
+          {summaryChips.map((chip) =>
+            chip.type === "boolean" ? (
+              <span
+                key={chip.key}
+                className={`flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium ${
+                  chip.value
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                    : "border-slate-200 bg-white text-slate-500"
+                }`}
               >
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium text-slate-600">
-                    {localize(
-                      "rightpanel_translation_notes_character_label",
-                      `Character #${index + 1}`,
-                      { index: index + 1 },
-                    )}
-                  </p>
-                  <button
-                    type="button"
-                    className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
-                    onClick={() =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        characters: prev.characters.filter(
-                          (entry) => entry.id !== character.id,
-                        ),
-                      }))
-                    }
-                    disabled={isSaving}
-                    title={removeLabel}
-                    aria-label={removeLabel}
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                    <span className="sr-only">{removeLabel}</span>
-                  </button>
+                {chip.value ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Circle className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                <span>{chip.label}</span>
+                <span className="text-[10px] uppercase tracking-wide">
+                  {chip.value ? addedStatusLabel : missingStatusLabel}
+                </span>
+              </span>
+            ) : (
+              <span
+                key={chip.key}
+                className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600"
+              >
+                <span className="text-sm font-semibold text-slate-700">
+                  {chip.value}
+                </span>
+                <span>{chip.label}</span>
+              </span>
+            ),
+          )}
+        </div>
+      </div>
+      <div className="flex flex-1 flex-col gap-5 overflow-hidden">
+        <div className="flex-1 overflow-y-auto">
+          <div className="space-y-4 pb-6">
+            <NotesEditorSectionCard
+              title={timePeriodLabel}
+            >
+              <input
+                value={draft.timePeriod}
+                onChange={(event) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    timePeriod: event.target.value,
+                  }))
+                }
+                className="w-full max-w-2xl rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                placeholder={timePeriodPlaceholder}
+              />
+            </NotesEditorSectionCard>
+            <NotesEditorSectionCard
+              title={charactersLabel}
+              description={localize(
+                "rightpanel_translation_notes_characters_hint",
+                "Capture key characters with both source and translated references.",
+              )}
+              actions={
+                <button
+                  type="button"
+                  className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      characters: [...prev.characters, createCharacterDraft()],
+                    }))
+                  }
+                  disabled={isSaving}
+                  title={addCharacterLabel}
+                  aria-label={addCharacterLabel}
+                  data-collapsible-ignore
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">{addCharacterLabel}</span>
+                </button>
+              }
+            >
+              {draft.characters.length ? (
+                <div className="space-y-2.5">
+                  {draft.characters.map((character, index) => {
+                    const showLabel = index === 0;
+                    return (
+                    <div
+                      key={character.id}
+                      className="flex flex-wrap items-end gap-2 rounded border border-slate-200 p-2.5"
+                    >
+                      <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-slate-500">
+                        {showLabel ? (
+                          localize("rightpanel_translation_notes_name", "Name")
+                        ) : (
+                          <span className="sr-only">
+                            {localize("rightpanel_translation_notes_name", "Name")}
+                          </span>
+                        )}
+                        <input
+                          value={character.name}
+                          onChange={(event) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              characters: prev.characters.map((entry) =>
+                                entry.id === character.id
+                                  ? { ...entry, name: event.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                          className="w-28 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                          placeholder={characterNamePlaceholder}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-slate-500">
+                        {showLabel ? (
+                          localize(
+                            "rightpanel_translation_notes_target_name",
+                            "Translated name",
+                          )
+                        ) : (
+                          <span className="sr-only">
+                            {localize(
+                              "rightpanel_translation_notes_target_name",
+                              "Translated name",
+                            )}
+                          </span>
+                        )}
+                        <input
+                          value={character.targetName}
+                          onChange={(event) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              characters: prev.characters.map((entry) =>
+                                entry.id === character.id
+                                  ? { ...entry, targetName: event.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                          className="w-28 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                          placeholder={characterTargetPlaceholder}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-slate-500">
+                        {showLabel ? (
+                          ageLabel
+                        ) : (
+                          <span className="sr-only">{ageLabel}</span>
+                        )}
+                        <input
+                          value={character.age}
+                          onChange={(event) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              characters: prev.characters.map((entry) =>
+                                entry.id === character.id
+                                  ? { ...entry, age: event.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                          className="w-14 rounded border border-slate-200 px-1.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                          placeholder={agePlaceholder}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-slate-500">
+                        {showLabel ? (
+                          genderLabel
+                        ) : (
+                          <span className="sr-only">{genderLabel}</span>
+                        )}
+                        <input
+                          value={character.gender}
+                          onChange={(event) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              characters: prev.characters.map((entry) =>
+                                entry.id === character.id
+                                  ? { ...entry, gender: event.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                          className="w-20 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                          placeholder={genderPlaceholder}
+                        />
+                      </label>
+                      <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-[11px] uppercase tracking-wide text-slate-500">
+                        {showLabel ? (
+                          traitsLabel
+                        ) : (
+                          <span className="sr-only">{traitsLabel}</span>
+                        )}
+                        <input
+                          value={character.traits}
+                          onChange={(event) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              characters: prev.characters.map((entry) =>
+                                entry.id === character.id
+                                  ? { ...entry, traits: event.target.value }
+                                  : entry,
+                              ),
+                            }))
+                          }
+                          className="w-full max-w-[24rem] rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+                          placeholder={traitsPlaceholder}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="ml-auto rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
+                        onClick={() =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            characters: prev.characters.filter(
+                              (entry) => entry.id !== character.id,
+                            ),
+                          }))
+                        }
+                        disabled={isSaving}
+                        title={removeLabel}
+                        aria-label={removeLabel}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        <span className="sr-only">{removeLabel}</span>
+                      </button>
+                    </div>
+                  );
+                  })}
                 </div>
-                <div className="mt-2.5 grid gap-2.5 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {localize("rightpanel_translation_notes_name", "Name")}
-                    </label>
-                    <input
-                      value={character.name}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? { ...entry, name: event.target.value }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={characterNamePlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {localize(
-                        "rightpanel_translation_notes_target_name",
-                        "Translated name",
-                      )}
-                    </label>
-                    <input
-                      value={character.targetName}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? { ...entry, targetName: event.target.value }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={characterTargetPlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {ageLabel}
-                    </label>
-                    <input
-                      value={character.age}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? { ...entry, age: event.target.value }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={agePlaceholder}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {genderLabel}
-                    </label>
-                    <input
-                      value={character.gender}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? { ...entry, gender: event.target.value }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={genderPlaceholder}
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-[11px] uppercase tracking-wide text-slate-500">
-                      {traitsLabel}
-                    </label>
-                    <input
-                      value={character.traits}
-                      onChange={(event) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          characters: prev.characters.map((entry) =>
-                            entry.id === character.id
-                              ? { ...entry, traits: event.target.value }
-                              : entry,
-                          ),
-                        }))
-                      }
-                      className="w-full rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                      placeholder={traitsPlaceholder}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">{noCharactersLabel}</p>
-        )}
-      </SectionCard>
-      <SectionCard
-        title={localize(
-          "rightpanel_translation_notes_named_entities",
-          "Named entities",
-        )}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() =>
-              setDraft((prev) => ({
-                ...prev,
-                namedEntities: [
-                  ...prev.namedEntities,
-                  createEntityDraft("entity"),
-                ],
-              }))
-            }
-            disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-            data-collapsible-ignore
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
-          </button>
-        }
-      >
-        {draft.namedEntities.length ? (
-          <div className="space-y-2.5">
+              ) : (
+                <p className="text-xs text-slate-500">{noCharactersLabel}</p>
+              )}
+            </NotesEditorSectionCard>
+            <NotesEditorSectionCard
+              title={namedEntitiesLabel}
+              actions={
+                <button
+                  type="button"
+                  className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      namedEntities: [
+                        ...prev.namedEntities,
+                        createEntityDraft("entity"),
+                      ],
+                    }))
+                  }
+                  disabled={isSaving}
+                  title={addEntryLabel}
+                  aria-label={addEntryLabel}
+                  data-collapsible-ignore
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">{addEntryLabel}</span>
+                </button>
+              }
+            >
+              {draft.namedEntities.length ? (
+                <div className="space-y-2.5">
             {draft.namedEntities.map((entity) => (
               <div
                 key={entity.id}
-                className="grid gap-2.5 md:grid-cols-[1fr,1fr,120px,auto]"
+                className="grid gap-2.5 md:grid-cols-[1fr,1fr,auto]"
               >
                 <input
                   value={entity.name}
@@ -1167,74 +1291,69 @@ export const TranslationNotesEditor = ({
                   className="rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                   placeholder={entryTargetPlaceholder}
                 />
-                <input
-                  value={entity.frequency}
-                  onChange={(event) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      namedEntities: prev.namedEntities.map((entry) =>
-                        entry.id === entity.id
-                          ? { ...entry, frequency: event.target.value }
-                          : entry,
-                      ),
-                    }))
-                  }
-                  className="rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                  placeholder={entryFrequencyPlaceholder}
-                />
+                <div className="flex items-center justify-end gap-2">
+                  <span className="min-w-[2.5rem] text-right text-xs font-semibold text-slate-500">
+                    {entity.frequency?.trim().length
+                      ? entity.frequency.trim()
+                      : "0"}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
+                    onClick={() =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        namedEntities: prev.namedEntities.filter(
+                          (entry) => entry.id !== entity.id,
+                        ),
+                      }))
+                    }
+                    disabled={isSaving}
+                    title={removeLabel}
+                    aria-label={removeLabel}
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    <span className="sr-only">{removeLabel}</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">{noEntriesLabel}</p>
+              )}
+            </NotesEditorSectionCard>
+            <NotesEditorSectionCard
+              title={locationsLabel}
+              actions={
                 <button
                   type="button"
-                  className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
+                  className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
                   onClick={() =>
                     setDraft((prev) => ({
                       ...prev,
-                      namedEntities: prev.namedEntities.filter(
-                        (entry) => entry.id !== entity.id,
-                      ),
+                      locations: [
+                        ...prev.locations,
+                        createEntityDraft("location"),
+                      ],
                     }))
                   }
                   disabled={isSaving}
-                  title={removeLabel}
-                  aria-label={removeLabel}
+                  title={addEntryLabel}
+                  aria-label={addEntryLabel}
+                  data-collapsible-ignore
                 >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  <span className="sr-only">{removeLabel}</span>
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">{addEntryLabel}</span>
                 </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">{noEntriesLabel}</p>
-        )}
-      </SectionCard>
-      <SectionCard
-        title={localize("rightpanel_translation_notes_locations", "Locations")}
-        actions={
-          <button
-            type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() =>
-              setDraft((prev) => ({
-                ...prev,
-                locations: [...prev.locations, createEntityDraft("location")],
-              }))
-            }
-            disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-            data-collapsible-ignore
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
-          </button>
-        }
-      >
-        {draft.locations.length ? (
-          <div className="space-y-2.5">
+              }
+            >
+              {draft.locations.length ? (
+                <div className="space-y-2.5">
             {draft.locations.map((location) => (
               <div
                 key={location.id}
-                className="grid gap-2.5 md:grid-cols-[1fr,1fr,120px,auto]"
+                className="grid gap-2.5 md:grid-cols-[1fr,1fr,auto]"
               >
                 <input
                   value={location.name}
@@ -1266,103 +1385,115 @@ export const TranslationNotesEditor = ({
                   className="rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
                   placeholder={entryTargetPlaceholder}
                 />
-                <input
-                  value={location.frequency}
-                  onChange={(event) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      locations: prev.locations.map((entry) =>
-                        entry.id === location.id
-                          ? { ...entry, frequency: event.target.value }
-                          : entry,
-                      ),
-                    }))
-                  }
-                  className="rounded border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
-                  placeholder={entryFrequencyPlaceholder}
-                />
-                <button
-                  type="button"
-                  className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
-                  onClick={() =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      locations: prev.locations.filter(
-                        (entry) => entry.id !== location.id,
-                      ),
-                    }))
-                  }
-                  disabled={isSaving}
-                  title={removeLabel}
-                  aria-label={removeLabel}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  <span className="sr-only">{removeLabel}</span>
-                </button>
+                <div className="flex items-center justify-end gap-2">
+                  <span className="min-w-[2.5rem] text-right text-xs font-semibold text-slate-500">
+                    {location.frequency?.trim().length
+                      ? location.frequency.trim()
+                      : "0"}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded p-1 text-rose-500 transition hover:text-rose-600 disabled:opacity-60"
+                    onClick={() =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        locations: prev.locations.filter(
+                          (entry) => entry.id !== location.id,
+                        ),
+                      }))
+                    }
+                    disabled={isSaving}
+                    title={removeLabel}
+                    aria-label={removeLabel}
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    <span className="sr-only">{removeLabel}</span>
+                  </button>
+                </div>
               </div>
             ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">{noEntriesLabel}</p>
+              )}
+            </NotesEditorSectionCard>
+            <NotesEditorSectionCard
+              title={measurementUnitsLabel}
+              actions={
+                <button
+                  type="button"
+                  className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                  onClick={() => addPair("measurementUnits", "unit")}
+                  disabled={isSaving}
+                  title={addEntryLabel}
+                  aria-label={addEntryLabel}
+                  data-collapsible-ignore
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">{addEntryLabel}</span>
+                </button>
+              }
+            >
+              {renderPairList(
+                draft.measurementUnits,
+                "measurementUnits",
+                measurementUnitSourcePlaceholder,
+                measurementUnitTargetPlaceholder,
+              )}
+            </NotesEditorSectionCard>
+            <NotesEditorSectionCard
+              title={linguisticFeaturesLabel}
+              actions={
+                <button
+                  type="button"
+                  className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+                  onClick={() => addPair("linguisticFeatures", "feature")}
+                  disabled={isSaving}
+                  title={addEntryLabel}
+                  aria-label={addEntryLabel}
+                  data-collapsible-ignore
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <span className="sr-only">{addEntryLabel}</span>
+                </button>
+              }
+            >
+              {renderPairList(
+                draft.linguisticFeatures,
+                "linguisticFeatures",
+                linguisticSourcePlaceholder,
+                linguisticTargetPlaceholder,
+              )}
+            </NotesEditorSectionCard>
           </div>
-        ) : (
-          <p className="text-xs text-slate-500">{noEntriesLabel}</p>
-        )}
-      </SectionCard>
-      <SectionCard
-        title={localize(
-          "rightpanel_translation_notes_measurement_units",
-          "Measurement units",
-        )}
-        actions={
+        </div>
+      </div>
+      <div className="flex flex-col gap-3 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          {formError || error ? (
+            <p className="text-xs text-rose-500">{formError || error}</p>
+          ) : null}
+          <p className="text-[11px] text-slate-400">{footerHint}</p>
+        </div>
+        <div className="flex items-center justify-end gap-2">
           <button
             type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() => addPair("measurementUnits", "unit")}
+            className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+            onClick={handleCancel}
             disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-            data-collapsible-ignore
           >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
+            {cancelLabel}
           </button>
-        }
-      >
-        {renderPairList(
-          draft.measurementUnits,
-          "measurementUnits",
-          measurementUnitSourcePlaceholder,
-          measurementUnitTargetPlaceholder,
-        )}
-      </SectionCard>
-      <SectionCard
-        title={localize(
-          "rightpanel_translation_notes_linguistic_features",
-          "Linguistic features",
-        )}
-        actions={
           <button
             type="button"
-            className="rounded border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
-            onClick={() => addPair("linguisticFeatures", "feature")}
+            className="rounded bg-slate-800 px-3 py-1 text-xs font-medium text-white transition hover:bg-slate-700 disabled:opacity-60"
+            onClick={handleSave}
             disabled={isSaving}
-            title={addEntryLabel}
-            aria-label={addEntryLabel}
-            data-collapsible-ignore
           >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">{addEntryLabel}</span>
+            {isSaving ? savingLabel : saveLabel}
           </button>
-        }
-      >
-        {renderPairList(
-          draft.linguisticFeatures,
-          "linguisticFeatures",
-          linguisticSourcePlaceholder,
-          linguisticTargetPlaceholder,
-        )}
-      </SectionCard>
-      {(formError || error) && (
-        <p className="text-xs text-rose-500">{formError || error || ""}</p>
-      )}
+        </div>
+      </div>
     </div>
   );
 };

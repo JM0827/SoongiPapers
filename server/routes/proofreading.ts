@@ -136,18 +136,26 @@ const proofreadingRoutes: FastifyPluginAsync = async (fastify) => {
             await completeWorkflowRun(workflowRun.runId, { jobId: job_id });
           }
         } catch (error: any) {
-          if (workflowRun) {
-            await failWorkflowRun(workflowRun.runId, {
+          req.log.error(
+            {
+              err: error,
+              projectId: project_id,
               jobId: job_id,
-              error: error?.message ?? "unknown",
+            },
+            "[proofread] streaming run failed",
+          );
+          if (!streamClosed) {
+            send({
+              type: "error",
+              message: error?.message || "Proofreading failed",
             });
           }
-          send({
-            type: "error",
-            message: error?.message || "Proofreading failed",
-          });
         }
       } catch (error: any) {
+        req.log.error(
+          { err: error, projectId: null, jobId: null },
+          "[proofread] unhandled error",
+        );
         send({
           type: "error",
           message: error?.message || "Proofreading failed",

@@ -46,6 +46,7 @@ export interface DocumentSummaryCardProps {
   fallbackLanguage?: string | null;
   fallbackVersion?: number | null;
   headerAccessory?: ReactNode;
+  fileName?: string | null;
 }
 
 export const DocumentSummaryCard = ({
@@ -61,6 +62,7 @@ export const DocumentSummaryCard = ({
   fallbackLanguage,
   fallbackVersion,
   headerAccessory,
+  fileName,
 }: DocumentSummaryCardProps) => {
   const effectiveTimestamp =
     profile?.updatedAt ?? profile?.createdAt ?? fallbackTimestamp ?? null;
@@ -135,9 +137,18 @@ export const DocumentSummaryCard = ({
             { timestamp: timestampLabel },
           )
         : null,
+      fileName
+        ? localize(
+            "rightpanel_summary_metric_filename",
+            `File: ${fileName}`,
+            { filename: fileName },
+          )
+        : null,
     ].filter(Boolean);
     if (!parts.length) return null;
-    return <p className="mt-4 text-[11px] text-slate-400">{parts.join(" ")}</p>;
+    return (
+      <p className="mt-4 text-[11px] text-slate-400">{parts.join(" · ")}</p>
+    );
   };
 
   const statusIcon = () => {
@@ -351,6 +362,7 @@ export interface DocumentSummarySectionProps {
   originFallback?: DocumentSummaryFallback | null;
   originHeaderAccessory?: ReactNode;
   translationHeaderAccessory?: ReactNode;
+  originFileName?: string | null;
 }
 
 export const DocumentSummarySection = ({
@@ -372,6 +384,7 @@ export const DocumentSummarySection = ({
   originFallback = null,
   originHeaderAccessory,
   translationHeaderAccessory,
+  originFileName = null,
 }: DocumentSummarySectionProps) => (
   <div className="space-y-4">
     <DocumentSummaryCard
@@ -389,6 +402,7 @@ export const DocumentSummarySection = ({
       fallbackLanguage={originFallback?.language ?? null}
       fallbackVersion={originFallback ? 0 : null}
       headerAccessory={originHeaderAccessory}
+      fileName={originFileName}
     />
     <TranslationNotesSection
       notes={origin?.translationNotes ?? null}

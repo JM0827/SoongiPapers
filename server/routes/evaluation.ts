@@ -1534,6 +1534,12 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
                         ? originDoc.origin_content
                         : null) ?? null,
                   timestamp: toIsoString(originDoc.updated_at ?? null),
+                  language:
+                    (originDoc as { language?: string | null })?.language ??
+                    null,
+                  filename:
+                    (originDoc as { original_filename?: string | null })
+                      ?.original_filename ?? null,
                 }
               : content.origin,
             translation: content.translation,

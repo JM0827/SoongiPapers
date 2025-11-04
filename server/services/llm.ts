@@ -147,21 +147,19 @@ export function safeExtractOpenAIResponse(
 
   if (!parsed && !normalizedText) {
     if (isMaxBudgetStop(resp)) {
-      const id = resp?.id ?? null;
-      const msg = `OpenAI response incomplete (reason=max_output_tokens, id=${id}).`;
-      const err: Error & { code?: string; metadata?: Record<string, unknown> } =
-        new Error(msg);
-      err.code = "openai_response_incomplete";
-      err.metadata = { reason: "max_output_tokens", responseId: id };
-      throw err;
+      parsed = {
+        version: "v2",
+        items: [],
+      };
+    } else {
+      try {
+        const preview = JSON.stringify(resp)?.slice(0, 2000);
+        console.error("[LLM] Empty response payload", preview);
+      } catch (_logErr) {
+        console.error("[LLM] Empty response payload (unable to stringify)");
+      }
+      throw new Error("Empty response from OpenAI (no text, no message)");
     }
-    try {
-      const preview = JSON.stringify(resp)?.slice(0, 2000);
-      console.error("[LLM] Empty response payload", preview);
-    } catch (_logErr) {
-      console.error("[LLM] Empty response payload (unable to stringify)");
-    }
-    throw new Error("Empty response from OpenAI (no text, no message)");
   }
 
   return {

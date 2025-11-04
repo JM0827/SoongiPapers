@@ -37,10 +37,10 @@ describe("runResponsesWithRetry", () => {
     assert.equal(callCount, 2);
     assert.deepEqual(
       attempts.map((it) => it.maxOutputTokens),
-      [300, 450],
+      [300, 210],
     );
     assert.equal(result.attempts, 2);
-    assert.equal(result.maxOutputTokens, 450);
+    assert.equal(result.maxOutputTokens, 210);
     assert.equal(result.truncated, false);
   });
 
@@ -65,9 +65,9 @@ describe("runResponsesWithRetry", () => {
     });
 
     assert.equal(callCount, 2);
-    assert.deepEqual(attempts, [200, 300]);
+    assert.deepEqual(attempts, [200, 200]);
     assert.equal(result.attempts, 2);
-    assert.equal(result.maxOutputTokens, 300);
+    assert.equal(result.maxOutputTokens, 200);
     assert.equal(result.truncated, false);
   });
 

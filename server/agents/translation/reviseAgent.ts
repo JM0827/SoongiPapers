@@ -52,6 +52,9 @@ export interface TranslationReviseAgentResultMeta {
   fallbackModelUsed: boolean;
   jsonRepairApplied: boolean;
   attemptHistory: ResponsesRetryAttemptContext[];
+  downshiftCount?: number;
+  forcedPaginationCount?: number;
+  cursorRetryCount?: number;
 }
 
 export interface TranslationReviseAgentResult {
@@ -446,6 +449,9 @@ export async function generateTranslationRevision(
   segmentRetryMeta = null;
   segmentRetryModel = null;
   segmentRetryRuns = null;
+  let downshiftCount = 0;
+  let forcedPaginationCount = 0;
+  let cursorRetryCount = 0;
   const runResult = await runResponsesWithRetry<Response>({
     client: openai,
     initialMaxOutputTokens: baseMaxTokens,
@@ -453,6 +459,15 @@ export async function generateTranslationRevision(
     maxAttempts: Math.max(attemptConfigs.length + 2, 3),
     minOutputTokens: 200,
     onAttempt: (context) => {
+      if (context.stage === "downshift" || context.stage === "minimal") {
+        downshiftCount += 1;
+      }
+      if (context.reason === "segment_retry") {
+        cursorRetryCount += 1;
+      }
+      if (context.reason === "incomplete" && context.stage === "segment") {
+        forcedPaginationCount += 1;
+      }
       if (!isTranslationDebugEnabled()) {
         return;
       }
@@ -561,6 +576,9 @@ export async function generateTranslationRevision(
   const segmentModel = retryModel;
   const segmentAttempts = segmentMeta?.attempts ?? 0;
   const totalAttempts = runResult.attempts + segmentAttempts;
+  downshiftCount += segmentMeta?.downshiftCount ?? 0;
+  forcedPaginationCount += segmentMeta?.forcedPaginationCount ?? 0;
+  cursorRetryCount += segmentMeta?.cursorRetryCount ?? 0;
   let attemptHistory = [...runResult.attemptHistory];
   if (segmentMeta?.attemptHistory?.length) {
     attemptHistory = attemptHistory.concat(segmentMeta.attemptHistory);
@@ -652,6 +670,9 @@ export async function generateTranslationRevision(
       fallbackModelUsed,
       jsonRepairApplied: jsonRepairFlag,
       attemptHistory,
+      downshiftCount,
+      forcedPaginationCount,
+      cursorRetryCount,
     },
     llm: { runs: retryRuns ? [...retryRuns, llmRun] : [llmRun] },
   };

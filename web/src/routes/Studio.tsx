@@ -58,6 +58,7 @@ export const Studio = () => {
           isContentLoading={isContextLoading}
           onProfileUpdated={handleProfileUpdated}
           onRefreshContent={() => refresh("content")}
+          snapshot={snapshot}
         />
       }
     >

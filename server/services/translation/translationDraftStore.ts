@@ -42,7 +42,7 @@ async function ensureTranslationDraftSchema(): Promise<void> {
       [],
     );
     await query(
-      "ALTER TABLE translation_drafts ADD CONSTRAINT translation_drafts_stage_check CHECK (stage IN ('literal','style','emotion','qa','draft','revise','micro-check'))",
+      "ALTER TABLE translation_drafts ADD CONSTRAINT translation_drafts_stage_check CHECK (stage IN ('draft','revise','micro-check'))",
       [],
     );
   } catch (error) {
@@ -97,7 +97,7 @@ function serializeRecord(
   const candidates = result.candidates ?? null;
 
   const needsReview =
-    job.stage === "qa" || job.stage === "micro-check"
+    job.stage === "micro-check"
       ? !(guards?.allOk ?? true)
       : false;
 

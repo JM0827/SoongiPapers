@@ -1,46 +1,42 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
-import Editor, { type OnChange, type OnMount } from "@monaco-editor/react";
-import type * as Monaco from "monaco-editor";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactElement } from 'react';
+import Editor, { type OnChange, type OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import {
   ShieldCheck,
   Loader2,
   XCircle,
   Check,
-  Layers,
-  Sparkles,
-  Heart,
-  Shield,
   BookOpenCheck,
   PenSquare,
   type LucideIcon,
-} from "lucide-react";
+} from 'lucide-react';
 import {
   useEditingCommandStore,
   type EditingEditorAdapter,
   type EditorSelectionContext,
-} from "../../store/editingCommand.store";
+} from '../../store/editingCommand.store';
 import type {
   SelectionRange,
   ProofreadingIssue,
   TranslationStageKey,
   DocumentProfileSummary,
   DocumentSummaryFallback,
-} from "../../types/domain";
-import { useProofreadEditorContext } from "../../context/proofreadEditor";
+} from '../../types/domain';
+import { useProofreadEditorContext } from '../../context/proofreadEditor';
 import {
   useProofreadIssues,
   type ProofreadIssueEntry,
   type ProofreadHighlightSegment,
-} from "../../context/ProofreadIssuesContext";
-import { useUIStore } from "../../store/ui.store";
-import { useAuthStore } from "../../store/auth.store";
-import { useUILocale } from "../../hooks/useUILocale";
-import { translate } from "../../lib/locale";
-import { useTranslationStageDrafts } from "../../hooks/useTranslationStageDrafts";
-import { Modal } from "../common/Modal";
+} from '../../context/ProofreadIssuesContext';
+import { useUIStore } from '../../store/ui.store';
+import { useAuthStore } from '../../store/auth.store';
+import { useUILocale } from '../../hooks/useUILocale';
+import { translate } from '../../lib/locale';
+import { useTranslationStageDrafts } from '../../hooks/useTranslationStageDrafts';
+import { Modal } from '../common/Modal';
 
-const RECORD_SEPARATOR = "\u241E";
+const RECORD_SEPARATOR = '\u241E';
 const SEGMENT_DELIMITER = `\n${RECORD_SEPARATOR}\n`;
 
 interface AggregatedSegmentMeta {
@@ -60,57 +56,21 @@ interface AggregatedModel {
   metaMap: Map<string, AggregatedSegmentMeta>;
 }
 
-const PLAIN_SEGMENT_SEPARATOR = "\n\n";
-
-const LEGACY_STAGE_ORDER: TranslationStageKey[] = [
-  "literal",
-  "style",
-  "emotion",
-  "qa",
-];
+const PLAIN_SEGMENT_SEPARATOR = '\n\n';
 
 const V2_STAGE_ORDER: TranslationStageKey[] = [
-  "draft",
-  "revise",
-  "micro-check",
+  'draft',
+  'revise',
+  'micro-check',
 ];
 
-const V2_STAGE_SET = new Set(V2_STAGE_ORDER);
-
-const STAGE_META: Record<
-  TranslationStageKey,
-  { icon: LucideIcon; fallback: string; toneClass: string }
-> = {
-  literal: {
-    icon: Layers,
-    fallback: "Literal pass",
-    toneClass: "text-sky-600",
-  },
-  style: {
-    icon: Sparkles,
-    fallback: "Style pass",
-    toneClass: "text-indigo-600",
-  },
-  emotion: {
-    icon: Heart,
-    fallback: "Emotion pass",
-    toneClass: "text-rose-600",
-  },
-  qa: { icon: Shield, fallback: "QA review", toneClass: "text-emerald-600" },
-  draft: {
-    icon: BookOpenCheck,
-    fallback: "Draft pass",
-    toneClass: "text-sky-600",
-  },
-  revise: {
-    icon: PenSquare,
-    fallback: "Revise pass",
-    toneClass: "text-indigo-600",
-  },
-  "micro-check": {
+const STAGE_META: Record<TranslationStageKey, { icon: LucideIcon; fallback: string; toneClass: string }> = {
+  draft: { icon: BookOpenCheck, fallback: 'Draft pass', toneClass: 'text-sky-600' },
+  revise: { icon: PenSquare, fallback: 'Revise pass', toneClass: 'text-indigo-600' },
+  'micro-check': {
     icon: ShieldCheck,
-    fallback: "Micro-check",
-    toneClass: "text-emerald-600",
+    fallback: 'Micro-check',
+    toneClass: 'text-emerald-600',
   },
 };
 
@@ -122,7 +82,7 @@ const buildAggregatedModel = (
 ): AggregatedModel => {
   let cursor = 0;
   let plainCursor = 0;
-  let value = "";
+  let value = '';
   const segments: AggregatedSegmentMeta[] = [];
   const metaMap = new Map<string, AggregatedSegmentMeta>();
   items.forEach((item, index) => {
@@ -130,10 +90,8 @@ const buildAggregatedModel = (
     const plainStartOffset = plainCursor;
     value += item.text;
     cursor += item.text.length;
-    const separatorString =
-      index < items.length - 1 ? `\n${RECORD_SEPARATOR}\n` : "";
-    const plainSeparatorString =
-      index < items.length - 1 ? PLAIN_SEGMENT_SEPARATOR : "";
+    const separatorString = index < items.length - 1 ? `\n${RECORD_SEPARATOR}\n` : '';
+    const plainSeparatorString = index < items.length - 1 ? PLAIN_SEGMENT_SEPARATOR : '';
     const segmentMeta: AggregatedSegmentMeta = {
       segmentId: item.segmentId,
       startOffset,
@@ -163,10 +121,7 @@ const splitAggregatedValue = (value: string, expectedLength: number) => {
   return parts.length === expectedLength ? parts : null;
 };
 
-const mapOffsetToSegment = (
-  offset: number,
-  model: AggregatedModel,
-): string | null => {
+const mapOffsetToSegment = (offset: number, model: AggregatedModel): string | null => {
   const entry = model.segments.find(
     (segment) => offset >= segment.startOffset && offset <= segment.endOffset,
   );
@@ -180,17 +135,17 @@ interface SelectionOverlayState {
 }
 
 const severityToClass = (severity?: string | null) => {
-  const normalized = String(severity ?? "").toLowerCase();
-  if (normalized.includes("high") || normalized === "critical") {
-    return "proofread-hl-critical";
+  const normalized = String(severity ?? '').toLowerCase();
+  if (normalized.includes('high') || normalized === 'critical') {
+    return 'proofread-hl-critical';
   }
-  if (normalized.includes("medium")) {
-    return "proofread-hl-medium";
+  if (normalized.includes('medium')) {
+    return 'proofread-hl-medium';
   }
-  if (normalized.includes("low")) {
-    return "proofread-hl-low";
+  if (normalized.includes('low')) {
+    return 'proofread-hl-low';
   }
-  return "proofread-hl-default";
+  return 'proofread-hl-default';
 };
 
 const formatTimestamp = (value?: string | null) => {
@@ -226,8 +181,7 @@ type DebuggableWindow = Window & {
   __BOOKKO_DEBUG_PROOFREAD__?: unknown;
 };
 
-const escapeRegex = (value: string) =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const looseMatchRange = (
   source: string,
@@ -237,7 +191,7 @@ const looseMatchRange = (
   const variants = [target, target.trim()].filter(Boolean) as string[];
   for (const variant of variants) {
     if (!variant) continue;
-    const regex = new RegExp(escapeRegex(variant).replace(/\s+/g, "\\s+"), "m");
+    const regex = new RegExp(escapeRegex(variant).replace(/\s+/g, '\\s+'), 'm');
     const match = regex.exec(source);
     if (match) {
       return { start: match.index, end: match.index + match[0].length };
@@ -250,7 +204,7 @@ const collectStringCandidates = (values: Array<unknown>): string[] => {
   const seen = new Set<string>();
   const results: string[] = [];
   values.forEach((value) => {
-    if (typeof value !== "string") return;
+    if (typeof value !== 'string') return;
     const trimmed = value.trim();
     if (!trimmed) return;
     if (seen.has(trimmed)) return;
@@ -261,10 +215,10 @@ const collectStringCandidates = (values: Array<unknown>): string[] => {
 };
 
 const toFiniteNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     const parsed = Number.parseFloat(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
@@ -349,22 +303,22 @@ const resolveSegmentSpanOffsets = (
 };
 
 const readHighlightDebugFlag = (): boolean => {
-  if (typeof window === "undefined") {
+  if (typeof window === 'undefined') {
     return false;
   }
   try {
     const globalFlag = (window as DebuggableWindow).__BOOKKO_DEBUG_PROOFREAD__;
-    if (typeof globalFlag === "boolean") {
+    if (typeof globalFlag === 'boolean') {
       return globalFlag;
     }
     const raw = window.localStorage?.getItem(
-      "bookko:debug-proofread-highlights",
+      'bookko:debug-proofread-highlights',
     );
     if (!raw) {
       return false;
     }
     const normalized = raw.toString().trim().toLowerCase();
-    return normalized === "1" || normalized === "true" || normalized === "yes";
+    return normalized === '1' || normalized === 'true' || normalized === 'yes';
   } catch {
     return false;
   }
@@ -390,8 +344,7 @@ const editorSupportsHiddenAreas = (
   editor: Monaco.editor.IStandaloneCodeEditor,
 ): editor is Monaco.editor.IStandaloneCodeEditor & {
   setHiddenAreas: (ranges: Monaco.Range[]) => void;
-} =>
-  typeof (editor as { setHiddenAreas?: unknown }).setHiddenAreas === "function";
+} => typeof (editor as { setHiddenAreas?: unknown }).setHiddenAreas === 'function';
 
 interface DualEditorPanelProps {
   originProfile: DocumentProfileSummary | null;
@@ -399,7 +352,7 @@ interface DualEditorPanelProps {
 }
 
 const hasText = (value?: string | null) =>
-  typeof value === "string" && value.trim().length > 0;
+  typeof value === 'string' && value.trim().length > 0;
 
 export const DualEditorPanel = ({
   originProfile,
@@ -434,18 +387,16 @@ export const DualEditorPanel = ({
   const hasTranslationContent = useMemo(
     () =>
       segments.some((segment) =>
-        Boolean(
-          segment.translationText && segment.translationText.trim().length,
-        ),
+        Boolean(segment.translationText && segment.translationText.trim().length),
       ),
     [segments],
   );
   const qualityButtonClass = hasTranslationContent
-    ? "inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-100 bg-white/70 text-emerald-600 transition hover:border-emerald-200 hover:bg-emerald-100 hover:text-emerald-700"
-    : "inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-50 bg-transparent text-emerald-200 transition cursor-not-allowed";
+    ? 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-100 bg-white/70 text-emerald-600 transition hover:border-emerald-200 hover:bg-emerald-100 hover:text-emerald-700'
+    : 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-50 bg-transparent text-emerald-200 transition cursor-not-allowed';
   const qualityButtonTitle = hasTranslationContent
-    ? "품질 검토 보기"
-    : "번역본이 준비되면 품질 검토를 확인할 수 있습니다.";
+    ? '품질 검토 보기'
+    : '번역본이 준비되면 품질 검토를 확인할 수 있습니다.';
 
   const proofIssuesById = useMemo(() => {
     const map = new Map<string, ProofreadIssueEntry>();
@@ -471,11 +422,7 @@ export const DualEditorPanel = ({
   );
   const { locale } = useUILocale();
   const localize = useCallback(
-    (
-      key: string,
-      fallback: string,
-      params?: Record<string, string | number>,
-    ) => {
+    (key: string, fallback: string, params?: Record<string, string | number>) => {
       const resolved = translate(key, locale, params);
       return resolved === key ? fallback : resolved;
     },
@@ -524,15 +471,15 @@ export const DualEditorPanel = ({
   );
   const namedEntityEntries = useMemo(
     () =>
-      (translationNotes?.namedEntities ?? []).filter(
-        (entry) => hasText(entry?.name) || hasText(entry?.targetName),
+      (translationNotes?.namedEntities ?? []).filter((entry) =>
+        hasText(entry?.name) || hasText(entry?.targetName),
       ),
     [translationNotes],
   );
   const locationEntries = useMemo(
     () =>
-      (translationNotes?.locations ?? []).filter(
-        (entry) => hasText(entry?.name) || hasText(entry?.targetName),
+      (translationNotes?.locations ?? []).filter((entry) =>
+        hasText(entry?.name) || hasText(entry?.targetName),
       ),
     [translationNotes],
   );
@@ -556,62 +503,65 @@ export const DualEditorPanel = ({
     ],
   );
   const summaryButtonLabel = localize(
-    "proofread_editor_origin_summary_button",
-    "원작 요약 보기",
+    'proofread_editor_origin_summary_button',
+    '원작 요약 보기',
   );
   const summaryModalTitle = localize(
-    "proofread_editor_origin_summary_modal_title",
-    "원작 요약 & 번역 노트",
+    'proofread_editor_origin_summary_modal_title',
+    '원작 요약 & 번역 노트',
   );
-  const summaryModalDescription = "";
+  const summaryModalDescription = '';
   const summaryCloseLabel = localize(
-    "proofread_editor_origin_summary_close",
-    "원작 요약 닫기",
+    'proofread_editor_origin_summary_close',
+    '원작 요약 닫기',
   );
   const summarySectionTitle = localize(
-    "rightpanel_origin_summary_title",
-    "원작 요약",
+    'rightpanel_origin_summary_title',
+    '원작 요약',
   );
   const notesSectionTitle = localize(
-    "rightpanel_translation_notes_title",
-    "번역 노트",
+    'rightpanel_translation_notes_title',
+    '번역 노트',
   );
   const summaryEmptyLabel = localize(
-    "proofread_editor_origin_summary_empty",
-    "원작 요약이 아직 준비되지 않았습니다.",
+    'proofread_editor_origin_summary_empty',
+    '원작 요약이 아직 준비되지 않았습니다.',
   );
   const notesEmptyLabel = localize(
-    "proofread_editor_origin_notes_empty",
-    "번역 노트가 아직 없습니다.",
+    'proofread_editor_origin_notes_empty',
+    '번역 노트가 아직 없습니다.',
   );
   const measurementUnitsLabel = localize(
-    "rightpanel_translation_notes_measurement_units",
-    "단위 정보",
+    'rightpanel_translation_notes_measurement_units',
+    '단위 정보',
   );
   const linguisticFeaturesLabel = localize(
-    "rightpanel_translation_notes_linguistic_features",
-    "언어 특징",
+    'rightpanel_translation_notes_linguistic_features',
+    '언어 특징',
   );
   const charactersLabel = localize(
-    "rightpanel_translation_notes_characters",
-    "등장인물",
+    'rightpanel_translation_notes_characters',
+    '등장인물',
   );
   const namedEntitiesLabel = localize(
-    "rightpanel_translation_notes_named_entities",
-    "고유명사",
+    'rightpanel_translation_notes_named_entities',
+    '고유명사',
   );
   const locationsLabel = localize(
-    "rightpanel_translation_notes_locations",
-    "장소",
+    'rightpanel_translation_notes_locations',
+    '장소',
   );
   const timePeriodLabel = localize(
-    "rightpanel_translation_notes_time_period",
-    "시대 배경",
+    'rightpanel_translation_notes_time_period',
+    '시대 배경',
   );
-  const traitsLabel = localize("rightpanel_translation_notes_traits", "특징");
-  const nameLabel = localize("rightpanel_translation_notes_name", "이름");
-  const ageLabel = localize("rightpanel_translation_notes_age", "나이");
-  const genderLabel = localize("rightpanel_translation_notes_gender", "성별");
+  const traitsLabel = localize(
+    'rightpanel_translation_notes_traits',
+    '특징',
+  );
+  const nameLabel = localize('rightpanel_translation_notes_name', '이름');
+  const ageLabel = localize('rightpanel_translation_notes_age', '나이');
+  const genderLabel = localize('rightpanel_translation_notes_gender', '성별');
   const summaryTimestampLabel = useMemo(() => {
     if (!originSummaryTimestamp) return null;
     const date = new Date(originSummaryTimestamp);
@@ -626,7 +576,7 @@ export const DualEditorPanel = ({
     ) {
       chips.push(
         localize(
-          "rightpanel_summary_metric_words",
+          'rightpanel_summary_metric_words',
           `${originMetrics.wordCount.toLocaleString()} words`,
           { count: originMetrics.wordCount.toLocaleString() },
         ),
@@ -638,7 +588,7 @@ export const DualEditorPanel = ({
     ) {
       chips.push(
         localize(
-          "rightpanel_summary_metric_characters",
+          'rightpanel_summary_metric_characters',
           `${originMetrics.charCount.toLocaleString()} characters`,
           { count: originMetrics.charCount.toLocaleString() },
         ),
@@ -650,15 +600,17 @@ export const DualEditorPanel = ({
     ) {
       const minutes = Math.max(1, Math.round(originMetrics.readingTimeMinutes));
       chips.push(
-        localize("rightpanel_summary_metric_minutes", `${minutes} mins`, {
-          count: minutes,
-        }),
+        localize(
+          'rightpanel_summary_metric_minutes',
+          `${minutes} mins`,
+          { count: minutes },
+        ),
       );
     }
     if (summaryTimestampLabel) {
       chips.push(
         localize(
-          "rightpanel_summary_metric_updated",
+          'rightpanel_summary_metric_updated',
           `업데이트: ${summaryTimestampLabel}`,
           { timestamp: summaryTimestampLabel },
         ),
@@ -685,7 +637,7 @@ export const DualEditorPanel = ({
               className="flex flex-wrap items-center gap-2"
             >
               <span className="font-medium text-slate-900">
-                {hasText(entry.source) ? entry.source : "—"}
+                {hasText(entry.source) ? entry.source : '—'}
               </span>
               {hasText(entry.target) ? (
                 <span className="text-slate-500">→ {entry.target}</span>
@@ -699,11 +651,7 @@ export const DualEditorPanel = ({
 
   const renderEntitySection = (
     title: string,
-    entries: Array<{
-      name: string;
-      targetName: string | null;
-      frequency?: number;
-    }>,
+    entries: Array<{ name: string; targetName: string | null; frequency?: number }>,
     keyPrefix: string,
     options?: { twoColumn?: boolean },
   ): ReactElement | null => {
@@ -715,17 +663,13 @@ export const DualEditorPanel = ({
           {title}
         </p>
         <div
-          className={
-            twoColumn
-              ? "grid gap-2 text-sm text-slate-700 sm:grid-cols-2"
-              : "space-y-1 text-sm text-slate-700"
-          }
+          className={twoColumn ? 'grid gap-2 text-sm text-slate-700 sm:grid-cols-2' : 'space-y-1 text-sm text-slate-700'}
         >
           {entries.map((entry, index) => {
             const freqLabel =
-              typeof entry.frequency === "number"
+              typeof entry.frequency === 'number'
                 ? localize(
-                    "rightpanel_translation_notes_frequency_label",
+                    'rightpanel_translation_notes_frequency_label',
                     `freq ${entry.frequency}`,
                     { count: entry.frequency },
                   )
@@ -736,15 +680,13 @@ export const DualEditorPanel = ({
                 className="flex flex-wrap items-center gap-2"
               >
                 <span className="font-medium text-slate-900">
-                  {hasText(entry.name) ? entry.name : "—"}
+                  {hasText(entry.name) ? entry.name : '—'}
                 </span>
                 {hasText(entry.targetName) ? (
                   <span className="text-slate-500">→ {entry.targetName}</span>
                 ) : null}
                 {freqLabel ? (
-                  <span className="text-[11px] text-slate-400">
-                    {freqLabel}
-                  </span>
+                  <span className="text-[11px] text-slate-400">{freqLabel}</span>
                 ) : null}
               </div>
             );
@@ -772,9 +714,7 @@ export const DualEditorPanel = ({
                   {hasText(character.name) ? character.name : nameLabel}
                 </span>
                 {hasText(character.targetName) ? (
-                  <span className="text-slate-500">
-                    → {character.targetName}
-                  </span>
+                  <span className="text-slate-500">→ {character.targetName}</span>
                 ) : null}
               </div>
               <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
@@ -791,9 +731,7 @@ export const DualEditorPanel = ({
               </div>
               {character.traits?.length ? (
                 <div className="flex flex-wrap gap-1 text-[11px] text-slate-500">
-                  <span className="font-semibold text-slate-600">
-                    {traitsLabel}:
-                  </span>
+                  <span className="font-semibold text-slate-600">{traitsLabel}:</span>
                   {character.traits.map((trait, traitIndex) => (
                     <span key={`trait-${index}-${traitIndex}`}>{trait}</span>
                   ))}
@@ -807,14 +745,19 @@ export const DualEditorPanel = ({
   };
   const getStageLabel = useCallback(
     (stage: TranslationStageKey) =>
-      localize(`translation_stage_${stage}`, STAGE_META[stage].fallback),
+      localize(
+        `translation_stage_${stage}`,
+        STAGE_META[stage].fallback,
+      ),
     [localize],
   );
   const stageButtonTitle = useCallback(
     (stage: TranslationStageKey) =>
-      localize("proofread_stage_button_view", "View {{stage}} draft", {
-        stage: getStageLabel(stage),
-      }),
+      localize(
+        'proofread_stage_button_view',
+        'View {{stage}} draft',
+        { stage: getStageLabel(stage) },
+      ),
     [getStageLabel, localize],
   );
   const [stageViewer, setStageViewer] = useState<{
@@ -824,7 +767,7 @@ export const DualEditorPanel = ({
   const [knownAvailableStages, setKnownAvailableStages] = useState<
     TranslationStageKey[]
   >([]);
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
 
   const stageDraftQuery = useTranslationStageDrafts({
     token,
@@ -848,7 +791,7 @@ export const DualEditorPanel = ({
   }, [stageDraftQuery.data]);
 
   useEffect(() => {
-    setCopyState("idle");
+    setCopyState('idle');
   }, [stageViewer.stage, stageViewer.isOpen]);
 
   const availableStageSet = useMemo(
@@ -856,12 +799,7 @@ export const DualEditorPanel = ({
     [knownAvailableStages],
   );
 
-  const stageOrder = useMemo(() => {
-    const hasV2Stage = knownAvailableStages.some((stage) =>
-      V2_STAGE_SET.has(stage),
-    );
-    return hasV2Stage ? V2_STAGE_ORDER : LEGACY_STAGE_ORDER;
-  }, [knownAvailableStages]);
+  const stageOrder = useMemo(() => V2_STAGE_ORDER, []);
 
   const handleStageButtonClick = useCallback(
     (stageKey: TranslationStageKey) => {
@@ -878,28 +816,28 @@ export const DualEditorPanel = ({
   const handleCopyStageDraft = useCallback(async () => {
     if (!stageDraftQuery.data?.joinedText) return;
     try {
-      if (typeof navigator !== "undefined" && navigator.clipboard) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
         await navigator.clipboard.writeText(stageDraftQuery.data.joinedText);
-        setCopyState("copied");
-        window.setTimeout(() => setCopyState("idle"), 2000);
+        setCopyState('copied');
+        window.setTimeout(() => setCopyState('idle'), 2000);
       }
     } catch (error) {
-      console.warn("[DualEditor] Failed to copy stage draft", error);
+      console.warn('[DualEditor] Failed to copy stage draft', error);
     }
   }, [stageDraftQuery.data]);
 
   const stageViewerTitle = stageViewer.stage
     ? localize(
-        "proofread_stage_viewer_title",
+        'proofread_stage_viewer_title',
         `${getStageLabel(stageViewer.stage)} draft`,
         { stageLabel: getStageLabel(stageViewer.stage) },
       )
-    : localize("proofread_stage_viewer_title", "Stage draft");
+    : localize('proofread_stage_viewer_title', 'Stage draft');
 
   const viewerCountsLabel = stageDraftQuery.data?.counts
     ? localize(
-        "proofread_stage_viewer_counts",
-        "Segments: {{total}} · Needs review: {{needsReview}}",
+        'proofread_stage_viewer_counts',
+        'Segments: {{total}} · Needs review: {{needsReview}}',
         {
           total: stageDraftQuery.data.counts.total,
           needsReview: stageDraftQuery.data.counts.needsReview,
@@ -910,7 +848,7 @@ export const DualEditorPanel = ({
   const stageDraftErrorMessage =
     stageDraftQuery.error instanceof Error
       ? stageDraftQuery.error.message
-      : localize("proofread_stage_viewer_error", "Failed to load stage draft.");
+      : localize('proofread_stage_viewer_error', 'Failed to load stage draft.');
 
   const stageDraftData = stageDraftQuery.data ?? null;
   const stageDraftSegments = stageDraftData?.segments ?? [];
@@ -918,16 +856,15 @@ export const DualEditorPanel = ({
     stageDraftData?.joinedText && stageDraftData.joinedText.trim().length,
   );
   const copyLabel =
-    copyState === "copied"
-      ? localize("proofread_stage_viewer_copy_done", "Copied!")
-      : localize("proofread_stage_viewer_copy", "Copy text");
+    copyState === 'copied'
+      ? localize('proofread_stage_viewer_copy_done', 'Copied!')
+      : localize('proofread_stage_viewer_copy', 'Copy text');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const translationEditorRef =
-    useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const originEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(
+  const translationEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(
     null,
   );
+  const originEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const scrollSyncingRef = useRef(false);
   const translationDecorationsRef = useRef<string[]>([]);
@@ -936,9 +873,7 @@ export const DualEditorPanel = ({
   const pointerMoveHandlerRef = useRef<((event: PointerEvent) => void) | null>(
     null,
   );
-  const pointerUpHandlerRef = useRef<((event: PointerEvent) => void) | null>(
-    null,
-  );
+  const pointerUpHandlerRef = useRef<((event: PointerEvent) => void) | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const saveCallbackRef = useRef<(() => Promise<void>) | null>(null);
   const selectionOverlayTimerRef = useRef<number | null>(null);
@@ -946,39 +881,38 @@ export const DualEditorPanel = ({
   const selectionDisposableRef = useRef<Monaco.IDisposable | null>(null);
   const selectionClearTimerRef = useRef<number | null>(null);
   const issueRangesRef = useRef<Record<string, IssueRange[]>>({});
-  const issuePopoverRef = useRef<null | {
-    issueId: string;
-    x: number;
-    y: number;
-  }>(null);
-  const lastSyncedTranslationRef = useRef<string>("");
+  const issuePopoverRef = useRef<
+    | null
+    | {
+        issueId: string;
+        x: number;
+        y: number;
+      }
+  >(null);
+  const lastSyncedTranslationRef = useRef<string>('');
 
-  const translationModel = useMemo(
-    () =>
-      buildAggregatedModel(
-        segments.map((segment) => ({
-          segmentId: segment.segmentId,
-          text: segment.translationText ?? "",
-        })),
-      ),
-    [segments],
-  );
+  const translationModel = useMemo(() =>
+    buildAggregatedModel(
+      segments.map((segment) => ({
+        segmentId: segment.segmentId,
+        text: segment.translationText ?? '',
+      })),
+    ),
+  [segments]);
 
-  const originModel = useMemo(
-    () =>
-      buildAggregatedModel(
-        segments.map((segment) => ({
-          segmentId: segment.segmentId,
-          text: segment.originText ?? "",
-        })),
-      ),
-    [segments],
-  );
+  const originModel = useMemo(() =>
+    buildAggregatedModel(
+      segments.map((segment) => ({
+        segmentId: segment.segmentId,
+        text: segment.originText ?? '',
+      })),
+    ),
+  [segments]);
 
   const plainTranslationValue = useMemo(
     () =>
       segments
-        .map((segment) => segment.translationText ?? "")
+        .map((segment) => segment.translationText ?? '')
         .join(PLAIN_SEGMENT_SEPARATOR),
     [segments],
   );
@@ -986,11 +920,14 @@ export const DualEditorPanel = ({
   const [dragging, setDragging] = useState(false);
   const [selectionOverlay, setSelectionOverlay] =
     useState<SelectionOverlayState | null>(null);
-  const [issuePopover, setIssuePopover] = useState<null | {
-    issueId: string;
-    x: number;
-    y: number;
-  }>(null);
+  const [issuePopover, setIssuePopover] = useState<
+    | null
+    | {
+        issueId: string;
+        x: number;
+        y: number;
+      }
+  >(null);
   const [popoverBusy, setPopoverBusy] = useState(false);
   const [popoverError, setPopoverError] = useState<string | null>(null);
   const [translationEditorReady, setTranslationEditorReady] = useState(false);
@@ -1015,12 +952,8 @@ export const DualEditorPanel = ({
     return () => window.clearTimeout(timer);
   }, [isSaving, lastSavedAt]);
 
-  const setEditingSelection = useEditingCommandStore(
-    (state) => state.setSelection,
-  );
-  const triggerEditingAction = useEditingCommandStore(
-    (state) => state.triggerAction,
-  );
+  const setEditingSelection = useEditingCommandStore((state) => state.setSelection);
+  const triggerEditingAction = useEditingCommandStore((state) => state.triggerAction);
   const registerEditorAdapter = useEditingCommandStore(
     (state) => state.registerEditorAdapter,
   );
@@ -1094,11 +1027,7 @@ export const DualEditorPanel = ({
     setSelectionOverlay(null);
     setEditingSelection(null);
     setIssuePopover(null);
-  }, [
-    cancelDeferredSelectionClear,
-    cancelSelectionOverlayTimer,
-    setEditingSelection,
-  ]);
+  }, [cancelDeferredSelectionClear, cancelSelectionOverlayTimer, setEditingSelection]);
 
   const scheduleSelectionClear = useCallback(() => {
     cancelDeferredSelectionClear();
@@ -1115,7 +1044,7 @@ export const DualEditorPanel = ({
       return null;
     }
 
-    const normalizeEol = (value: string) => value.replace(/\r\n/g, "\n");
+    const normalizeEol = (value: string) => value.replace(/\r\n/g, '\n');
 
     return {
       replaceText: ({ range, expectedText, nextText }) => {
@@ -1123,7 +1052,7 @@ export const DualEditorPanel = ({
         if (!model) {
           return {
             ok: false,
-            message: "번역 편집기를 찾지 못했습니다.",
+            message: '번역 편집기를 찾지 못했습니다.',
           };
         }
 
@@ -1140,7 +1069,7 @@ export const DualEditorPanel = ({
           return {
             ok: false,
             message:
-              "선택한 문장이 이미 다른 내용으로 바뀌었습니다. 다시 선택한 뒤 요청해 주세요.",
+              '선택한 문장이 이미 다른 내용으로 바뀌었습니다. 다시 선택한 뒤 요청해 주세요.',
           };
         }
 
@@ -1152,7 +1081,7 @@ export const DualEditorPanel = ({
         const startOffset = model.getOffsetAt(startPosition);
 
         editor.pushUndoStop();
-        editor.executeEdits("conversation-edit", [
+        editor.executeEdits('conversation-edit', [
           { range: monacoRange, text: sanitizedNextText },
         ]);
         editor.pushUndoStop();
@@ -1189,17 +1118,17 @@ export const DualEditorPanel = ({
   }, [clearSelectionState]);
 
   const handleInlineRewrite = useCallback(() => {
-    triggerEditingAction("rewrite");
+    triggerEditingAction('rewrite');
     hideSelectionOverlay();
   }, [triggerEditingAction, hideSelectionOverlay]);
 
   const handleInlineNormalizeName = useCallback(() => {
-    triggerEditingAction("normalizeName");
+    triggerEditingAction('normalizeName');
     hideSelectionOverlay();
   }, [triggerEditingAction, hideSelectionOverlay]);
 
   const handleInlineAdjustPronoun = useCallback(() => {
-    triggerEditingAction("adjustPronoun");
+    triggerEditingAction('adjustPronoun');
     hideSelectionOverlay();
   }, [triggerEditingAction, hideSelectionOverlay]);
 
@@ -1253,8 +1182,7 @@ export const DualEditorPanel = ({
 
       const editorRect = domNode.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-      const rawLeft =
-        editorRect.left - containerRect.left + visiblePosition.left;
+      const rawLeft = editorRect.left - containerRect.left + visiblePosition.left;
       const rawTop =
         editorRect.top - containerRect.top + visiblePosition.top - 36;
 
@@ -1269,7 +1197,7 @@ export const DualEditorPanel = ({
         id: `sel-${Date.now().toString(16)}-${Math.random()
           .toString(16)
           .slice(2, 6)}`,
-        source: "translation",
+        source: 'translation',
         text: trimmed,
         rawText,
         range,
@@ -1301,14 +1229,20 @@ export const DualEditorPanel = ({
           y: clampedTop,
         });
       }, SELECTION_OVERLAY_DELAY_MS);
-  },
+    },
     [
       clearSelectionState,
       cancelDeferredSelectionClear,
       hideSelectionOverlay,
       setEditingSelection,
       translationModel,
+      segments,
+      editSegment,
+      scheduleAutosave,
+      syncTranslation,
       setSelectionOverlay,
+      datasetIssuesById,
+      issueStateById,
     ],
   );
 
@@ -1324,10 +1258,7 @@ export const DualEditorPanel = ({
       const handleMove = (moveEvent: PointerEvent) => {
         if (!container) return;
         const rect = container.getBoundingClientRect();
-        const clampedX = Math.min(
-          Math.max(moveEvent.clientX, rect.left),
-          rect.right,
-        );
+        const clampedX = Math.min(Math.max(moveEvent.clientX, rect.left), rect.right);
         const offset = clampedX - rect.left;
         const nextRatio = clampEditorRatio(offset / rect.width);
         setEditorRatio(nextRatio);
@@ -1335,16 +1266,16 @@ export const DualEditorPanel = ({
 
       const handleUp = () => {
         setDragging(false);
-        window.removeEventListener("pointermove", handleMove);
-        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener('pointermove', handleMove);
+        window.removeEventListener('pointerup', handleUp);
         pointerMoveHandlerRef.current = null;
         pointerUpHandlerRef.current = null;
       };
 
       pointerMoveHandlerRef.current = handleMove;
       pointerUpHandlerRef.current = handleUp;
-      window.addEventListener("pointermove", handleMove);
-      window.addEventListener("pointerup", handleUp);
+      window.addEventListener('pointermove', handleMove);
+      window.addEventListener('pointerup', handleUp);
       handleMove(event.nativeEvent);
     },
     [clearSelectionState, setEditorRatio],
@@ -1367,7 +1298,7 @@ export const DualEditorPanel = ({
         const segment = segments[index];
         if (!segment) return;
         if (segment.translationText !== text) {
-          editSegment(segment.segmentId, "translation", text);
+          editSegment(segment.segmentId, 'translation', text);
           hasChanges = true;
         }
       });
@@ -1402,7 +1333,7 @@ export const DualEditorPanel = ({
         const segment = segments[index];
         if (!segment) return;
         if (segment.originText !== text) {
-          editSegment(segment.segmentId, "origin", text);
+          editSegment(segment.segmentId, 'origin', text);
           hasChanges = true;
         }
       });
@@ -1435,9 +1366,7 @@ export const DualEditorPanel = ({
           guardFindings?: Array<{ segmentId?: string | null }>;
         };
       };
-      const bucketSegmentId =
-        (entry.bucket as { segmentId?: string | null } | undefined)
-          ?.segmentId ?? null;
+      const bucketSegmentId = (entry.bucket as { segmentId?: string | null } | undefined)?.segmentId ?? null;
       const fallbackSegmentId =
         issueSegmentInfo.segmentId ??
         issueSegmentInfo.segment_id ??
@@ -1462,7 +1391,7 @@ export const DualEditorPanel = ({
       );
       const segmentText = model.getValueInRange(segmentRange);
 
-      const lifecycle = issueStateById[issue.id] ?? "pending";
+      const lifecycle = issueStateById[issue.id] ?? 'pending';
 
       const beforeCandidates = collectStringCandidates([
         issue.before,
@@ -1495,11 +1424,11 @@ export const DualEditorPanel = ({
       const replacementCandidates = [
         issue.after,
         datasetIssue?.after,
-        lifecycle === "applied" ? issue.translationExcerpt : null,
+        lifecycle === 'applied' ? issue.translationExcerpt : null,
       ];
       let replacementText: string | null = null;
       for (const candidate of replacementCandidates) {
-        if (typeof candidate !== "string") continue;
+        if (typeof candidate !== 'string') continue;
         if (candidate.length === 0 || candidate.trim().length > 0) {
           replacementText = candidate;
           break;
@@ -1519,7 +1448,7 @@ export const DualEditorPanel = ({
       suppressTranslationChangeRef.current = true;
       try {
         editor.pushUndoStop();
-        editor.executeEdits("proofread-issue-apply", [
+        editor.executeEdits('proofread-issue-apply', [
           { range: monacoRange, text: replacementText },
         ]);
         editor.pushUndoStop();
@@ -1528,10 +1457,7 @@ export const DualEditorPanel = ({
       }
 
       const updatedValue = model.getValue();
-      const nextSegments = splitAggregatedValue(
-        updatedValue,
-        translationModel.segments.length,
-      );
+      const nextSegments = splitAggregatedValue(updatedValue, translationModel.segments.length);
       if (nextSegments) {
         let hasChanges = false;
         const joinedNextSegments = nextSegments.join(PLAIN_SEGMENT_SEPARATOR);
@@ -1539,7 +1465,7 @@ export const DualEditorPanel = ({
           const segment = segments[index];
           if (!segment) return;
           if (segment.translationText !== text) {
-            editSegment(segment.segmentId, "translation", text);
+            editSegment(segment.segmentId, 'translation', text);
             hasChanges = true;
           }
         });
@@ -1647,16 +1573,9 @@ export const DualEditorPanel = ({
       const targetDom = target.getDomNode();
       const sourceVisible = Math.max(sourceDom ? sourceDom.clientHeight : 0, 1);
       const targetVisible = Math.max(targetDom ? targetDom.clientHeight : 0, 1);
-      const sourceScrollable = Math.max(
-        source.getScrollHeight() - sourceVisible,
-        1,
-      );
-      const ratio =
-        sourceScrollable > 0 ? source.getScrollTop() / sourceScrollable : 0;
-      const targetScrollable = Math.max(
-        target.getScrollHeight() - targetVisible,
-        1,
-      );
+      const sourceScrollable = Math.max(source.getScrollHeight() - sourceVisible, 1);
+      const ratio = sourceScrollable > 0 ? source.getScrollTop() / sourceScrollable : 0;
+      const targetScrollable = Math.max(target.getScrollHeight() - targetVisible, 1);
       target.setScrollTop(ratio * targetScrollable);
       target.setScrollLeft(source.getScrollLeft());
     },
@@ -1718,10 +1637,10 @@ export const DualEditorPanel = ({
         const sortedMatches = matches.sort((a, b) => {
           const severityA =
             proofIssuesById.get(a.issueId)?.issue?.severity?.toLowerCase() ??
-            "default";
+            'default';
           const severityB =
             proofIssuesById.get(b.issueId)?.issue?.severity?.toLowerCase() ??
-            "default";
+            'default';
           const rankA = SEVERITY_ORDER[severityA] ?? SEVERITY_ORDER.default;
           const rankB = SEVERITY_ORDER[severityB] ?? SEVERITY_ORDER.default;
           return rankA - rankB;
@@ -1734,10 +1653,8 @@ export const DualEditorPanel = ({
         if (!visiblePosition) return;
         const containerRect = container.getBoundingClientRect();
         const editorRect = domNode.getBoundingClientRect();
-        const rawLeft =
-          editorRect.left - containerRect.left + visiblePosition.left;
-        const rawTop =
-          editorRect.top - containerRect.top + visiblePosition.top + 12;
+        const rawLeft = editorRect.left - containerRect.left + visiblePosition.left;
+        const rawTop = editorRect.top - containerRect.top + visiblePosition.top + 12;
         const clampedLeft = Math.max(
           Math.min(rawLeft, containerRect.width - 280),
           8,
@@ -1866,7 +1783,11 @@ export const DualEditorPanel = ({
         scrollSyncingRef.current = false;
       });
     }
-  }, [translationModel, applyHiddenAreas, syncEditorsByRatio]);
+  }, [
+    translationModel,
+    applyHiddenAreas,
+    syncEditorsByRatio,
+  ]);
 
   useEffect(() => {
     clearSelectionState();
@@ -1896,7 +1817,7 @@ export const DualEditorPanel = ({
     const highlightDebug = readHighlightDebugFlag();
     if (!editor || !monaco || !translationEditorReady) {
       if (highlightDebug) {
-        console.debug("[dual-editor] decoration skipped (editor not ready)", {
+        console.debug('[dual-editor] decoration skipped (editor not ready)', {
           hasEditor: Boolean(editor),
           hasMonaco: Boolean(monaco),
           translationEditorReady,
@@ -1915,7 +1836,7 @@ export const DualEditorPanel = ({
     const decoratedIssueIds = new Set<string>();
 
     if (highlightDebug) {
-      console.debug("[dual-editor] decoration effect", {
+      console.debug('[dual-editor] decoration effect', {
         segmentCount: segments.length,
         highlightCount: highlights.length,
         issueCount: issues.length,
@@ -1930,10 +1851,10 @@ export const DualEditorPanel = ({
       endOffset: number,
       inlineClassName: string,
       hoverMessage: Monaco.IMarkdownString[] | undefined,
-      source: "dataset-span" | "synthesized" | "project-highlight",
+      source: 'dataset-span' | 'synthesized' | 'project-highlight',
     ): boolean => {
       if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
-        console.warn("[dual-editor] refusing to decorate invalid range", {
+        console.warn('[dual-editor] refusing to decorate invalid range', {
           issueId,
           segmentId,
           startOffset,
@@ -1967,7 +1888,7 @@ export const DualEditorPanel = ({
       });
       decoratedIssueIds.add(issueId);
       if (highlightDebug) {
-        console.debug("[dual-editor] register decoration", {
+        console.debug('[dual-editor] register decoration', {
           issueId,
           segmentId,
           startOffset,
@@ -1984,27 +1905,24 @@ export const DualEditorPanel = ({
       segmentId: string,
       startOffset: number,
       endOffset: number,
-      source: "dataset-span" | "synthesized" | "project-highlight",
+      source: 'dataset-span' | 'synthesized' | 'project-highlight',
     ): boolean => {
       const datasetIssue = datasetIssuesById.get(issueId);
       const reportEntry = proofIssuesById.get(issueId);
       if (!datasetIssue && !reportEntry && highlightDebug) {
-        console.debug(
-          "[dual-editor] no dataset/report entry for issue",
-          issueId,
-        );
+        console.debug('[dual-editor] no dataset/report entry for issue', issueId);
       }
       const severityValue =
         reportEntry?.issue?.severity ?? datasetIssue?.severity ?? null;
       const severityClass = severityToClass(severityValue);
       const isActive = activeIssueId === issueId;
-      const lifecycle = issueStateById[issueId] ?? "pending";
-      const isResolved = lifecycle === "applied" || lifecycle === "ignored";
+      const lifecycle = issueStateById[issueId] ?? 'pending';
+      const isResolved = lifecycle === 'applied' || lifecycle === 'ignored';
       const inlineClassName = isActive
         ? `${severityClass} proofread-hl-active${
-            isResolved ? " proofread-hl-resolved" : ""
+            isResolved ? ' proofread-hl-resolved' : ''
           }`
-        : `${severityClass}${isResolved ? " proofread-hl-resolved" : ""}`;
+        : `${severityClass}${isResolved ? ' proofread-hl-resolved' : ''}`;
       const hoverMessage = buildHover(
         issueId,
         datasetIssue,
@@ -2033,7 +1951,7 @@ export const DualEditorPanel = ({
         issueStateById[issueId] ??
         datasetIssue?.status ??
         reportEntry?.issue?.status ??
-        "pending";
+        'pending';
       if (status) {
         hoverLines.push(`Status: ${status}`);
       }
@@ -2097,18 +2015,15 @@ export const DualEditorPanel = ({
         | undefined;
       if (!payload) return [];
 
-      const lifecycle = issueStateById[issueId] ?? "pending";
+      const lifecycle = issueStateById[issueId] ?? 'pending';
       const candidates: string[] = [];
 
       const beforeText = (() => {
-        if (
-          typeof payload.before === "string" &&
-          payload.before.trim().length
-        ) {
+        if (typeof payload.before === 'string' && payload.before.trim().length) {
           return payload.before;
         }
         if (
-          typeof payload.translationExcerpt === "string" &&
+          typeof payload.translationExcerpt === 'string' &&
           payload.translationExcerpt.trim().length
         ) {
           return payload.translationExcerpt;
@@ -2117,11 +2032,11 @@ export const DualEditorPanel = ({
       })();
 
       const afterText =
-        typeof payload.after === "string" && payload.after.trim().length
+        typeof payload.after === 'string' && payload.after.trim().length
           ? payload.after
           : undefined;
 
-      if (lifecycle === "applied") {
+      if (lifecycle === 'applied') {
         if (afterText) {
           candidates.push(afterText);
         }
@@ -2138,7 +2053,7 @@ export const DualEditorPanel = ({
       }
 
       (payload.alternatives ?? []).forEach((candidate) => {
-        if (typeof candidate === "string" && candidate.trim().length) {
+        if (typeof candidate === 'string' && candidate.trim().length) {
           candidates.push(candidate);
         }
       });
@@ -2150,10 +2065,7 @@ export const DualEditorPanel = ({
         }
       }
 
-      const spanCandidates: Array<{
-        start?: number | null;
-        end?: number | null;
-      }> = [];
+      const spanCandidates: Array<{ start?: number | null; end?: number | null }> = [];
       if (datasetEntry?.spans?.length) {
         spanCandidates.push(datasetEntry.spans[0]);
       }
@@ -2180,15 +2092,12 @@ export const DualEditorPanel = ({
     segments.forEach((segment) => {
       const segmentMeta = translationModel.metaMap.get(segment.segmentId);
       if (!segmentMeta) {
-        console.warn(
-          "[dual-editor] missing meta for segment",
-          segment.segmentId,
-        );
+        console.warn('[dual-editor] missing meta for segment', segment.segmentId);
         return;
       }
       if (collapsedSegmentIds[segment.segmentId]) return;
 
-      const segmentText = segment.translationText ?? "";
+      const segmentText = segment.translationText ?? '';
       const assignmentIds = issueAssignments[segment.segmentId] ?? [];
       const spans = segment.spans ?? [];
       const datasetCandidateIds = issues
@@ -2200,7 +2109,7 @@ export const DualEditorPanel = ({
           ? datasetCandidateIds
           : assignmentIds;
       if (!candidateIssueIds.length && !spans.length && highlightDebug) {
-        console.debug("[dual-editor] no candidates or spans for segment", {
+        console.debug('[dual-editor] no candidates or spans for segment', {
           segmentId: segment.segmentId,
           segmentLength: segmentText.length,
         });
@@ -2210,19 +2119,12 @@ export const DualEditorPanel = ({
       spans.forEach((spanRaw) => {
         const span = spanRaw as SegmentSpanLike;
         const issueId = span.issueId;
-        if (
-          candidateIssueIds.length > 0 &&
-          !candidateIssueIds.includes(issueId)
-        ) {
+        if (candidateIssueIds.length > 0 && !candidateIssueIds.includes(issueId)) {
           return;
         }
-        const resolved = resolveSegmentSpanOffsets(
-          span,
-          segmentMeta,
-          segmentText,
-        );
+        const resolved = resolveSegmentSpanOffsets(span, segmentMeta, segmentText);
         if (!resolved) {
-          console.warn("[dual-editor] ignoring invalid span", {
+          console.warn('[dual-editor] ignoring invalid span', {
             issueId,
             segmentId: segment.segmentId,
             span,
@@ -2235,17 +2137,14 @@ export const DualEditorPanel = ({
             segment.segmentId,
             resolved.startOffset,
             resolved.endOffset,
-            "dataset-span",
+            'dataset-span',
           )
         ) {
           decoratedForSegment.add(issueId);
         }
       });
 
-      if (
-        !spans.length ||
-        decoratedForSegment.size < candidateIssueIds.length
-      ) {
+      if (!spans.length || decoratedForSegment.size < candidateIssueIds.length) {
         candidateIssueIds.forEach((issueId) => {
           if (decoratedForSegment.has(issueId)) return;
           const datasetEntry = datasetIssuesById.get(issueId);
@@ -2258,7 +2157,7 @@ export const DualEditorPanel = ({
             reportEntry,
           );
           if (!matches.length && highlightDebug) {
-            console.debug("[dual-editor] no snippet match", {
+            console.debug('[dual-editor] no snippet match', {
               issueId,
               segmentId: segment.segmentId,
               hasDatasetEntry: Boolean(datasetEntry),
@@ -2269,7 +2168,7 @@ export const DualEditorPanel = ({
             const startOffset = segmentMeta.startOffset + match.start;
             const endOffset = segmentMeta.startOffset + match.end;
             if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
-              console.warn("[dual-editor] synthesized range invalid", {
+              console.warn('[dual-editor] synthesized range invalid', {
                 issueId,
                 segmentId: segment.segmentId,
                 match,
@@ -2282,7 +2181,7 @@ export const DualEditorPanel = ({
                 segment.segmentId,
                 startOffset,
                 endOffset,
-                "synthesized",
+                'synthesized',
               )
             ) {
               decoratedForSegment.add(issueId);
@@ -2299,10 +2198,7 @@ export const DualEditorPanel = ({
         !Number.isFinite(highlight.start) ||
         !Number.isFinite(highlight.end)
       ) {
-        console.warn(
-          "[dual-editor] highlight missing numeric range",
-          highlight,
-        );
+        console.warn('[dual-editor] highlight missing numeric range', highlight);
         return null;
       }
       for (const segment of segments) {
@@ -2330,10 +2226,7 @@ export const DualEditorPanel = ({
         }
       }
       if (highlightDebug) {
-        console.debug(
-          "[dual-editor] highlight did not map to segment",
-          highlight,
-        );
+        console.debug('[dual-editor] highlight did not map to segment', highlight);
       }
       return null;
     };
@@ -2343,7 +2236,7 @@ export const DualEditorPanel = ({
       if (!issueId || decoratedIssueIds.has(issueId)) return;
       const range = projectHighlightToAggregated(highlight);
       if (!range) {
-        console.warn("[dual-editor] highlight mapping failed", highlight);
+        console.warn('[dual-editor] highlight mapping failed', highlight);
         return;
       }
       addDecorationForIssue(
@@ -2351,7 +2244,7 @@ export const DualEditorPanel = ({
         range.segmentId,
         range.startOffset,
         range.endOffset,
-        "project-highlight",
+        'project-highlight',
       );
     });
 
@@ -2362,11 +2255,11 @@ export const DualEditorPanel = ({
     );
     if (highlightDebug) {
       console.debug(
-        "[dual-editor] applied decoration count",
+        '[dual-editor] applied decoration count',
         decorationEntries.length,
       );
       console.debug(
-        "[dual-editor] total decorated issue ids",
+        '[dual-editor] total decorated issue ids',
         decoratedIssueIds.size,
       );
     }
@@ -2399,25 +2292,21 @@ export const DualEditorPanel = ({
     issueStateById,
     highlights,
     translationEditorReady,
-    datasetIssuesById,
   ]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
       flushPendingChanges();
     };
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       if (pointerMoveHandlerRef.current) {
-        window.removeEventListener(
-          "pointermove",
-          pointerMoveHandlerRef.current,
-        );
+        window.removeEventListener('pointermove', pointerMoveHandlerRef.current);
         pointerMoveHandlerRef.current = null;
       }
       if (pointerUpHandlerRef.current) {
-        window.removeEventListener("pointerup", pointerUpHandlerRef.current);
+        window.removeEventListener('pointerup', pointerUpHandlerRef.current);
         pointerUpHandlerRef.current = null;
       }
       if (selectionDisposableRef.current) {
@@ -2429,51 +2318,43 @@ export const DualEditorPanel = ({
       clearSelectionState();
       setTranslationEditorReady(false);
     };
+  }, [flushPendingChanges, clearSaveTimer, clearSelectionState, setTranslationEditorReady]);
+
+  useEffect(() => () => {
+    clearSaveTimer();
+    clearSelectionState();
+    if (selectionDisposableRef.current) {
+      selectionDisposableRef.current.dispose();
+      selectionDisposableRef.current = null;
+    }
+    registerEditorAdapter(null);
+    cancelDeferredSelectionClear();
   }, [
-    flushPendingChanges,
     clearSaveTimer,
     clearSelectionState,
-    setTranslationEditorReady,
+    registerEditorAdapter,
+    cancelDeferredSelectionClear,
   ]);
-
-  useEffect(
-    () => () => {
-      clearSaveTimer();
-      clearSelectionState();
-      if (selectionDisposableRef.current) {
-        selectionDisposableRef.current.dispose();
-        selectionDisposableRef.current = null;
-      }
-      registerEditorAdapter(null);
-      cancelDeferredSelectionClear();
-    },
-    [
-      clearSaveTimer,
-      clearSelectionState,
-      registerEditorAdapter,
-      cancelDeferredSelectionClear,
-    ],
-  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!selectedSegmentId) return;
       if (!(event.metaKey || event.ctrlKey)) return;
-      if (event.key === "[") {
+      if (event.key === '[') {
         if (!collapsedSegmentIds[selectedSegmentId]) {
           event.preventDefault();
           toggleSegmentCollapse(selectedSegmentId);
         }
       }
-      if (event.key === "]") {
+      if (event.key === ']') {
         if (collapsedSegmentIds[selectedSegmentId]) {
           event.preventDefault();
           toggleSegmentCollapse(selectedSegmentId);
         }
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedSegmentId, collapsedSegmentIds, toggleSegmentCollapse]);
 
   return (
@@ -2481,7 +2362,7 @@ export const DualEditorPanel = ({
       ref={containerRef}
       className="relative grid h-full w-full items-stretch gap-0"
       style={{
-        gridTemplateColumns: `${editorRatio}fr 12px ${1 - editorRatio}fr`,
+        gridTemplateColumns: `${editorRatio}fr 12px ${(1 - editorRatio)}fr`,
       }}
     >
       {selectionOverlay && (
@@ -2526,7 +2407,7 @@ export const DualEditorPanel = ({
         <header className="border-b border-slate-200 bg-sky-50 px-4 py-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-900">
-              {localize("proofread_editor_origin_label", "Manuscript")}
+              {localize('proofread_editor_origin_label', 'Manuscript')}
             </span>
             <button
               type="button"
@@ -2547,21 +2428,21 @@ export const DualEditorPanel = ({
             onChange={handleOriginChange}
             onMount={handleOriginMount}
             options={{
-              lineNumbers: "on",
+              lineNumbers: 'on',
               lineNumbersMinChars: 2,
               minimap: { enabled: false },
               smoothScrolling: true,
               scrollbar: { verticalScrollbarSize: 16 },
-              wordWrap: "on",
+              wordWrap: 'on',
               wordWrapColumn: 120,
-              wrappingStrategy: "advanced",
+              wrappingStrategy: 'advanced',
             }}
           />
         </div>
       </div>
       <div
         className={`flex h-full cursor-col-resize select-none items-center justify-center bg-white transition hover:bg-slate-50 ${
-          dragging ? "bg-slate-50" : ""
+          dragging ? 'bg-slate-50' : ''
         } border-x border-slate-200`}
         onPointerDown={handlePointerDown}
       >
@@ -2572,7 +2453,7 @@ export const DualEditorPanel = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-900">
-                {localize("proofread_editor_translation_label", "Translation")}
+                {localize('proofread_editor_translation_label', 'Translation')}
               </span>
               <button
                 type="button"
@@ -2589,24 +2470,21 @@ export const DualEditorPanel = ({
               {stageOrder.map((stageKey) => {
                 const meta = STAGE_META[stageKey];
                 const Icon = meta.icon;
-                const isActive =
-                  stageViewer.isOpen && stageViewer.stage === stageKey;
+                const isActive = stageViewer.isOpen && stageViewer.stage === stageKey;
                 const isAvailable = availableStageSet.has(stageKey);
                 const disabled = !canLoadStageDrafts;
                 const showSpinner =
-                  isActive &&
-                  stageDraftQuery.isLoading &&
-                  stageViewer.stage === stageKey;
+                  isActive && stageDraftQuery.isLoading && stageViewer.stage === stageKey;
                 const buttonClass = [
-                  "inline-flex items-center justify-center rounded-full border px-2 py-1 text-[11px] transition",
+                  'inline-flex items-center justify-center rounded-full border px-2 py-1 text-[11px] transition',
                   disabled
-                    ? "cursor-not-allowed border-slate-100 text-slate-300"
-                    : "border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700",
-                  isAvailable ? meta.toneClass : "",
-                  isActive ? "bg-slate-100 border-slate-200" : "",
+                    ? 'cursor-not-allowed border-slate-100 text-slate-300'
+                    : 'border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700',
+                  isAvailable ? meta.toneClass : '',
+                  isActive ? 'bg-slate-100 border-slate-200' : '',
                 ]
                   .filter(Boolean)
-                  .join(" ");
+                  .join(' ');
                 return (
                   <button
                     key={stageKey}
@@ -2649,14 +2527,14 @@ export const DualEditorPanel = ({
             onChange={handleTranslationChange}
             onMount={handleTranslationMount}
             options={{
-              lineNumbers: "on",
+              lineNumbers: 'on',
               lineNumbersMinChars: 2,
               minimap: { enabled: false },
               smoothScrolling: true,
               scrollbar: { verticalScrollbarSize: 16 },
-              wordWrap: "on",
+              wordWrap: 'on',
               wordWrapColumn: 120,
-              wrappingStrategy: "advanced",
+              wrappingStrategy: 'advanced',
             }}
           />
         </div>
@@ -2674,7 +2552,7 @@ export const DualEditorPanel = ({
           setBusy={setPopoverBusy}
           error={popoverError}
           setError={setPopoverError}
-          issueState={issueStateById[issuePopover.issueId] ?? "pending"}
+          issueState={issueStateById[issuePopover.issueId] ?? 'pending'}
         />
       )}
       {stageViewer.isOpen && (
@@ -2684,15 +2562,15 @@ export const DualEditorPanel = ({
           onClose={handleCloseStageViewer}
           maxWidthClass="max-w-3xl"
           showCloseButton
-          closeLabel={localize("proofread_stage_viewer_close", "Close")}
+          closeLabel={localize('proofread_stage_viewer_close', 'Close')}
         >
           <div className="space-y-4 text-sm text-slate-700">
             {knownAvailableStages.length ? (
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 <span className="font-semibold">
                   {localize(
-                    "proofread_stage_viewer_available_label",
-                    "Captured stages:",
+                    'proofread_stage_viewer_available_label',
+                    'Captured stages:',
                   )}
                 </span>
                 {knownAvailableStages.map((stageKey) => (
@@ -2721,8 +2599,8 @@ export const DualEditorPanel = ({
               <div className="flex items-center gap-2 text-sm text-slate-500">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {localize(
-                  "proofread_stage_viewer_loading",
-                  "Loading stage draft…",
+                  'proofread_stage_viewer_loading',
+                  'Loading stage draft…',
                 )}
               </div>
             ) : stageDraftQuery.error ? (
@@ -2733,21 +2611,18 @@ export const DualEditorPanel = ({
                   {stageDraftHasText
                     ? stageDraftData?.joinedText
                     : localize(
-                        "proofread_stage_viewer_empty",
-                        "No draft output is available for this stage yet.",
+                        'proofread_stage_viewer_empty',
+                        'No draft output is available for this stage yet.',
                       )}
                 </div>
                 <div className="max-h-60 overflow-y-auto rounded border border-slate-100">
                   <ul className="divide-y divide-slate-100 text-xs text-slate-600">
                     {stageDraftSegments.map((segment) => (
-                      <li
-                        key={`${segment.segmentId}-${segment.segmentIndex}`}
-                        className="px-3 py-2"
-                      >
+                      <li key={`${segment.segmentId}-${segment.segmentIndex}`} className="px-3 py-2">
                         <p className="font-semibold text-slate-700">
                           {localize(
-                            "proofread_stage_viewer_segment_label",
-                            "Segment {{index}}",
+                            'proofread_stage_viewer_segment_label',
+                            'Segment {{index}}',
                             { index: segment.segmentIndex + 1 },
                           )}
                         </p>
@@ -2755,8 +2630,8 @@ export const DualEditorPanel = ({
                           {segment.text?.trim().length
                             ? segment.text
                             : localize(
-                                "proofread_stage_viewer_segment_empty",
-                                "No text captured for this segment.",
+                                'proofread_stage_viewer_segment_empty',
+                                'No text captured for this segment.',
                               )}
                         </p>
                       </li>
@@ -2767,8 +2642,8 @@ export const DualEditorPanel = ({
             ) : (
               <p className="text-sm text-slate-500">
                 {localize(
-                  "proofread_stage_viewer_empty",
-                  "No draft output is available for this stage yet.",
+                  'proofread_stage_viewer_empty',
+                  'No draft output is available for this stage yet.',
                 )}
               </p>
             )}
@@ -2778,7 +2653,7 @@ export const DualEditorPanel = ({
                 onClick={handleCloseStageViewer}
                 className="rounded border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
               >
-                {localize("proofread_stage_viewer_close", "Close")}
+                {localize('proofread_stage_viewer_close', 'Close')}
               </button>
             </div>
           </div>
@@ -2803,33 +2678,23 @@ export const DualEditorPanel = ({
                   {originSummary.intention ? (
                     <p className="text-sm text-slate-800">
                       <span className="font-semibold text-slate-900">
-                        {localize(
-                          "rightpanel_summary_intention_label",
-                          "작가의도:",
-                        )}
-                      </span>{" "}
-                      <span className="whitespace-pre-wrap">
-                        {originSummary.intention}
-                      </span>
+                        {localize('rightpanel_summary_intention_label', '작가의도:')}
+                      </span>{' '}
+                      <span className="whitespace-pre-wrap">{originSummary.intention}</span>
                     </p>
                   ) : null}
                   {originSummary.story ? (
                     <p className="text-sm text-slate-800">
                       <span className="font-semibold text-slate-900">
-                        {localize("rightpanel_summary_story_label", "줄거리:")}
-                      </span>{" "}
-                      <span className="whitespace-pre-wrap">
-                        {originSummary.story}
-                      </span>
+                        {localize('rightpanel_summary_story_label', '줄거리:')}
+                      </span>{' '}
+                      <span className="whitespace-pre-wrap">{originSummary.story}</span>
                     </p>
                   ) : null}
                   {originSummary.readerPoints?.length ? (
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        {localize(
-                          "rightpanel_summary_reader_points_label",
-                          "독자 포인트",
-                        )}
+                        {localize('rightpanel_summary_reader_points_label', '독자 포인트')}
                       </p>
                       <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-700">
                         {originSummary.readerPoints.map((point, index) => (
@@ -2875,24 +2740,24 @@ export const DualEditorPanel = ({
                   {renderEntitySection(
                     namedEntitiesLabel,
                     namedEntityEntries,
-                    "entities",
+                    'entities',
                     { twoColumn: true },
                   )}
                   {renderEntitySection(
                     locationsLabel,
                     locationEntries,
-                    "locations",
+                    'locations',
                     { twoColumn: true },
                   )}
                   {renderPairSection(
                     measurementUnitsLabel,
                     measurementEntries,
-                    "measurement",
+                    'measurement',
                   )}
                   {renderPairSection(
                     linguisticFeaturesLabel,
                     linguisticEntries,
-                    "linguistic",
+                    'linguistic',
                   )}
                 </div>
               ) : (
@@ -2934,10 +2799,10 @@ const IssuePopover = ({
   issueState: string;
 }) => {
   const issue = issueEntry.issue;
-  const severity = (issue.severity ?? "unknown").toString();
-  const title = issue.issue_en ?? issue.issue_ko ?? "Proofreading issue";
-  const beforeText = issue.before ?? issue.translationExcerpt ?? "";
-  const afterText = issue.after ?? "";
+  const severity = (issue.severity ?? 'unknown').toString();
+  const title = issue.issue_en ?? issue.issue_ko ?? 'Proofreading issue';
+  const beforeText = issue.before ?? issue.translationExcerpt ?? '';
+  const afterText = issue.after ?? '';
 
   const runAction = async (
     executor: (payload: ProofreadingIssue) => Promise<boolean>,
@@ -2953,15 +2818,15 @@ const IssuePopover = ({
       }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "문제를 처리하지 못했습니다.",
+        err instanceof Error ? err.message : '문제를 처리하지 못했습니다.',
       );
     } finally {
       setBusy(false);
     }
   };
 
-  const isApplied = issueState === "applied";
-  const isIgnored = issueState === "ignored";
+  const isApplied = issueState === 'applied';
+  const isIgnored = issueState === 'ignored';
 
   return (
     <div
@@ -3018,7 +2883,9 @@ const IssuePopover = ({
         </div>
       )}
       {issue.recommendation_en && (
-        <p className="mt-2 text-xs text-slate-500">{issue.recommendation_en}</p>
+        <p className="mt-2 text-xs text-slate-500">
+          {issue.recommendation_en}
+        </p>
       )}
       {error && (
         <p className="mt-2 flex items-center gap-1 text-xs text-rose-600">

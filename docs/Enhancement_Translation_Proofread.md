@@ -23,6 +23,12 @@
 ## Milestone 2 — Hardening & UX (Week 1)
 **Acceptance:** End-to-end throughput improves ≥2× on the reference set; retry-induced tokens drop ≥30 %; timeline cards display completed/failed/retrying counts with retry ETA.
 
+### Progress (current)
+- ✅ Proofread SSE run_id 정합성 확보 (handshake 시 `workflow` runId 배제, stage/items runId 기반 재구독)
+- ✅ A2/A3 교정 안정화 핵심 완료: heartbeat·재연결 메타 수집, zero-item run guard, pagination/rest 폴백 테스트
+- 🔄 실데이터 QA 및 스트림 메타 영속화/대시보드 반영 진행 예정 (운영 확인 후 번역 파이프라인 확장으로 이어감)
+- 🔜 공통 스키마/페이징을 번역 파이프라인에 확장 적용 (A2/A3 운영 검증 이후 착수)
+
 ### Server
 - Introduce proofread/translation response v2 schema with range-based evidence only; forbid raw text echoes and shorten keys for lean NDJSON payloads. Update prompts accordingly.
 - Add `has_more`/`next_cursor` pagination support to `runGenericWorker` and translation agents, limiting `max_items` per call (default 40 quick / 60 deep); retry paths down-shift token and item caps instead of expanding.
@@ -47,6 +53,9 @@
 - Model mix: Draft on `*-mini`, Revise on `gpt-5 (thinking)`; Proof/QA use 10–20 % sampling with anomaly-triggered full reruns.
 - Combine draft + light proof for short texts (≤1,200 chars) into single call.
 - Optimize runtime IO: reuse OpenAI clients with keep-alive/HTTP2, batch final writes, limit logging to errors, warm tokenization/normalization to avoid cold starts.
+- 재접속 UX 강화: active run snapshot API (`/workflows/:runId/summary` + `/projects/:id/workflows/active`) 제공, 클라이언트 진입 시 자동 재구독/상태 복원.
+- SSE heartbeat + 폴백 전략을 번역/교정 공통으로 적용하고, 브라우저 재연결/다른 클라이언트 진입 케이스까지 검증.
+- 성능 대시보드 확장: 번역/교정 P50/P90, 다운시프트 비율, cache hit-rate, 재접속 복구 지표(복구 시간, 실패율) 노출.
 
 ## Unified Stage Status Delivery
 - Define shared status envelope (`status`, `subStatus`, `heartbeatAt`, `willRetry`, `nextRetryDelayMs`) for origin → translation → proofread → quality.

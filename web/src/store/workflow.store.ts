@@ -39,6 +39,62 @@ export interface AgentSubState {
   error?: string | null;
 }
 
+export type AgentItemSeverity = "error" | "warning" | "suggestion";
+export type AgentItemAction = "replace" | "insert" | "delete" | "note";
+
+export interface AgentItemV2 {
+  uid?: string;
+  k: string;
+  s: AgentItemSeverity;
+  r: string;
+  t: AgentItemAction;
+  i: [number, number];
+  o: [number, number];
+  cid?: string;
+  rule_id?: string;
+  conf?: number;
+  lang?: string;
+  side?: "src" | "tgt" | "both";
+  fix?: { text?: string; note?: string };
+}
+
+export interface AgentPageV2 {
+  version: "v2";
+  run_id: string;
+  chunk_id: string;
+  tier: string;
+  model: string;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  finish_reason?: "stop" | "length" | "content_filter" | "error";
+  truncated: boolean;
+  partial?: boolean;
+  warnings?: string[];
+  index_base: 0 | 1;
+  offset_semantics: "[start,end)";
+  stats?: { item_count: number; avg_item_bytes?: number };
+  metrics?: {
+    downshift_count: number;
+    forced_pagination: boolean;
+    cursor_retry_count: number;
+  };
+  provider_response_id?: string | null;
+  items: AgentItemV2[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export type ProofreadAgentItemV2 = AgentItemV2;
+export type ProofreadAgentPageV2 = AgentPageV2 & {
+  dedupeKey?: string;
+  pageIndex?: number | null;
+  stageKey?: string | null;
+  tierKey?: string | null;
+};
+export type TranslationAgentItemV2 = AgentItemV2;
+export type TranslationAgentPageV2 = AgentPageV2;
+
 export interface QualityChunkSummary {
   index: number;
   status:
@@ -83,6 +139,8 @@ export interface TranslationAgentState {
   projectId: string | null;
   run: AgentRunState;
   subStates: AgentSubState[];
+  pages: TranslationAgentPageV2[];
+  lastEnvelope: TranslationAgentPageV2 | null;
 }
 
 export interface ProofreadingAgentState {
@@ -111,6 +169,9 @@ export interface ProofreadingAgentState {
       label?: string | null;
       itemCount: number;
       completedAt: string;
+      downshiftCount?: number;
+      forcedPaginationCount?: number;
+      cursorRetryCount?: number;
     }
   >;
   completionSummary: null | {
@@ -119,11 +180,19 @@ export interface ProofreadingAgentState {
     tierIssueCounts: Record<string, number>;
     notesKo?: string | null;
     notesEn?: string | null;
+    downshiftCount?: number;
+    forcedPaginationCount?: number;
+    cursorRetryCount?: number;
   };
   lastHeartbeatAt: string | null;
   isStalled: boolean;
   run: AgentRunState;
   subStates: AgentSubState[];
+  pages: ProofreadAgentPageV2[];
+  lastEnvelope: ProofreadAgentPageV2 | null;
+  pendingCursors: string[];
+  processedCursors: string[];
+  needsFollowup?: boolean;
 }
 
 export interface QualityAgentState {
@@ -206,6 +275,8 @@ const defaultTranslationState: TranslationAgentState = {
   projectId: null,
   run: { ...defaultRunState },
   subStates: [],
+  pages: [],
+  lastEnvelope: null,
 };
 
 const defaultProofreadingState: ProofreadingAgentState = {
@@ -223,6 +294,10 @@ const defaultProofreadingState: ProofreadingAgentState = {
   isStalled: false,
   run: { ...defaultRunState },
   subStates: [],
+  pages: [],
+  lastEnvelope: null,
+  pendingCursors: [],
+  processedCursors: [],
 };
 
 const defaultQualityState: QualityAgentState = {
@@ -258,7 +333,13 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ? state.translation
           : { ...defaultTranslationState, projectId };
       const patch = typeof update === "function" ? update(base) : update;
-      const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
+      const {
+        run: runPatch,
+        subStates: subPatch,
+        pages: pagesPatch,
+        lastEnvelope: lastEnvelopePatch,
+        ...restPatch
+      } = patch;
       const desiredStatus = (runPatch?.status ??
         restPatch.status ??
         base.status) as TranslationStatus;
@@ -268,6 +349,11 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ? buildRunState(base.run, desiredStatus)
           : base.run;
       const nextSubStates = subPatch ?? base.subStates;
+      const nextPages = pagesPatch ?? base.pages;
+      const nextEnvelope =
+        lastEnvelopePatch !== undefined
+          ? lastEnvelopePatch ?? null
+          : base.lastEnvelope;
       const nextStatus = desiredStatus;
       return {
         translation: {
@@ -276,6 +362,8 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           status: nextStatus,
           run: nextRun,
           subStates: nextSubStates,
+          pages: nextPages,
+          lastEnvelope: nextEnvelope,
           projectId,
         },
       };

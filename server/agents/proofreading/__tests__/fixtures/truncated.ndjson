@@ -1,0 +1,55 @@
+{
+  "type": "items",
+  "data": {
+    "page": {
+      "version": "v2",
+      "run_id": "run_trunc",
+      "chunk_id": "style:1",
+      "tier": "quick",
+      "model": "gpt-5-mini-2025-08-07",
+      "latency_ms": 1337,
+      "prompt_tokens": 640,
+      "completion_tokens": 512,
+      "truncated": true,
+      "warnings": [
+        "token_downshift",
+        "forced_pagination"
+      ],
+      "index_base": 0,
+      "offset_semantics": "[start,end)",
+      "stats": {
+        "item_count": 1,
+        "avg_item_bytes": 25
+      },
+      "metrics": {
+        "downshift_count": 2,
+        "forced_pagination": true,
+        "cursor_retry_count": 1
+      },
+      "items": [
+        {
+          "k": "style",
+          "s": "warning",
+          "r": "Rephrase to maintain tone",
+          "t": "replace",
+          "i": [
+            1,
+            1
+          ],
+          "o": [
+            34,
+            58
+          ],
+          "fix": {
+            "text": "Please consider revising"
+          }
+        }
+      ],
+      "has_more": true,
+      "next_cursor": "cursor-001",
+      "provider_response_id": "resp_trunc",
+      "finish_reason": "length",
+      "partial": true
+    }
+  }
+}

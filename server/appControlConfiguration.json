@@ -12,25 +12,20 @@
       "mode": "hybrid"
     },
     "stageParameters": {
-      "literal": {
+      "draft": {
+        "verbosity": "medium",
+        "reasoningEffort": "medium",
+        "maxOutputTokens": 2200
+      },
+      "revise": {
+        "verbosity": "medium",
+        "reasoningEffort": "low",
+        "maxOutputTokens": 1800
+      },
+      "micro-check": {
         "verbosity": "low",
         "reasoningEffort": "minimal",
         "maxOutputTokens": 900
-      },
-      "style": {
-        "verbosity": "medium",
-        "reasoningEffort": "low",
-        "maxOutputTokens": 900
-      },
-      "emotion": {
-        "verbosity": "medium",
-        "reasoningEffort": "medium",
-        "maxOutputTokens": 900
-      },
-      "qa": {
-        "verbosity": "low",
-        "reasoningEffort": "low",
-        "maxOutputTokens": 600
       }
     },
     "register": "literary",
