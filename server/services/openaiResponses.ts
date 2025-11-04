@@ -2,8 +2,8 @@ import type { OpenAI } from "openai";
 
 export type ResponsesRetryStage =
   | "primary"
-  | "expanded"
-  | "max"
+  | "downshift"
+  | "minimal"
   | "fallback"
   | "segment";
 
@@ -66,8 +66,8 @@ const BASE_STAGE_SEQUENCE: Array<{
   usingSegmentRetry: boolean;
 }> = [
   { stage: "primary", multiplier: 1, usingFallback: false, usingSegmentRetry: false },
-  { stage: "expanded", multiplier: 1.5, usingFallback: false, usingSegmentRetry: false },
-  { stage: "max", multiplier: 2, usingFallback: false, usingSegmentRetry: false },
+  { stage: "downshift", multiplier: 0.7, usingFallback: false, usingSegmentRetry: false },
+  { stage: "minimal", multiplier: 0.5, usingFallback: false, usingSegmentRetry: false },
 ];
 
 const isResponseIncomplete = (response: unknown): boolean => {
@@ -175,9 +175,13 @@ export async function runResponsesWithRetry<TResponse>(
     stageIndex < stages.length
   ) {
     const stage = stages[stageIndex];
+    const shouldDownshift =
+      stage.multiplier < 1 && (lastReason === "incomplete" || truncatedEncountered);
+    const effectiveMultiplier =
+      stage.multiplier >= 1 || shouldDownshift ? stage.multiplier : 1;
     const computedTokens = Math.min(
-      Math.max(minOutputTokens, Math.ceil(baseTokens * stage.multiplier)),
       maxOutputTokensCap,
+      Math.max(minOutputTokens, Math.ceil(baseTokens * effectiveMultiplier)),
     );
 
     const context: ResponsesRetryAttemptContext = {
@@ -215,17 +219,7 @@ export async function runResponsesWithRetry<TResponse>(
 
       if (isResponseIncomplete(response)) {
         lastReason = "incomplete";
-        lastError = createIncompleteError(
-          (response as {
-            incomplete_details?: { reason?: string };
-            id?: string | null;
-          }) ?? null,
-        );
         truncatedEncountered = true;
-        if (stageIndex < stages.length - 1) {
-          stageIndex += 1;
-          continue;
-        }
         return {
           response,
           attempts,
@@ -247,13 +241,13 @@ export async function runResponsesWithRetry<TResponse>(
 
       if (error && typeof error === "object" && "error" in error) {
         const inner = (error as { error?: unknown }).error;
-        if (
-          inner &&
-          typeof inner === "object" &&
-          (inner as { type?: string }).type === "invalid_request_error"
-        ) {
-          throw error;
-        }
+      if (
+        inner &&
+        typeof inner === "object" &&
+        (inner as { type?: string }).type === "invalid_request_error"
+      ) {
+        throw error;
+      }
       }
 
       if (isResponsesIncompleteError(error)) {

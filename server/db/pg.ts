@@ -137,3 +137,18 @@ export async function updateProofreadRunStatus(
     [proofreadRunId, status],
   );
 }
+
+export async function findProofreadRunById(params: {
+  projectId: string;
+  proofreadRunId: string;
+}) {
+  const { projectId, proofreadRunId } = params;
+  const { rows } = await pool.query(
+    `SELECT id, status
+       FROM proofread_runs
+      WHERE id = $1 AND project_id = $2
+      LIMIT 1`,
+    [proofreadRunId, projectId],
+  );
+  return rows[0] ?? null;
+}

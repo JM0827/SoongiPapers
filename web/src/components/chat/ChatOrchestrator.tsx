@@ -78,23 +78,12 @@ const isSupportedOriginFile = (file: File | { name?: string }): boolean => {
   return SUPPORTED_ORIGIN_EXTENSIONS.some((ext) => name.endsWith(ext));
 };
 
-const LEGACY_TRANSLATION_STAGE_ORDER = [
-  "literal",
-  "style",
-  "emotion",
-  "qa",
-] as const;
-
 const V2_TRANSLATION_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
 
 type TranslationPipelineStage = string;
 type TranslationDisplayStage = TranslationPipelineStage | "finalizing";
 
 const TRANSLATION_STAGE_FALLBACKS: Record<TranslationDisplayStage, string> = {
-  literal: "직역",
-  style: "스타일",
-  emotion: "감정",
-  qa: "QA",
   draft: "초안",
   revise: "정밀수정",
   "micro-check": "마이크로 검사",
@@ -1454,10 +1443,7 @@ export const ChatOrchestrator = ({
 
     const stageOrder = translationState.pipelineStages?.length
       ? translationState.pipelineStages
-      : translationState.stageCounts?.draft ||
-          translationState.stageCounts?.["micro-check"]
-        ? Array.from(V2_TRANSLATION_STAGE_ORDER)
-        : Array.from(LEGACY_TRANSLATION_STAGE_ORDER);
+      : Array.from(V2_TRANSLATION_STAGE_ORDER);
 
     const sequentialStages = stageOrder.length
       ? (() => {
@@ -1485,9 +1471,9 @@ export const ChatOrchestrator = ({
             };
           });
 
-          const guardStageKey = stageOrder.includes("qa")
-            ? "qa"
-            : (stageOrder[stageOrder.length - 1] ?? "qa");
+          const guardStageKey = stageOrder.includes("micro-check")
+            ? "micro-check"
+            : stageOrder[stageOrder.length - 1] ?? "micro-check";
           const qaCount = stageCounts[guardStageKey] ?? 0;
           const qaComplete =
             totalSegments > 0

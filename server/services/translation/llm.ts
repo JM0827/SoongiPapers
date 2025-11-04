@@ -18,21 +18,14 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 const DEFAULT_STAGE_MODELS: Record<TranslationStage, string> = {
-  literal: process.env.SEQUENTIAL_LITERAL_MODEL ?? "gpt-5",
-  style: process.env.SEQUENTIAL_STYLE_MODEL ?? "gpt-5",
-  emotion: process.env.SEQUENTIAL_EMOTION_MODEL ?? "gpt-5",
-  qa: process.env.SEQUENTIAL_QA_MODEL ?? "gpt-5-mini",
   draft:
     process.env.SEQUENTIAL_DRAFT_MODEL ??
-    process.env.SEQUENTIAL_LITERAL_MODEL ??
     "gpt-5",
   revise:
     process.env.SEQUENTIAL_REVISE_MODEL ??
-    process.env.SEQUENTIAL_STYLE_MODEL ??
     "gpt-5",
   "micro-check":
     process.env.SEQUENTIAL_MICRO_CHECK_MODEL ??
-    process.env.SEQUENTIAL_QA_MODEL ??
     "gpt-5-mini",
 };
 

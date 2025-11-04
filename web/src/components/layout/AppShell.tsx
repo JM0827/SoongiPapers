@@ -2,7 +2,6 @@ import { type ReactNode, useCallback, useEffect } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useUIStore } from "../../store/ui.store";
 import { LeftSidebar } from "./LeftSidebar";
-import { RightPanel } from "./RightPanel";
 
 interface AppShellProps {
   left?: ReactNode;
@@ -20,7 +19,7 @@ const MAX_RIGHT_RATIO = 0.9;
 export const AppShell = ({
   left = <LeftSidebar />,
   children,
-  right = <RightPanel />,
+  right = null,
 }: AppShellProps) => {
   const isSidebarCollapsed = useUIStore((state) => state.isSidebarCollapsed);
   const leftPanelWidth = useUIStore((state) => state.leftPanelWidth);

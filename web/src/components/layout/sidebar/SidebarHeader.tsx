@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RightPanelExtraTab } from "../../../store/ui.store";
+import { useUILocale } from "../../../hooks/useUILocale";
+import { translate } from "../../../lib/locale";
 
 interface SidebarHeaderProps {
   projectTitle: string;
@@ -32,6 +34,15 @@ export const SidebarHeader = ({
 }: SidebarHeaderProps) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const { locale } = useUILocale();
+
+  const localize = useCallback(
+    (key: string, fallback: string) => {
+      const resolved = translate(key, locale);
+      return resolved === key ? fallback : resolved;
+    },
+    [locale],
+  );
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -103,12 +114,14 @@ export const SidebarHeader = ({
                 className="absolute right-0 z-50 mt-3 w-56 rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-lg"
               >
                 <div className="mb-3 border-b border-slate-100 pb-2">
-                  <p className="text-xs uppercase text-slate-400">Signed in</p>
+                  <p className="text-xs uppercase text-slate-400">
+                    {localize("user_menu_signed_in", "Signed in")}
+                  </p>
                   <p className="font-semibold text-slate-700">
-                    {userName ?? "Current user"}
+                    {userName ?? localize("user_menu_current_user", "Current user")}
                   </p>
                   <p className="text-xs text-slate-500">
-                    {userEmail ?? "No email on file"}
+                    {userEmail ?? localize("user_menu_no_email", "No email on file")}
                   </p>
                 </div>
                 <div className="flex flex-col gap-1" role="none">
@@ -116,56 +129,71 @@ export const SidebarHeader = ({
                     className="rounded px-3 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                     type="button"
                     onClick={() => {
-                      onOpenExtraTab("profile", "My profile");
+                      onOpenExtraTab(
+                        "profile",
+                        localize("rightpanel_tab_profile", "My profile"),
+                      );
                       setMenuOpen(false);
                     }}
                     role="menuitem"
                   >
-                    My profile
+                    {localize("user_menu_profile", "My profile")}
                   </button>
                   <button
                     className="rounded px-3 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                     type="button"
                     onClick={() => {
-                      onOpenExtraTab("settings", "My settings");
+                      onOpenExtraTab(
+                        "settings",
+                        localize("rightpanel_tab_settings", "My settings"),
+                      );
                       setMenuOpen(false);
                     }}
                     role="menuitem"
                   >
-                    My settings
+                    {localize("user_menu_settings", "My settings")}
                   </button>
                   <button
                     className="rounded px-3 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                     type="button"
                     onClick={() => {
-                      onOpenExtraTab("activity", "My activity");
+                      onOpenExtraTab(
+                        "activity",
+                        localize("rightpanel_tab_activity", "My activity"),
+                      );
                       setMenuOpen(false);
                     }}
                     role="menuitem"
                   >
-                    My activity
+                    {localize("user_menu_activity", "My activity")}
                   </button>
                   <button
                     className="rounded px-3 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                     type="button"
                     onClick={() => {
-                      onOpenExtraTab("terms", "Terms");
+                      onOpenExtraTab(
+                        "terms",
+                        localize("rightpanel_tab_terms", "Terms"),
+                      );
                       setMenuOpen(false);
                     }}
                     role="menuitem"
                   >
-                    Terms
+                    {localize("user_menu_terms", "Terms")}
                   </button>
                   <button
                     className="rounded px-3 py-2 text-left text-slate-700 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none"
                     type="button"
                     onClick={() => {
-                      onOpenExtraTab("privacy", "Privacy");
+                      onOpenExtraTab(
+                        "privacy",
+                        localize("rightpanel_tab_privacy", "Privacy"),
+                      );
                       setMenuOpen(false);
                     }}
                     role="menuitem"
                   >
-                    Privacy
+                    {localize("user_menu_privacy", "Privacy")}
                   </button>
                   <button
                     className="rounded px-3 py-2 text-left text-rose-600 hover:bg-rose-50 focus:bg-rose-50 focus:outline-none"
@@ -176,7 +204,7 @@ export const SidebarHeader = ({
                     }}
                     role="menuitem"
                   >
-                    Log out
+                    {localize("user_menu_logout", "Log out")}
                   </button>
                 </div>
               </div>

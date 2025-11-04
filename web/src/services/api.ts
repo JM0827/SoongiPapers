@@ -37,6 +37,7 @@ import type {
   EditingSelectionPayload,
   EditingSuggestionResponse,
   ProofreadingLogEntry,
+  ProofreadRunSummary,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
 import { streamNdjson } from "./sse";
@@ -48,6 +49,25 @@ const defaultHeaders = (token?: string) =>
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }) as const;
+
+export type TranslationStreamEvent = {
+  type: string;
+  data?: unknown;
+  [key: string]: unknown;
+};
+
+export type ProofreadStreamEvent = {
+  type: string;
+  data?: unknown;
+  [key: string]: unknown;
+};
+
+export interface ProofreadItemsFetchResponse {
+  events: ProofreadStreamEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
+}
 
 export type QualityStreamStartEvent = {
   type: "start";
@@ -993,6 +1013,9 @@ export const api = {
       verbosity: string;
       reasoning_effort: string;
       created_at: string;
+      downshift_attempts?: number | null;
+      forced_pagination?: number | null;
+      cursor_retry?: number | null;
     };
 
     const data = await handle<{ logs?: RawEntry[] }>(res);
@@ -1041,6 +1064,9 @@ export const api = {
       verbosity: String(entry.verbosity ?? ""),
       reasoningEffort: String(entry.reasoning_effort ?? ""),
       createdAt: String(entry.created_at ?? ""),
+      downshiftAttempts: Number(entry.downshift_attempts ?? 0),
+      forcedPagination: Number(entry.forced_pagination ?? 0),
+      cursorRetry: Number(entry.cursor_retry ?? 0),
     }));
   },
 
@@ -1454,6 +1480,131 @@ export const api = {
       sourceHash?: string;
       pipeline?: string;
     }>(res);
+  },
+
+  streamTranslation(config: {
+    token: string | null;
+    projectId: string;
+    jobId: string;
+    onEvent?: (event: TranslationStreamEvent) => void;
+    onError?: (error: Error) => void;
+  }): () => void {
+    const { token, projectId, jobId, onEvent, onError } = config;
+    const controller = new AbortController();
+    const search = new URLSearchParams({ jobId });
+    const url = `${API_BASE}/api/projects/${projectId}/translations/stream?${search.toString()}`;
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to subscribe to translation stream");
+        }
+        try {
+          await streamNdjson<TranslationStreamEvent>(
+            res,
+            (event) => {
+              if (event) onEvent?.(event);
+            },
+            (error, payload) => {
+              console.warn(
+                "[api] failed to parse translation stream event",
+                {
+                  error,
+                  payload,
+                },
+              );
+            },
+          );
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            throw error;
+          }
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        onError?.(err instanceof Error ? err : new Error(String(err)));
+      });
+
+    return () => {
+      controller.abort();
+    };
+  },
+
+  subscribeProofreadStream(config: {
+    token: string | null;
+    projectId: string;
+    runId?: string | null;
+    proofreadingId?: string | null;
+    onEvent?: (event: ProofreadStreamEvent) => void;
+    onError?: (error: Error) => void;
+  }): () => void {
+    const { token, projectId, runId, proofreadingId, onEvent, onError } = config;
+    const controller = new AbortController();
+    const search = new URLSearchParams();
+    if (runId) search.set("runId", runId);
+    if (proofreadingId) search.set("proofreadingId", proofreadingId);
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/proofread/stream${
+      query ? `?${query}` : ""
+    }`;
+
+    if (!search.has("runId") && !search.has("proofreadingId")) {
+      throw new Error("runId or proofreadingId is required to subscribe proofread stream");
+    }
+
+    const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
+    fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to subscribe to proofread stream");
+        }
+        try {
+          await streamNdjson<ProofreadStreamEvent>(
+            res,
+            (event) => {
+              if (event) onEvent?.(event);
+            },
+            (error, payload) => {
+              console.warn(
+                "[api] failed to parse proofread stream event",
+                {
+                  error,
+                  payload,
+                },
+              );
+            },
+          );
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            throw error;
+          }
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        onError?.(err instanceof Error ? err : new Error(String(err)));
+      });
+
+    return () => {
+      controller.abort();
+    };
   },
 
   async listJobs(
@@ -1912,6 +2063,55 @@ export const api = {
       headers: defaultHeaders(token),
     });
     return handle<ProofreadEditorResponse>(res);
+  },
+
+  async fetchProofreadItems(config: {
+    token: string;
+    projectId: string;
+    runId: string;
+    cursor: string;
+    limit?: number;
+  }): Promise<ProofreadItemsFetchResponse> {
+    const { token, projectId, runId, cursor, limit } = config;
+    const search = new URLSearchParams();
+    if (cursor) search.set("cursor", cursor);
+    if (typeof limit === "number" && Number.isFinite(limit)) {
+      search.set("limit", String(limit));
+    }
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/proofread/${runId}/items${
+      query ? `?${query}` : ""
+    }`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: defaultHeaders(token),
+    });
+    return handle<ProofreadItemsFetchResponse>(res);
+  },
+
+  async fetchProofreadSummary(
+    token: string,
+    projectId: string,
+    params: { runId?: string | null; proofreadingId?: string | null },
+  ): Promise<ProofreadRunSummary | null> {
+    const search = new URLSearchParams();
+    if (params.runId) search.set("runId", params.runId);
+    if (params.proofreadingId) search.set("proofreadingId", params.proofreadingId);
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/proofread/summary${
+      query ? `?${query}` : ""
+    }`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: defaultHeaders(token),
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+
+    const data = await handle<{ summary?: ProofreadRunSummary | null }>(res);
+    return data.summary ?? null;
   },
 
   async fetchTranslationStageDrafts(config: {

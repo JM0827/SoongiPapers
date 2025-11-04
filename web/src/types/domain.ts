@@ -98,14 +98,7 @@ export interface TranslationFinalSummary {
   sourceHash?: string | null;
 }
 
-export type TranslationStageKey =
-  | "literal"
-  | "style"
-  | "emotion"
-  | "qa"
-  | "draft"
-  | "revise"
-  | "micro-check";
+export type TranslationStageKey = "draft" | "revise" | "micro-check";
 
 export type WorkflowType = "translation" | "proofread" | "quality";
 
@@ -247,6 +240,16 @@ export interface ProofreadingBucket {
 
 export interface ProofreadingReportSummary {
   countsBySubfeature?: Record<string, number>;
+  tierIssueCounts?: Record<string, number>;
+  tier_issue_counts?: Record<string, number>;
+  itemCount?: number;
+  item_count?: number;
+  downshiftCount?: number;
+  downshift_count?: number;
+  forcedPaginationCount?: number;
+  forced_pagination_count?: number;
+  cursorRetryCount?: number;
+  cursor_retry_count?: number;
   notes_ko?: string;
   notes_en?: string;
 }
@@ -368,6 +371,52 @@ export interface ProofreadEditorResponse {
   featureToggles: Record<string, boolean>;
 }
 
+export interface ProofreadStreamMeta {
+  runId: string;
+  projectId: string | null;
+  connectionCount: number;
+  reconnectAttempts: number;
+  lastConnectionAt: string | null;
+  lastDisconnectionAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastEventAt: string | null;
+  lastEventType: string | null;
+  fallbackCount: number;
+  lastFallbackAt: string | null;
+  lastFallbackReason: string | null;
+}
+
+export interface ProofreadRunSummary {
+  projectId: string;
+  runId: string | null;
+  runStatus: string | null;
+  runCreatedAt: string | null;
+  runCompletedAt: string | null;
+  lastLogAt: string | null;
+  jobId: string | null;
+  translationFileId: string | null;
+  memoryVersion: number | null;
+  finalTextHash: string | null;
+  proofreading: {
+    id: string | null;
+    status: string | null;
+    createdAt: string | null;
+    completedAt: string | null;
+  };
+  workflowRun: {
+    runId: string;
+    status: string;
+    label: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  report: ProofreadingReport | null;
+  tierReports: Partial<Record<"quick" | "deep", ProofreadingReport>>;
+  updatedAt: string | null;
+  streamMeta: ProofreadStreamMeta | null;
+}
+
 export interface ProofreadingLogEntry {
   id: string;
   projectId: string;
@@ -391,6 +440,9 @@ export interface ProofreadingLogEntry {
   verbosity: string;
   reasoningEffort: string;
   createdAt: string;
+  downshiftAttempts: number;
+  forcedPagination: number;
+  cursorRetry: number;
 }
 
 export interface TranslationDraftAdminRun {

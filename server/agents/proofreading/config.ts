@@ -130,6 +130,9 @@ export type ProofreadingLLMRunMeta = {
   reasoningEffort: ReasoningEffortSetting;
   guardSegments: number;
   memoryContextVersion: number | null;
+  downshiftCount?: number;
+  forcedPaginationCount?: number;
+  cursorRetryCount?: number;
 };
 
 export type ProofreadingReport = {
@@ -144,8 +147,13 @@ export type ProofreadingReport = {
   results: ResultBucket[];
   summary: {
     countsBySubfeature: Record<string, number>;
+    tier_issue_counts?: Record<string, number>;
+    item_count?: number;
     notes_ko?: string;
     notes_en?: string;
+    downshift_count?: number;
+    forced_pagination_count?: number;
+    cursor_retry_count?: number;
   };
 };
 

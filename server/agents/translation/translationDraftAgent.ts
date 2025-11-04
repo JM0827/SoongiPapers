@@ -77,6 +77,9 @@ export interface TranslationDraftAgentResultMeta {
   fallbackModelUsed: boolean;
   jsonRepairApplied: boolean;
   attemptHistory: ResponsesRetryAttemptContext[];
+  downshiftCount?: number;
+  forcedPaginationCount?: number;
+  cursorRetryCount?: number;
 }
 
 export interface TranslationDraftAgentResult {
@@ -803,6 +806,9 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
   segmentRetryUsage = null;
   segmentRetryMeta = null;
   segmentRetryModel = null;
+  let downshiftCount = 0;
+  let forcedPaginationCount = 0;
+  let cursorRetryCount = 0;
   const runResult = await runResponsesWithRetry<Response>({
     client: openai,
     initialMaxOutputTokens: maxOutputTokens,
@@ -817,6 +823,15 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
       usingFallback,
       usingSegmentRetry,
     }) => {
+      if (stage === "downshift" || stage === "minimal") {
+        downshiftCount += 1;
+      }
+      if (reason === "segment_retry") {
+        cursorRetryCount += 1;
+      }
+      if (reason === "incomplete" && stage === "segment") {
+        forcedPaginationCount += 1;
+      }
       if (!isTranslationDebugEnabled()) {
         return;
       }
@@ -931,6 +946,9 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
   const segmentMeta = retryMeta;
   const segmentAttempts = segmentMeta?.attempts ?? 0;
   const totalAttempts = runResult.attempts + segmentAttempts;
+  downshiftCount += segmentMeta?.downshiftCount ?? 0;
+  forcedPaginationCount += segmentMeta?.forcedPaginationCount ?? 0;
+  cursorRetryCount += segmentMeta?.cursorRetryCount ?? 0;
   let attemptHistory = [...runResult.attemptHistory];
   if (segmentMeta?.attemptHistory?.length) {
     attemptHistory = attemptHistory.concat(segmentMeta.attemptHistory);
@@ -976,6 +994,9 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
       fallbackModelUsed,
       jsonRepairApplied: jsonRepairFlag,
       attemptHistory,
+      downshiftCount,
+      forcedPaginationCount,
+      cursorRetryCount,
     },
   };
 }

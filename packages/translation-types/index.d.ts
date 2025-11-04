@@ -80,14 +80,7 @@ export interface ProjectMemory {
   [key: string]: unknown;
 }
 
-export type TranslationStage =
-  | "literal"
-  | "style"
-  | "emotion"
-  | "qa"
-  | "draft"
-  | "revise"
-  | "micro-check";
+export type TranslationStage = "draft" | "revise" | "micro-check";
 
 export interface EmotionBaseline {
   vector: number[];
@@ -162,9 +155,9 @@ export interface GuardFindingDetail {
 }
 
 export interface SequentialTranslationTemps {
-  literal: number;
-  style: number;
-  emotion: number;
+  draft: number;
+  revise: number;
+  "micro-check": number;
 }
 
 export type ResponseVerbosity = "low" | "medium" | "high";
@@ -178,10 +171,9 @@ export interface SequentialStageLLMParameters {
 }
 
 export interface SequentialTranslationStageConfig {
-  literal: SequentialStageLLMParameters;
-  style: SequentialStageLLMParameters;
-  emotion: SequentialStageLLMParameters;
-  qa: SequentialStageLLMParameters;
+  draft: SequentialStageLLMParameters;
+  revise: SequentialStageLLMParameters;
+  "micro-check": SequentialStageLLMParameters;
 }
 
 export interface SequentialTranslationMBRConfig {
@@ -321,9 +313,9 @@ export interface SequentialStageJobSegment {
   textSource: string;
   prevCtx?: string;
   nextCtx?: string;
-  literalDraftId?: string;
-  styleDraftId?: string;
-  emotionDraftId?: string;
+  draftId?: string;
+  reviseId?: string;
+  microCheckId?: string;
   baseline?: BaselineMetrics;
   stageOutputs?: Partial<Record<TranslationStage, SequentialStageResult>>;
 }

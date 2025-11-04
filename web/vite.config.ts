@@ -1,4 +1,6 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
+import type { UserConfigExport as VitestConfigExport } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -16,7 +18,7 @@ const httpsConfig = httpsEnabled
     }
   : undefined;
 
-export default defineConfig({
+const config = {
   plugins: [react()],
   resolve: {
     alias: {
@@ -55,4 +57,18 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 4173,
   },
-});
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "./src/tests/setup.ts",
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    coverage: {
+      reporter: ["text", "html"],
+    },
+    exclude: [...configDefaults.exclude, "src/tests/setup.ts"],
+  },
+};
+
+export default defineConfig(
+  config as unknown as VitestConfigExport as unknown as import("vite").UserConfigExport,
+);

@@ -1037,7 +1037,14 @@ export const LeftSidebar = () => {
       label:
         translationDone || translationFailed
           ? localize("sidebar_quick_translation_label_redo", "Redo translation")
-          : localize("sidebar_quick_translation_label", "Run translation"),
+          : translationPrepReady
+            ? localize("sidebar_quick_translation_label", "Run translation")
+            : hasOriginContent
+              ? localize(
+                  "sidebar_quick_translation_label_wait",
+                  "Preparing translation",
+                )
+              : localize("sidebar_quick_translation_label", "Run translation"),
       icon: <RefreshCcw size={18} />,
       tooltip: !chatExecutorReady
         ? assistantPendingTooltip

@@ -356,7 +356,10 @@ export const ProjectProfileCard = ({
     deriveDraft(content ?? null, projectSummary ?? null, userName),
   );
   const draftRef = useRef<ProfileDraft>(draft);
-  const statusSnapshotRef = useRef<ProfileStatusSnapshot | null>(null);
+  const statusSnapshotRef = useRef<{
+    projectId: string | null;
+    snapshot: ProfileStatusSnapshot | null;
+  }>({ projectId: null, snapshot: null });
   const [status, setStatus] = useState<
     "idle" | "dirty" | "saving" | "saved" | "error"
   >("idle");
@@ -424,20 +427,32 @@ export const ProjectProfileCard = ({
 
   useEffect(() => {
     const previous = statusSnapshotRef.current;
+    const currentProjectId = projectId ?? null;
     if (!onStatusChange) {
-      statusSnapshotRef.current = statusSnapshot;
+      statusSnapshotRef.current = {
+        projectId: currentProjectId,
+        snapshot: statusSnapshot,
+      };
       return;
     }
-    if (
-      !previous ||
-      previous.complete !== statusSnapshot.complete ||
-      previous.consent !== statusSnapshot.consent ||
-      previous.requiredFilled !== statusSnapshot.requiredFilled
-    ) {
+
+    const previousSnapshot = previous.snapshot;
+    const projectChanged = previous.projectId !== currentProjectId;
+    const snapshotChanged =
+      !previousSnapshot ||
+      previousSnapshot.complete !== statusSnapshot.complete ||
+      previousSnapshot.consent !== statusSnapshot.consent ||
+      previousSnapshot.requiredFilled !== statusSnapshot.requiredFilled;
+
+    if (projectChanged || snapshotChanged) {
       onStatusChange(statusSnapshot);
     }
-    statusSnapshotRef.current = statusSnapshot;
-  }, [statusSnapshot, onStatusChange]);
+
+    statusSnapshotRef.current = {
+      projectId: currentProjectId,
+      snapshot: statusSnapshot,
+    };
+  }, [projectId, statusSnapshot, onStatusChange]);
 
   useEffect(() => {
     setLastSavedAt(null);

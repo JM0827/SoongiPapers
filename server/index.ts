@@ -51,6 +51,8 @@ import evaluationRoutes from "./routes/evaluation";
 import proofreadingRoutes from "./routes/proofreading";
 import proofreadEditorRoutes from "./routes/proofreadEditor";
 import translationDraftRoutes from "./routes/translationDrafts";
+import translationStreamRoutes from "./routes/translationStream";
+import proofreadStreamRoutes from "./routes/proofreadStream";
 import dictionaryRoutes from "./routes/dictionary";
 import chatRoutes from "./routes/chat";
 import editingRoutes from "./routes/editing";
@@ -77,6 +79,14 @@ import {
   type TranslationV2Job,
   removeTranslationV2Job,
 } from "./services/translationV2Queue";
+import {
+  emitTranslationStage,
+  emitTranslationPage,
+  emitTranslationComplete,
+  emitTranslationError,
+  translationRunId,
+} from "./services/translationEvents";
+import type { AgentItemsResponseV2 } from "./services/responsesSchemas";
 import { ensureProjectMemory } from "./services/translation/memory";
 import cleanText from "./utils/cleanText";
 
@@ -412,13 +422,15 @@ let app: FastifyInstance;
 
 const V2_PIPELINE_STAGES = ["draft", "revise", "micro-check"] as const;
 
-const DEFAULT_DRAFT_MAX_OUTPUT_TOKENS = 2600;
-const DRAFT_MAX_OUTPUT_TOKENS_CAP = 9000;
+const DEFAULT_DRAFT_MAX_OUTPUT_TOKENS =  Number(process.env.TRANSLATION_DRAFT_MAX_OUTPUT_TOKENS_V2) || 3600;
+const DRAFT_MAX_OUTPUT_TOKENS_CAP = Number(process.env.TRANSLATION_DRAFT_MAX_OUTPUT_TOKENS_CAP_V2) || 7000;
 const DRAFT_TOKEN_BUDGET_FACTOR = 2.0;
-const DEFAULT_REVISE_MAX_OUTPUT_TOKENS = 1800;
-const REVISE_MAX_OUTPUT_TOKENS_CAP = 4800;
+
+const DEFAULT_REVISE_MAX_OUTPUT_TOKENS = Number(process.env.TRANSLATION_REVISE_MAX_OUTPUT_TOKENS_V2) || 3200;
+const REVISE_MAX_OUTPUT_TOKENS_CAP = Number(process.env.TRANSLATION_REVISE_MAX_OUTPUT_TOKENS_CAP_V2) || 7000;
 const REVISE_TOKEN_BUDGET_FACTOR = 1.4;
-const MAX_SEGMENTS_PER_REQUEST = 3;
+
+const MAX_SEGMENTS_PER_REQUEST = Number(process.env.MAX_SEGMENTS_PER_REQUEST) ?? 1;
 
 function sumEstimatedTokens(texts: string[]): number {
   return texts.reduce((total, text) => total + estimateTokens(text), 0);
@@ -447,6 +459,155 @@ type DraftAggregation = {
   meta: DraftAgentResult["meta"];
   model: string;
 };
+
+type TranslationSegmentText = {
+  segmentId: string;
+  text: string;
+};
+
+function extractDraftSegmentTexts(
+  segments: DraftAgentResult["segments"],
+): TranslationSegmentText[] {
+  return segments
+    .map((segment) => {
+      const id =
+        (segment as { segment_id?: string }).segment_id ??
+        (segment as { segmentId?: string }).segmentId ??
+        "";
+      const text =
+        (segment as { translation_segment?: string }).translation_segment ??
+        (segment as { translation?: string }).translation ??
+        "";
+      return { segmentId: id, text: text.trim() };
+    })
+    .filter((entry) => entry.segmentId && entry.text.length);
+}
+
+type ReviseAgentResult = Awaited<ReturnType<typeof generateTranslationRevision>>;
+
+function extractReviseSegmentTexts(
+  segments: ReviseAgentResult["segments"],
+): TranslationSegmentText[] {
+  return segments
+    .map((segment) => {
+      const id = (segment as { segment_id?: string }).segment_id ?? "";
+      const text =
+        (segment as { revised_segment?: string }).revised_segment ??
+        (segment as { translation_segment?: string }).translation_segment ??
+        "";
+      return { segmentId: id, text: text.trim() };
+    })
+    .filter((entry) => entry.segmentId && entry.text.length);
+}
+
+function buildTranslationEnvelope(params: {
+  runId: string;
+  stage: string;
+  jobId: string;
+  model: string;
+  mergedText: string;
+  originSegments: OriginSegment[];
+  segmentTexts: TranslationSegmentText[];
+  usage: { inputTokens: number | null; outputTokens: number | null };
+  meta: {
+    truncated: boolean;
+    retryCount: number;
+    fallbackModelUsed: boolean;
+    jsonRepairApplied: boolean;
+  };
+  latencyMs: number;
+}): { envelope: AgentItemsResponseV2; itemCount: number } {
+  const {
+    runId,
+    stage,
+    jobId,
+    model,
+    mergedText,
+    originSegments,
+    segmentTexts,
+    usage,
+    meta,
+    latencyMs,
+  } = params;
+
+  const textLength = mergedText.length;
+  const map = new Map(segmentTexts.map((entry) => [entry.segmentId, entry.text]));
+  const items: AgentItemsResponseV2["items"] = [];
+  let searchCursor = 0;
+
+  originSegments.forEach((origin, index) => {
+    const translated = map.get(origin.id)?.trim();
+    if (!translated) return;
+    const bounded = translated.slice(0, textLength);
+    let start = mergedText.indexOf(bounded, searchCursor);
+    if (start === -1) {
+      start = mergedText.indexOf(bounded);
+    }
+    if (start === -1) {
+      return;
+    }
+    const end = start + bounded.length;
+    searchCursor = end;
+
+    const severity = stage === "draft" ? "suggestion" : "warning";
+    const snippet =
+      bounded.length > 160 ? `${bounded.slice(0, 157)}…` : bounded;
+
+    items.push({
+      uid: `${origin.id}:${stage}`,
+      k: `${stage}_segment`,
+      s: severity as AgentItemsResponseV2["items"][number]["s"],
+      r: snippet,
+      t: "replace",
+      i: [origin.index ?? index, origin.index ?? index],
+      o: [start, end],
+      fix: { text: bounded },
+      cid: origin.id,
+      side: "tgt",
+    });
+  });
+
+  const warnings: string[] = [];
+  if (meta.fallbackModelUsed) warnings.push("fallback_model_used");
+  if (meta.jsonRepairApplied) warnings.push("json_repair_applied");
+
+  const envelope: AgentItemsResponseV2 = {
+    version: "v2",
+    run_id: runId,
+    chunk_id: `${stage}:${jobId}`,
+    tier: stage,
+    model,
+    latency_ms: Math.max(0, latencyMs),
+    prompt_tokens: usage.inputTokens ?? 0,
+    completion_tokens: usage.outputTokens ?? 0,
+    finish_reason: meta.truncated ? "length" : "stop",
+    truncated: Boolean(meta.truncated),
+    partial: meta.retryCount > 0 ? true : undefined,
+    warnings,
+    index_base: 0,
+    offset_semantics: "[start,end)",
+    stats: {
+      item_count: items.length,
+      avg_item_bytes: items.length
+        ? Math.floor(
+            items.reduce((total, item) => total + Buffer.byteLength(item.r, "utf8"), 0) /
+              items.length,
+          )
+        : 0,
+    },
+    metrics: {
+      downshift_count: Math.max(0, meta.retryCount ?? 0),
+      forced_pagination: false,
+      cursor_retry_count: 0,
+    },
+    items,
+    has_more: false,
+    next_cursor: "",
+    provider_response_id: null,
+  };
+
+  return { envelope, itemCount: items.length };
+}
 
 async function runDraftStageWithAdaptiveRetries(
   baseOptions: Omit<
@@ -982,8 +1143,10 @@ app.register(evaluationRoutes);
 app.register(proofreadingRoutes);
 app.register(proofreadEditorRoutes);
 app.register(adminRoutes);
-app.register(translationDraftRoutes);
-app.register(dictionaryRoutes);
+  app.register(translationDraftRoutes);
+  app.register(translationStreamRoutes);
+  app.register(proofreadStreamRoutes);
+  app.register(dictionaryRoutes);
 app.register(chatRoutes);
 app.register(editingRoutes);
 app.register(modelsRoutes);
@@ -3679,8 +3842,21 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
 
   const startedAt = Date.now();
   let failureReason: string | null = null;
+  let activeStage: string | null = null;
+  const runId = translationRunId(data.jobId);
 
   try {
+    activeStage = "draft";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      status: "in_progress",
+      label: "Draft",
+      chunkId: `draft:${data.jobId}`,
+    });
+    const draftStageStartedAt = Date.now();
     const draftResult = await runDraftStageWithAdaptiveRetries(
       {
         projectId: data.projectId,
@@ -3701,6 +3877,33 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       },
       data.originSegments,
     );
+    const draftDuration = Date.now() - draftStageStartedAt;
+    const draftSegmentTexts = extractDraftSegmentTexts(draftResult.segments);
+    const { envelope: draftEnvelope, itemCount: draftItemCount } =
+      buildTranslationEnvelope({
+        runId,
+        stage: "draft",
+        jobId: data.jobId,
+        model: draftResult.model,
+        mergedText: draftResult.mergedText,
+        originSegments: data.originSegments,
+        segmentTexts: draftSegmentTexts,
+        usage: draftResult.usage,
+        meta: {
+          truncated: draftResult.meta.truncated,
+          retryCount: draftResult.meta.retryCount,
+          fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+          jsonRepairApplied: draftResult.meta.jsonRepairApplied,
+        },
+        latencyMs: draftDuration,
+      });
+    emitTranslationPage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      envelope: draftEnvelope,
+    });
 
     if (await isJobCancelled(data.jobId)) {
       return;
@@ -3740,6 +3943,9 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         retryCount: draftResult.meta.retryCount,
         truncated: draftResult.meta.truncated,
         fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+        downshiftCount: draftResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: draftResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: draftResult.meta.cursorRetryCount ?? 0,
       },
     });
 
@@ -3801,6 +4007,28 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       `[TRANSLATION_V2] Draft stage completed for job ${data.jobId}`,
     );
 
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "draft",
+      status: "done",
+      label: "Draft",
+      itemCount: draftItemCount,
+      chunkId: `draft:${data.jobId}`,
+    });
+    activeStage = null;
+
+    activeStage = "revise";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      status: "in_progress",
+      label: "Revise",
+      chunkId: `revise:${data.jobId}`,
+    });
     const reviseStartedAt = Date.now();
     const revisionResult = await generateTranslationRevision({
       projectId: data.projectId,
@@ -3839,7 +4067,40 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         retryCount: revisionResult.meta.retryCount,
         truncated: revisionResult.meta.truncated,
         fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+        downshiftCount: revisionResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: revisionResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: revisionResult.meta.cursorRetryCount ?? 0,
       },
+    });
+
+    const reviseDuration = Date.now() - reviseStartedAt;
+    const reviseSegmentTexts = extractReviseSegmentTexts(
+      revisionResult.segments,
+    );
+    const { envelope: reviseEnvelope, itemCount: reviseItemCount } =
+      buildTranslationEnvelope({
+        runId,
+        stage: "revise",
+        jobId: data.jobId,
+        model: revisionResult.model,
+        mergedText: revisionResult.mergedText,
+        originSegments: data.originSegments,
+        segmentTexts: reviseSegmentTexts,
+        usage: revisionResult.usage,
+        meta: {
+          truncated: revisionResult.meta.truncated,
+          retryCount: revisionResult.meta.retryCount,
+          fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+          jsonRepairApplied: revisionResult.meta.jsonRepairApplied,
+        },
+        latencyMs: reviseDuration,
+      });
+    emitTranslationPage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      envelope: reviseEnvelope,
     });
 
     if (revisionResult.meta.truncated) {
@@ -3892,9 +4153,32 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       `[TRANSLATION_V2] Revise stage completed for job ${data.jobId}`,
     );
 
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "revise",
+      status: "done",
+      label: "Revise",
+      itemCount: reviseItemCount,
+      chunkId: `revise:${data.jobId}`,
+    });
+    activeStage = null;
+
     if (await isJobCancelled(data.jobId)) {
       return;
     }
+
+    activeStage = "micro-check";
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "micro-check",
+      status: "in_progress",
+      label: "Micro-check",
+      chunkId: `micro-check:${data.jobId}`,
+    });
 
     const microCheckResult = runMicroChecks({
       originSegments: data.originSegments,
@@ -3929,6 +4213,17 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     app.log.info(
       `[TRANSLATION_V2] Micro-check stage completed for job ${data.jobId} (violations: ${microCheckResult.violationCount})`,
     );
+    emitTranslationStage({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      stage: "micro-check",
+      status: "done",
+      label: "Micro-check",
+      itemCount: microCheckResult.segments.length,
+      chunkId: `micro-check:${data.jobId}`,
+    });
+    activeStage = null;
 
     const finalText = revisionResult.mergedText;
     const originText = reconstructOriginText(data.originSegments);
@@ -4001,15 +4296,44 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         );
       }
     }
+
+    emitTranslationComplete({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      translationFileId: translationFile?._id
+        ? translationFile._id.toString()
+        : null,
+      completedAt: new Date().toISOString(),
+    });
   } catch (error) {
     const message =
       error instanceof Error
         ? error.message
         : "Failed to run translation v2 job";
     failureReason = message;
+    if (activeStage) {
+      emitTranslationStage({
+        projectId: data.projectId,
+        jobId: data.jobId,
+        runId,
+        stage: activeStage,
+        status: "error",
+        message,
+      });
+    }
+    emitTranslationError({
+      projectId: data.projectId,
+      jobId: data.jobId,
+      runId,
+      message,
+      stage: activeStage,
+      retryable: false,
+    });
+    activeStage = null;
     app.log.error(
       { err: error, jobId: data.jobId, projectId: data.projectId },
-      "[TRANSLATION_V2] Draft stage failed",
+      "[TRANSLATION_V2] Translation job failed",
     );
   }
 
@@ -4237,10 +4561,10 @@ async function buildJobsPayload(jobRows: JobListRow[]) {
     }
 
     entry.stageCounts[stage] = segmentCount;
-    if (stage === "literal" || stage === "draft" || entry.totalSegments === 0) {
+    if (stage === "draft" || entry.totalSegments === 0) {
       entry.totalSegments = segmentCount;
     }
-    if (stage === "qa" || stage === "micro-check") {
+    if (stage === "micro-check") {
       entry.needsReviewCount = needsReviewCount;
     }
   }
@@ -4252,7 +4576,7 @@ async function buildJobsPayload(jobRows: JobListRow[]) {
            FROM (
              SELECT job_id, jsonb_each_text(guards) AS kv
                FROM translation_drafts
-              WHERE job_id = ANY($1::text[]) AND stage IN ('qa','micro-check')
+          WHERE job_id = ANY($1::text[]) AND stage = 'micro-check'
            ) guard_values
           GROUP BY job_id, guard_key`,
     [jobIds],
@@ -4285,7 +4609,7 @@ async function buildJobsPayload(jobRows: JobListRow[]) {
                 notes,
                 needs_review
            FROM translation_drafts
-          WHERE job_id = ANY($1::text[]) AND stage IN ('qa','micro-check') AND needs_review = true
+          WHERE job_id = ANY($1::text[]) AND stage = 'micro-check' AND needs_review = true
           ORDER BY segment_index ASC`,
     [jobIds],
   );

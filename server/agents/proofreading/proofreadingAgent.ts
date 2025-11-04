@@ -35,6 +35,15 @@ import type {
   ResultBucket,
 } from "./config";
 import { insertProofreadingLog } from "../../db/proofreadingLog";
+import type { AgentItemsResponseV2 } from "../../services/responsesSchemas";
+import {
+  emitProofreadComplete,
+  emitProofreadError,
+  emitProofreadPage,
+  emitProofreadStage,
+  emitProofreadTierSummary,
+} from "../../services/proofreadEvents";
+import { recordProofreadEvent } from "../../services/proofreadStreamMeta";
 
 type Tier = "quick" | "deep";
 
@@ -279,35 +288,62 @@ function chunkAlignedPairs(pairs: AlignedPair[], maxSentences = 4) {
   return chunks.length ? chunks : pairs;
 }
 
+type ProofreadingStageData = {
+  proofreading_id: string;
+  run_id: string;
+  tier: Tier;
+  key: string;
+  label: string;
+  status: "queued" | "in_progress" | "done" | "error";
+  itemCount?: number;
+  message?: string;
+};
+
+type ProofreadingItemsData = {
+  proofreading_id: string;
+  run_id: string;
+  tier: Tier;
+  key: string;
+  chunkIndex: number;
+  page: AgentItemsResponseV2;
+};
+
+type ProofreadingTierSummaryData = {
+  proofreading_id: string;
+  run_id: string;
+  tier: Tier;
+  summary: Record<string, unknown> | null;
+  itemCount?: number;
+};
+
+type ProofreadingCompleteData = {
+  proofreading_id: string;
+  run_id: string;
+  summary: ProofreadingReport | null;
+  scope?: string;
+};
+
+type ProofreadingErrorData = {
+  proofreading_id: string;
+  run_id: string;
+  stage?: string | null;
+  message: string;
+  retryable?: boolean;
+  reason?: string | null;
+};
+
+type ProofreadingDuplicateData = {
+  status: string;
+  run_id: string;
+};
+
 export type ProofreadingProgressEvent =
-  | {
-      type: "stage";
-      tier: Tier;
-      key: string;
-      label: string;
-      status: "in_progress" | "done" | "error";
-      itemCount?: number;
-    }
-  | {
-      type: "tier_complete";
-      tier: Tier;
-      proofreading_id: string;
-      report: ProofreadingReport;
-    }
-  | {
-      type: "complete";
-      proofreading_id: string;
-      report: ProofreadingReport;
-    }
-  | {
-      type: "error";
-      message: string;
-    }
-  | {
-      type: "duplicate";
-      status: string;
-      proofread_run_id: string;
-    };
+  | { type: "stage"; data: ProofreadingStageData }
+  | { type: "items"; data: ProofreadingItemsData }
+  | { type: "tier_complete"; data: ProofreadingTierSummaryData }
+  | { type: "complete"; data: ProofreadingCompleteData }
+  | { type: "error"; data: ProofreadingErrorData }
+  | { type: "duplicate"; data: ProofreadingDuplicateData };
 
 export async function runProofreading(
   project_id: string,
@@ -348,13 +384,13 @@ export async function runProofreading(
     existingRun &&
     (existingRun.status === "running" || existingRun.status === "completed")
   ) {
-    if (onProgress) {
-      onProgress({
-        type: "duplicate",
+    onProgress?.({
+      type: "duplicate",
+      data: {
         status: existingRun.status,
-        proofread_run_id: String(existingRun.id),
-      });
-    }
+        run_id: String(existingRun.id),
+      },
+    });
     return {
       proofreading_id: String(existingRun.id),
       report: null,
@@ -391,8 +427,110 @@ export async function runProofreading(
   });
   await updateHistory({ proofreading_id, status: "inprogress" });
 
+  const proofreadStreamId = proofreadRunId;
   const emit = (event: ProofreadingProgressEvent) => {
-    if (onProgress) onProgress(event);
+    onProgress?.(event);
+
+    switch (event.type) {
+      case "stage": {
+        const data = event.data;
+        emitProofreadStage({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          proofreadingId: data.proofreading_id,
+          stage: data.key ?? data.label ?? data.tier ?? "stage",
+          status: data.status,
+          label: data.label,
+          itemCount: data.itemCount ?? null,
+          tier: data.tier ?? null,
+          key: data.key ?? null,
+          message: data.message ?? null,
+        });
+        recordProofreadEvent({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          type: "stage",
+        });
+        break;
+      }
+      case "items": {
+        const data = event.data;
+        emitProofreadPage({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          proofreadingId: data.proofreading_id,
+          tier: data.tier ?? null,
+          key: data.key ?? null,
+          chunkIndex: data.chunkIndex ?? null,
+          envelope: data.page,
+        });
+        recordProofreadEvent({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          type: "items",
+        });
+        break;
+      }
+      case "tier_complete": {
+        const data = event.data;
+        emitProofreadTierSummary({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          proofreadingId: data.proofreading_id,
+          tier: data.tier,
+          summary: data.summary,
+          itemCount: data.itemCount ?? null,
+          completedAt: new Date().toISOString(),
+        });
+        recordProofreadEvent({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          type: "tier",
+        });
+        break;
+      }
+      case "complete": {
+        const data = event.data;
+        emitProofreadComplete({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          proofreadingId: data.proofreading_id,
+          completedAt: new Date().toISOString(),
+          summary:
+            data.summary && typeof data.summary === "object"
+              ? (data.summary as Record<string, unknown>)
+              : null,
+          scope: data.scope ?? "run",
+        });
+        recordProofreadEvent({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          type: "complete",
+        });
+        break;
+      }
+      case "error": {
+        const data = event.data;
+        emitProofreadError({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          proofreadingId: data.proofreading_id,
+          stage: data.stage ?? null,
+          message: data.message,
+          retryable: data.retryable ?? false,
+          reason: data.reason ?? null,
+        });
+        recordProofreadEvent({
+          projectId: project_id,
+          runId: proofreadStreamId,
+          type: "error",
+        });
+        break;
+      }
+      case "duplicate":
+      default:
+        break;
+    }
   };
 
   try {
@@ -419,7 +557,17 @@ export async function runProofreading(
           (includeDeep && (sf.tier as Tier | undefined) === "deep"),
       );
 
-    const tierReports: Partial<Record<Tier, ProofreadingReport>> = {};
+  const tierReports: Partial<Record<Tier, ProofreadingReport>> = {};
+  const tierMetrics: Partial<
+    Record<
+      Tier,
+      {
+        downshift: number;
+        forcedPagination: number;
+        cursorRetry: number;
+      }
+    >
+  > = {};
 
     const quickSubfeatures = enabledSubfeatures.filter(
       (sf) => (sf.tier as Tier | undefined) === "quick",
@@ -442,25 +590,66 @@ export async function runProofreading(
       Math.max(1, spec.runtime.deepChunkSize ?? 2),
     );
 
+    const handshakeSubfeature =
+      quickSubfeatures[0] ?? enabledSubfeatures[0] ?? null;
+    const startedStageKeys = new Set<string>();
+    if (handshakeSubfeature) {
+      const tierLabel =
+        (handshakeSubfeature.tier as Tier | undefined) === "deep"
+          ? "deep"
+          : "quick";
+      const stageKey = handshakeSubfeature.key ?? "proofreading_handshake";
+      emit({
+        type: "stage",
+        data: {
+          proofreading_id,
+          run_id: proofreadStreamId,
+          tier: tierLabel,
+          key: stageKey,
+          label:
+            handshakeSubfeature.label ??
+            handshakeSubfeature.key ??
+            "Proofreading",
+          status: "in_progress",
+        },
+      });
+      startedStageKeys.add(`${tierLabel}:${stageKey}`);
+    }
+
     const processSubfeatures = async (
       tier: Tier,
       subfeatures: typeof quickSubfeatures,
       pairs: AlignedPair[],
     ) => {
-      if (!subfeatures.length) return;
+      tierMetrics[tier] = tierMetrics[tier] ?? {
+        downshift: 0,
+        forcedPagination: 0,
+        cursorRetry: 0,
+      };
 
       await Promise.all(
         subfeatures.map(async (sf) => {
-          emit({
-            type: "stage",
-            tier,
-            key: sf.key,
-            label: sf.label,
-            status: "in_progress",
-          });
+          const stageKey = `${tier}:${sf.key ?? sf.label ?? "stage"}`;
+          if (!startedStageKeys.has(stageKey)) {
+            emit({
+              type: "stage",
+              data: {
+                proofreading_id,
+                run_id: proofreadStreamId,
+                tier,
+                key: sf.key,
+                label: sf.label,
+                status: "in_progress",
+              },
+            });
+            startedStageKeys.add(stageKey);
+          }
 
           const subItems: IssueItem[] = [];
           const tierRuns = ensureTierRuns(tier);
+          const tierMetric = tierMetrics[tier]!;
+          let pagesEmitted = 0;
+          let itemsEmitted = 0;
 
           try {
             await Promise.all(
@@ -494,103 +683,180 @@ export async function runProofreading(
                       })),
                     }
                   : undefined;
-                const { items, meta } = await runGenericWorker({
-                  model: sf.model ?? undefined,
-                  systemPrompt: `${sf.prompt.system}\n\n${SHARED_TRANSLATION_GUIDELINES}`,
-                  subKey: sf.key,
-                  tier,
-                  kr: pair.kr!,
-                  en: pair.en!,
-                  kr_id: pair.kr_id ?? null,
-                  en_id: pair.en_id ?? null,
-                  guardContext,
-                  memoryContext,
-                });
-                if (items.length) {
-                  subItems.push(...items);
-                }
 
-                const runMeta: ProofreadingLLMRunMeta = {
-                  tier,
-                  subfeatureKey: sf.key,
-                  subfeatureLabel: sf.label,
-                  chunkIndex,
-                  model: meta.model,
-                  maxOutputTokens: meta.maxOutputTokens,
-                  attempts: meta.attempts,
-                  truncated: meta.truncated,
-                  requestId: meta.requestId,
-                  usage: meta.usage,
-                  verbosity: meta.verbosity,
-                  reasoningEffort: meta.reasoningEffort,
-                  guardSegments: meta.guardSegments,
-                  memoryContextVersion: meta.memoryContextVersion,
-                };
-                tierRuns.push(runMeta);
-                llmRuns.push(runMeta);
+                let cursor: string | null = null;
+                let iteration = 0;
 
-                if (spec.runtime?.debugLogging) {
-                  const summary = {
+                while (true) {
+                  const { items, meta, pages } = await runGenericWorker({
+                    model: sf.model ?? undefined,
+                    systemPrompt: `${sf.prompt.system}\n\n${SHARED_TRANSLATION_GUIDELINES}`,
+                    subKey: sf.key,
+                    tier,
+                    kr: pair.kr!,
+                    en: pair.en!,
+                    kr_id: pair.kr_id ?? null,
+                    en_id: pair.en_id ?? null,
+                    guardContext,
+                    memoryContext,
+                    cursor,
+                  });
+
+                  if (items.length) {
+                    subItems.push(...items);
+                  }
+
+                  const downshiftAttempts = meta.attemptHistory.filter((attempt) =>
+                    attempt.stage === "downshift" || attempt.stage === "minimal",
+                  ).length;
+
+                  if (downshiftAttempts > 0) {
+                    tierMetric.downshift += downshiftAttempts;
+                  }
+                  if (meta.hasMore) {
+                    tierMetric.forcedPagination += 1;
+                  }
+                  if (iteration > 0) {
+                    tierMetric.cursorRetry += 1;
+                  }
+
+                  pages.forEach((page) => {
+                    const normalizedPage = {
+                      ...page,
+                      metrics: {
+                        downshift_count: page.metrics?.downshift_count ?? 0,
+                        forced_pagination:
+                          page.metrics?.forced_pagination ?? Boolean(page.has_more),
+                        cursor_retry_count: iteration,
+                      },
+                      next_cursor: page.has_more
+                        ? page.next_cursor ??
+                          `continue:${sf.key}:${chunkIndex}:${iteration}`
+                        : "",
+                    };
+                    emit({
+                      type: "items",
+                      data: {
+                        proofreading_id,
+                        run_id: proofreadStreamId,
+                        tier,
+                        key: sf.key,
+                        chunkIndex,
+                        page: normalizedPage,
+                      },
+                    });
+                    pagesEmitted += 1;
+                    itemsEmitted += normalizedPage.items.length;
+                    console.info(
+                      `[ProofSSE] EMIT items tier=${tier} key=${sf.key ?? ""} chunk=${chunkIndex} page=${pagesEmitted} items=${normalizedPage.items.length}`,
+                    );
+                  });
+
+                  const runMeta: ProofreadingLLMRunMeta = {
                     tier,
                     subfeatureKey: sf.key,
+                    subfeatureLabel: sf.label,
                     chunkIndex,
                     model: meta.model,
                     maxOutputTokens: meta.maxOutputTokens,
                     attempts: meta.attempts,
                     truncated: meta.truncated,
-                    guardSegments: meta.guardSegments,
-                    memoryVersion,
                     requestId: meta.requestId,
                     usage: meta.usage,
+                    verbosity: meta.verbosity,
+                    reasoningEffort: meta.reasoningEffort,
+                    guardSegments: meta.guardSegments,
+                    memoryContextVersion: meta.memoryContextVersion,
+                    downshiftCount: downshiftAttempts,
+                    forcedPaginationCount: meta.hasMore ? 1 : 0,
+                    cursorRetryCount: iteration,
                   };
-                  console.info(
-                    "[proofreading] llm run",
-                    JSON.stringify({
-                      projectId: project_id,
-                      jobId: job_id,
-                      proofreadingId: proofreading_id,
-                      run: summary,
-                    }),
-                  );
-                }
+                  tierRuns.push(runMeta);
+                  llmRuns.push(runMeta);
 
-                try {
-                  await insertProofreadingLog({
-                    projectId: project_id,
-                    jobId: job_id,
-                    proofreadingId: proofreading_id,
-                    runId: proofreadRunId,
-                    tier,
-                    subfeatureKey: sf.key,
-                    subfeatureLabel: sf.label,
-                    chunkIndex,
-                    meta: {
+                  if (spec.runtime?.debugLogging) {
+                    const summary = {
+                      tier,
+                      subfeatureKey: sf.key,
+                      chunkIndex,
                       model: meta.model,
                       maxOutputTokens: meta.maxOutputTokens,
                       attempts: meta.attempts,
                       truncated: meta.truncated,
-                      requestId: meta.requestId,
                       guardSegments: meta.guardSegments,
-                      memoryContextVersion: meta.memoryContextVersion,
+                      memoryVersion,
+                      requestId: meta.requestId,
                       usage: meta.usage,
-                      verbosity: meta.verbosity,
-                      reasoningEffort: meta.reasoningEffort,
-                    },
-                  });
-                } catch (error) {
-                  console.error(
-                    "[proofreading] failed to record llm run",
-                    JSON.stringify({
+                      schemaVersion: meta.schemaVersion,
+                      runId: meta.runId,
+                      hasMore: meta.hasMore,
+                      nextCursor: meta.nextCursor,
+                      latencyMs: meta.latencyMs,
+                      pageCount: meta.pageCount,
+                      downshiftAttempts,
+                      forcedPagination: meta.hasMore ? 1 : 0,
+                      cursorIteration: iteration,
+                    };
+                    console.info(
+                      "[proofreading] llm run",
+                      JSON.stringify({
+                        projectId: project_id,
+                        jobId: job_id,
+                        proofreadingId: proofreading_id,
+                        run: summary,
+                      }),
+                    );
+                  }
+
+                  try {
+                    await insertProofreadingLog({
                       projectId: project_id,
                       jobId: job_id,
                       proofreadingId: proofreading_id,
+                      runId: proofreadRunId,
                       tier,
                       subfeatureKey: sf.key,
+                      subfeatureLabel: sf.label,
                       chunkIndex,
-                      error:
-                        error instanceof Error ? error.message : String(error),
-                    }),
-                  );
+                      meta: {
+                        model: meta.model,
+                        maxOutputTokens: meta.maxOutputTokens,
+                        attempts: meta.attempts,
+                        truncated: meta.truncated,
+                        requestId: meta.requestId,
+                        guardSegments: meta.guardSegments,
+                        memoryContextVersion: meta.memoryContextVersion,
+                        usage: meta.usage,
+                        verbosity: meta.verbosity,
+                        reasoningEffort: meta.reasoningEffort,
+                        downshiftAttempts,
+                        forcedPagination: meta.hasMore ? 1 : 0,
+                        cursorRetry: iteration,
+                      },
+                    });
+                  } catch (error) {
+                    console.error(
+                      "[proofreading] failed to record llm run",
+                      JSON.stringify({
+                        projectId: project_id,
+                        jobId: job_id,
+                        proofreadingId: proofreading_id,
+                        tier,
+                        subfeatureKey: sf.key,
+                        chunkIndex,
+                        error:
+                          error instanceof Error ? error.message : String(error),
+                      }),
+                    );
+                  }
+
+                  if (meta.hasMore && meta.nextCursor) {
+                    cursor = meta.nextCursor;
+                    iteration += 1;
+                    continue;
+                  }
+
+                  break;
                 }
               }),
             );
@@ -607,19 +873,30 @@ export async function runProofreading(
 
             emit({
               type: "stage",
-              tier,
-              key: sf.key,
-              label: sf.label,
-              status: "done",
-              itemCount: decoratedItems.length,
+              data: {
+                proofreading_id,
+                run_id: proofreadStreamId,
+                tier,
+                key: sf.key,
+                label: sf.label,
+                status: "done",
+                itemCount: decoratedItems.length,
+              },
             });
+            console.info(
+              `[ProofSSE] EMIT complete stage tier=${tier} key=${sf.key ?? ""} pages=${pagesEmitted} itemsTotal=${itemsEmitted}`,
+            );
           } catch (error) {
             emit({
               type: "stage",
-              tier,
-              key: sf.key,
-              label: sf.label,
-              status: "error",
+              data: {
+                proofreading_id,
+                run_id: proofreadStreamId,
+                tier,
+                key: sf.key,
+                label: sf.label,
+                status: "error",
+              },
             });
             throw error;
           }
@@ -652,11 +929,27 @@ export async function runProofreading(
         ? { ...baseMeta, llm: { runs: tierReportRuns } }
         : baseMeta;
 
+      const summaryMetrics = tierMetrics[tier] ?? {
+        downshift: 0,
+        forcedPagination: 0,
+        cursorRetry: 0,
+      };
+
+      const tierIssueTotal = tierResults.reduce(
+        (sum, bucket) => sum + (bucket.items?.length ?? 0),
+        0,
+      );
+
       const report: ProofreadingReport = {
         meta: reportMeta,
         results: tierResults,
         summary: {
           countsBySubfeature: recomputeCounts(tierResults),
+          tier_issue_counts: { [tier]: tierIssueTotal },
+          item_count: tierIssueTotal,
+          downshift_count: summaryMetrics.downshift,
+          forced_pagination_count: summaryMetrics.forcedPagination,
+          cursor_retry_count: summaryMetrics.cursorRetry,
           notes_ko: tier === "quick" ? "신속 검사 완료" : "심층 검사 진행 중",
           notes_en:
             tier === "quick" ? "Quick scan complete" : "Deep scan update",
@@ -672,11 +965,19 @@ export async function runProofreading(
       };
 
       tierReports[tier] = tierReport;
+      const summaryPayload =
+        tierReport.summary && typeof tierReport.summary === "object"
+          ? (tierReport.summary as Record<string, unknown>)
+          : null;
       emit({
         type: "tier_complete",
-        tier,
-        proofreading_id,
-        report: tierReport,
+        data: {
+          proofreading_id,
+          run_id: proofreadStreamId,
+          tier,
+          summary: summaryPayload,
+          itemCount: tierIssueTotal,
+        },
       });
     };
 
@@ -702,11 +1003,42 @@ export async function runProofreading(
       ? { ...baseMeta, llm: { runs: llmRuns } }
       : baseMeta;
 
+    const aggregateMetrics = Object.values(tierMetrics).reduce(
+      (acc, metrics) => {
+        if (!metrics) return acc;
+        acc.downshift += metrics.downshift;
+        acc.forcedPagination += metrics.forcedPagination;
+        acc.cursorRetry += metrics.cursorRetry;
+        return acc;
+      },
+      { downshift: 0, forcedPagination: 0, cursorRetry: 0 },
+    );
+
+    const tierIssueCountsSummary = Object.entries(tierReports).reduce(
+      (acc, [tierName, tierReport]) => {
+        if (!tierReport) {
+          acc[tierName] = 0;
+          return acc;
+        }
+        const total = tierReport.results.reduce(
+          (sum, bucket) => sum + (bucket.items?.length ?? 0),
+          0,
+        );
+        acc[tierName] = total;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+
     const report: ProofreadingReport = {
       meta: finalMeta,
       results: filteredBuckets,
       summary: {
         countsBySubfeature: recomputeCounts(filteredBuckets),
+        tier_issue_counts: tierIssueCountsSummary,
+        downshift_count: aggregateMetrics.downshift,
+        forced_pagination_count: aggregateMetrics.forcedPagination,
+        cursor_retry_count: aggregateMetrics.cursorRetry,
         notes_ko: "교정 완료",
         notes_en: "Proofreading complete",
       },
@@ -723,7 +1055,26 @@ export async function runProofreading(
     await updateHistory({ proofreading_id, status: "completed" });
     await updateProofreadRunStatus(proofreadRunId, "completed");
 
-    emit({ type: "complete", proofreading_id, report });
+    emit({
+      type: "complete",
+      data: {
+        proofreading_id,
+        run_id: proofreadStreamId,
+        summary: report,
+        scope: "run",
+      },
+    });
+    console.info(
+      `[ProofSSE] EMIT complete tier=all key=* pages=${Object.values(tierReports).reduce((acc, report) => acc + (report?.results.length ?? 0), 0)} itemsTotal=${Object.values(tierReports).reduce(
+        (acc, report) =>
+          acc +
+          (report?.results.reduce(
+            (sum, bucket) => sum + (bucket.items?.length ?? 0),
+            0,
+          ) ?? 0),
+        0,
+      )}`,
+    );
 
     return { proofreading_id, report };
   } catch (error) {
@@ -731,7 +1082,27 @@ export async function runProofreading(
     await updateHistory({ proofreading_id, status: "error" });
     const message =
       error instanceof Error ? error.message : "Proofreading failed";
-    emit({ type: "error", message });
+    console.error(
+      "[proofread] agent error",
+      JSON.stringify(
+        {
+          projectId: project_id,
+          jobId: job_id,
+          proofreadingId: proofreading_id,
+          message,
+        },
+        null,
+        2,
+      ),
+    );
+    emit({
+      type: "error",
+      data: {
+        proofreading_id,
+        run_id: proofreadStreamId,
+        message,
+      },
+    });
     throw error;
   }
 }

@@ -64,36 +64,30 @@ function mergeStageParameters(
   base: SequentialTranslationStageConfig,
   overrides?: StageParameterOverrides,
 ): SequentialTranslationStageConfig {
-  const literal = {
-    ...base.literal,
-    ...(overrides?.literal ?? {}),
+  const draft = {
+    ...base.draft,
+    ...(overrides?.draft ?? {}),
   } satisfies SequentialStageLLMParameters;
-  const style = {
-    ...base.style,
-    ...(overrides?.style ?? {}),
+  const revise = {
+    ...base.revise,
+    ...(overrides?.revise ?? {}),
   } satisfies SequentialStageLLMParameters;
-  const emotion = {
-    ...base.emotion,
-    ...(overrides?.emotion ?? {}),
-  } satisfies SequentialStageLLMParameters;
-  const qa = {
-    ...base.qa,
-    ...(overrides?.qa ?? {}),
+  const micro = {
+    ...base["micro-check"],
+    ...(overrides?.["micro-check"] ?? {}),
   } satisfies SequentialStageLLMParameters;
 
   return {
-    literal,
-    style,
-    emotion,
-    qa,
+    draft,
+    revise,
+    "micro-check": micro,
   };
 }
 
 const DEFAULT_STAGE_PARAMETERS: SequentialTranslationStageConfig = {
-  literal: buildStageParams("low", "minimal", 900),
-  style: buildStageParams("medium", "low", 900),
-  emotion: buildStageParams("medium", "medium", 900),
-  qa: buildStageParams("low", "low", 600),
+  draft: buildStageParams("medium", "medium", 2200),
+  revise: buildStageParams("medium", "low", 1800),
+  "micro-check": buildStageParams("low", "minimal", 900),
 };
 
 const DEFAULT_TRANSLATION_CONFIG: SequentialTranslationConfig = {
