@@ -8,7 +8,8 @@
     "db-init": "tsx db-init.ts",
     "test": "tsx --test \"{agents,services,db}/**/__tests__/**/*.test.ts\"",
     "postinstall": "node scripts/ensure-mongodb-search-index.js",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "build": "tsc"
   },
   "dependencies": {
     "@bookko/ai-image-gen": "file:../packages/ai-image-gen",

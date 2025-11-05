@@ -32,7 +32,6 @@ import type {
   IssueItem,
   ProofreadingLLMRunMeta,
   ProofreadingReport,
-  ResultBucket,
 } from "./config";
 import { insertProofreadingLog } from "../../db/proofreadingLog";
 import type { AgentItemsResponseV2 } from "../../services/responsesSchemas";

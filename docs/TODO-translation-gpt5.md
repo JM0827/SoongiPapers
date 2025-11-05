@@ -17,7 +17,9 @@
   - [x] Translation draft/revise workers emit v2 envelopes over NDJSON stream (`translationStream`)
   - [x] Proofreading agent migration to v2 envelopes (stream + storage) — server emits tier summaries + v2 items, storage updated with tier metrics, UI now surfaces counters
   - [ ] Normalize shared parser so non-stream callers can request v2 payloads
-- [ ] Implement pagination (`has_more`/`next_cursor`) and token down-shift retry strategy across agents
+- [~] Implement pagination (`has_more`/`next_cursor`) and token down-shift retry strategy across agents
+  - [x] Draft/Revise SSE envelopes now chunked with cursors; `/translations/:runId/items` REST 폴백 구현 완료
+  - [ ] Micro-check stage/token downshift telemetry와 Proofread parity 맞추기 (QA 후 토큰 다운시프트 재설정)
 - [ ] Spec adaptive chunking + detection→revision dual-pass; stage rollout plan
 
 ### Proofread RFC v2.0 Phase A (IDs/Protocol)
@@ -41,11 +43,13 @@
 
 - [x] Extend `recordTokenUsage` to include meta (verbosity, effort, max tokens, retry, truncated, fallback)
 - [ ] Add dashboard/alert for truncated or repeated token cap expansions
+- [ ] Wire translation SSE/REST cursor 로그(`Draft/Revise pages prepared`, `items slice served`) to monitoring dashboards
 - [ ] Surface coverageRatio, retryCount, truncation metrics in monitoring
-  - [~] Proofread stream counters는 UI/로그 + Postgres(`proofread_stream_metrics`)에 수집됨 — 대시보드/알림 연동 남음
+  - [~] Proofread stream counters는 UI/로그 + Postgres(`stream_run_metrics`)에 수집됨 — 대시보드/알림 연동 남음
 
 ## Config / Docs
 
 - [x] Update staging `.env` (e.g., server/.env.example_gpt5) with GPT-5 defaults
 - [ ] Document re-run procedure when truncated occurs (chunk split → Draft rerun)
+- [ ] Capture SSE→REST 폴백 QA 결과 (장문 케이스 + follow-up 토스트) in release notes
 - [ ] Document Synthesis deprecation + rollout plan

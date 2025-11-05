@@ -517,6 +517,11 @@ export const useProofreadAgent = ({
 
         const tier = getString(payload.tier);
         const stageKey = getString(payload.key);
+        const eventRunId =
+          getString((payload as Record<string, unknown>).run_id) ??
+          outcome.runId ??
+          activeRunIdRef.current ??
+          null;
         const chunkIndex =
           typeof (payload as Record<string, unknown>).chunkIndex === 'number'
             ? ((payload as Record<string, unknown>).chunkIndex as number)
@@ -630,7 +635,6 @@ export const useProofreadAgent = ({
           { updateHeartbeat: false },
         );
 
-        outcome.runId = envelope.run_id;
         const detectedProofId =
           getString(payload.proofreading_id) ??
           getString(payload.proofread_id);
@@ -644,10 +648,11 @@ export const useProofreadAgent = ({
         if (envelope.has_more && nextCursorValue) {
           outcome.nextCursor = {
             cursor: nextCursorValue,
-            runId: envelope.run_id,
+            runId: eventRunId ?? envelope.run_id,
             proofreadingId: detectedProofId ?? outcome.proofreadingId ?? activeProofreadingIdRef.current ?? null,
           };
         }
+        outcome.runId = eventRunId ?? outcome.runId;
         return outcome;
       }
 

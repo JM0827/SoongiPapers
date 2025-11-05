@@ -13,6 +13,8 @@ const __dirname = dirname(__filename);
 const loadFixture = (name: string): string =>
   readFileSync(join(__dirname, "fixtures", name), "utf8");
 
+const normalize = (value: string): string => value.replace(/\r\n/g, "\n");
+
 const toNdjsonLine = (page: ReturnType<typeof buildAgentItemsPage>): string =>
   `${JSON.stringify({ type: "items", data: { page } }, null, 2)}\n`;
 
@@ -52,7 +54,7 @@ describe("buildAgentItemsPage", () => {
 
     AgentItemsResponseSchemaV2.parse(page);
     const actual = toNdjsonLine(page);
-    assert.equal(actual, loadFixture("short.ndjson"));
+    assert.equal(normalize(actual), normalize(loadFixture("short.ndjson")));
   });
 
   test("truncated page snapshot", () => {
@@ -91,7 +93,10 @@ describe("buildAgentItemsPage", () => {
 
     AgentItemsResponseSchemaV2.parse(page);
     const actual = toNdjsonLine(page);
-    assert.equal(actual, loadFixture("truncated.ndjson"));
+    assert.equal(
+      normalize(actual),
+      normalize(loadFixture("truncated.ndjson")),
+    );
   });
 
   test("zero item page snapshot", () => {
@@ -118,7 +123,7 @@ describe("buildAgentItemsPage", () => {
 
     AgentItemsResponseSchemaV2.parse(page);
     const actual = toNdjsonLine(page);
-    assert.equal(actual, loadFixture("zero.ndjson"));
+    assert.equal(normalize(actual), normalize(loadFixture("zero.ndjson")));
   });
 
   test("clamps fix note length", () => {

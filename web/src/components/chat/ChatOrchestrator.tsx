@@ -73,6 +73,21 @@ const SUPPORTED_ORIGIN_LABEL = SUPPORTED_ORIGIN_EXTENSIONS.map((ext) =>
 const SUPPORTED_ORIGIN_HINT = SUPPORTED_ORIGIN_EXTENSIONS.join(", ");
 const SUPPORTED_ORIGIN_ACCEPT = SUPPORTED_ORIGIN_EXTENSIONS.join(",");
 
+const FOLLOWUP_DISMISS_KEY = "t1.translation.followup.dismissed";
+
+const FollowupIcon = ({ className = "" }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" fill="none" />
+    <path d="M12 7V13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <circle cx="12" cy="17" r="1" fill="currentColor" />
+  </svg>
+);
+
 const isSupportedOriginFile = (file: File | { name?: string }): boolean => {
   const name = file?.name?.toLowerCase() ?? "";
   return SUPPORTED_ORIGIN_EXTENSIONS.some((ext) => name.endsWith(ext));
@@ -236,6 +251,48 @@ export const ChatOrchestrator = ({
   const leftPanelWidth = useUIStore((state) => state.leftPanelWidth);
   const rightPanelWidth = useUIStore((state) => state.rightPanelWidth);
   const [titleMaxWidth, setTitleMaxWidth] = useState(480);
+  const [followupToast, setFollowupToast] = useState<{
+    count: number;
+    byStage: Record<string, number>;
+    byReason?: Record<string, number>;
+  } | null>(null);
+  const followupPrevCountRef = useRef(0);
+  const [dismissedFollowups, setDismissedFollowups] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(FOLLOWUP_DISMISS_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, number> | null;
+      if (!parsed || typeof parsed !== "object") return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === "number"),
+      );
+    } catch {
+      return {};
+    }
+  });
+  const persistDismissedFollowups = useCallback(
+    (updater: (prev: Record<string, number>) => Record<string, number>) => {
+      setDismissedFollowups((prev) => {
+        const next = updater(prev);
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.setItem(
+              FOLLOWUP_DISMISS_KEY,
+              JSON.stringify(next),
+            );
+          } catch (error) {
+            console.warn(
+              "[Chat] Failed to persist follow-up dismissals",
+              error,
+            );
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const { createProject, isCreating } = useCreateProject();
   const { currentModel: selectedModel } = useModelSelection();
 
@@ -273,6 +330,7 @@ export const ChatOrchestrator = ({
     () => projects.find((project) => project.project_id === projectId) ?? null,
     [projects, projectId],
   );
+
 
   useEffect(() => {
     const bucketSources = [
@@ -518,6 +576,68 @@ export const ChatOrchestrator = ({
     originPrep,
     localize,
   });
+
+  const followupSummary = translationState.followupSummary;
+  useEffect(() => {
+    if (!projectId) return;
+    if (!followupSummary) {
+      followupPrevCountRef.current = 0;
+      setFollowupToast(null);
+      if (dismissedFollowups[projectId] !== undefined) {
+        persistDismissedFollowups((prev) => {
+          const next = { ...prev };
+          delete next[projectId];
+          return next;
+        });
+      }
+      return;
+    }
+
+    const { total, byStage, byReason } = followupSummary;
+    followupPrevCountRef.current = total;
+
+    if (total <= 0) {
+      setFollowupToast(null);
+      if (dismissedFollowups[projectId] !== undefined) {
+        persistDismissedFollowups((prev) => {
+          const next = { ...prev };
+          delete next[projectId];
+          return next;
+        });
+      }
+      return;
+    }
+
+    const dismissedCount = dismissedFollowups[projectId];
+    if (dismissedCount !== undefined && dismissedCount !== total) {
+      persistDismissedFollowups((prev) => {
+        const next = { ...prev };
+        delete next[projectId];
+        return next;
+      });
+    }
+
+    if (dismissedCount === total) {
+      setFollowupToast(null);
+      return;
+    }
+
+    setFollowupToast({
+      count: total,
+      byStage,
+      byReason,
+    });
+  }, [
+    dismissedFollowups,
+    followupSummary,
+    persistDismissedFollowups,
+    projectId,
+  ]);
+
+  useEffect(() => {
+    followupPrevCountRef.current = 0;
+    setFollowupToast(null);
+  }, [projectId]);
 
   const { state: proofreadingState, startProofread } = useProofreadAgent({
     token,
@@ -1516,9 +1636,12 @@ export const ChatOrchestrator = ({
         }
       : null;
 
+    const followups = translationState.followupSummary ?? null;
+
     return {
       overall,
       sequential,
+      followups,
     };
   }, [
     translationWorkflow,
@@ -1531,6 +1654,7 @@ export const ChatOrchestrator = ({
     translationState.guardFailures,
     translationState.flaggedSegments,
     translationState.pipelineStages,
+    translationState.followupSummary,
     translationStage,
     hasTranslation,
     localize,
@@ -3318,21 +3442,21 @@ export const ChatOrchestrator = ({
             stages={timelineStages}
             onStageClick={scrollToStage}
           />
-          {(translationWorkflow?.label ||
-            proofreadingWorkflow?.label ||
-            qualityWorkflow?.label) && (
-            <div className="flex flex-wrap gap-3 text-xs text-slate-500">
-              {translationWorkflow?.label && (
-                <span>번역 라벨: {translationWorkflow.label}</span>
-              )}
-              {proofreadingWorkflow?.label && (
-                <span>교정 라벨: {proofreadingWorkflow.label}</span>
-              )}
-              {qualityWorkflow?.label && (
-                <span>품질 라벨: {qualityWorkflow.label}</span>
-              )}
-            </div>
+      {(translationWorkflow?.label ||
+        proofreadingWorkflow?.label ||
+        qualityWorkflow?.label) && (
+        <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+          {translationWorkflow?.label && (
+            <span>번역 라벨: {translationWorkflow.label}</span>
           )}
+          {proofreadingWorkflow?.label && (
+            <span>교정 라벨: {proofreadingWorkflow.label}</span>
+          )}
+          {qualityWorkflow?.label && (
+            <span>품질 라벨: {qualityWorkflow.label}</span>
+          )}
+        </div>
+      )}
           {/* Timeline summary moved to sidebar; keeping header compact. */}
           {(showUploader || isDragging || !hasOrigin) && (
             <div>
@@ -3377,9 +3501,95 @@ export const ChatOrchestrator = ({
                 )}
               </div>
             </div>
-          )}
+      )}
+    </div>
+  </header>
+
+      {followupToast && (
+        <div className="pointer-events-auto fixed top-20 right-6 z-30 max-w-sm">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 shadow-lg">
+            <div className="flex items-start gap-3">
+              <FollowupIcon className="mt-1 h-4 w-4 text-amber-600" />
+              <div className="flex-1 space-y-2 text-xs text-amber-800">
+                <div className="font-semibold text-amber-700">
+                  {localize(
+                    "chat_translation_followup_title",
+                    "Follow-up required",
+                  )}
+                </div>
+                <div>
+                  {localize(
+                    "chat_translation_followup_toast",
+                    "Follow-up items pending: {{count}}",
+                    { count: followupToast.count },
+                  )}
+                </div>
+                <div>
+                  <div className="font-medium text-amber-700">
+                    {localize(
+                      "chat_translation_followup_by_stage",
+                      "By stage",
+                    )}
+                  </div>
+                  <ul className="mt-1 space-y-1 text-amber-700">
+                    {Object.entries(followupToast.byStage).map(([stage, count]) => {
+                      const normalized = stage === "microcheck" ? "micro-check" : stage;
+                      const label = localize(
+                        `chat_stage_${normalized}`,
+                        TRANSLATION_STAGE_FALLBACKS[normalized] ?? normalized,
+                      );
+                      return (
+                        <li key={stage} className="flex justify-between">
+                          <span>{label}</span>
+                          <span className="font-semibold">{count}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+                {followupToast.byReason &&
+                  Object.keys(followupToast.byReason).length > 0 && (
+                    <div>
+                      <div className="font-medium text-amber-700">
+                        {localize(
+                          "chat_translation_followup_by_reason",
+                          "By reason",
+                        )}
+                      </div>
+                      <ul className="mt-1 space-y-1 text-amber-700">
+                        {Object.entries(followupToast.byReason).map(([reason, count]) => (
+                          <li key={reason} className="flex justify-between capitalize">
+                            <span>{reason.replace(/_/g, " ")}</span>
+                            <span className="font-semibold">{count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (projectId && followupToast) {
+                    persistDismissedFollowups((prev) => ({
+                      ...prev,
+                      [projectId]: followupToast.count,
+                    }));
+                  }
+                  if (followupToast) {
+                    followupPrevCountRef.current = followupToast.count;
+                  }
+                  setFollowupToast(null);
+                }}
+                className="ml-2 text-slate-500 transition hover:text-slate-700"
+                aria-label={localize("chat_translation_followup_close", "Close")}
+              >
+                ×
+              </button>
+            </div>
+          </div>
         </div>
-      </header>
+      )}
 
       <main className="flex-1 overflow-hidden bg-blue-50">
         <div className="relative h-full">

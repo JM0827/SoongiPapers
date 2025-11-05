@@ -8,6 +8,9 @@ export interface SafeExtractedOpenAIResponse {
     total_tokens?: number;
   };
   repairApplied?: boolean;
+  status?: string | null;
+  finishReason?: string | null;
+  incompleteReason?: string | null;
 }
 
 const JSON_CONTROL_CHAR_REGEX =
@@ -162,12 +165,41 @@ export function safeExtractOpenAIResponse(
     }
   }
 
+  const status: string | null =
+    typeof resp?.status === "string" ? resp.status : null;
+  let finishReason: string | null = null;
+  const outputItems = Array.isArray(resp?.output) ? resp.output : [];
+  for (const item of outputItems) {
+    const candidate = (item as { finish_reason?: unknown }).finish_reason;
+    if (typeof candidate === "string" && candidate.trim()) {
+      finishReason = candidate.trim();
+      break;
+    }
+  }
+  if (!finishReason && status === "incomplete") {
+    finishReason = "length";
+  }
+  const incompleteReason: string | null =
+    typeof resp?.incomplete_details?.reason === "string"
+      ? resp.incomplete_details.reason
+      : null;
+  if (
+    !finishReason &&
+    incompleteReason &&
+    incompleteReason.toLowerCase() === "max_output_tokens"
+  ) {
+    finishReason = "length";
+  }
+
   return {
     parsedJson: parsed,
     text: normalizedText,
     requestId: resp?.id,
     usage,
     repairApplied,
+    status,
+    finishReason,
+    incompleteReason,
   };
 }
 

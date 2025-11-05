@@ -141,6 +141,13 @@ export interface TranslationAgentState {
   subStates: AgentSubState[];
   pages: TranslationAgentPageV2[];
   lastEnvelope: TranslationAgentPageV2 | null;
+  followupSummary?: {
+    total: number;
+    byStage: Record<string, number>;
+    byReason?: Record<string, number>;
+  };
+  pendingCursors: string[];
+  processedCursors: string[];
 }
 
 export interface ProofreadingAgentState {
@@ -277,6 +284,9 @@ const defaultTranslationState: TranslationAgentState = {
   subStates: [],
   pages: [],
   lastEnvelope: null,
+  followupSummary: undefined,
+  pendingCursors: [],
+  processedCursors: [],
 };
 
 const defaultProofreadingState: ProofreadingAgentState = {

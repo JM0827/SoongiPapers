@@ -1,5 +1,9 @@
 import { EventEmitter } from "node:events";
 import type { AgentItemsResponseV2 } from "./responsesSchemas";
+import {
+  updatePaginationMetrics,
+  updateStageTimeline,
+} from "./translationSummaryState";
 
 export type TranslationStageStatus =
   | "queued"
@@ -64,10 +68,43 @@ function channelFor(jobId: string, type: keyof TranslationEventMap): string {
 }
 
 export function emitTranslationStage(event: TranslationStageEvent): void {
+  void updateStageTimeline({
+    projectId: event.projectId,
+    runId: event.runId,
+    stage: event.stage,
+    status: event.status,
+    itemCount: event.itemCount ?? null,
+  }).catch((error) => {
+    // eslint-disable-next-line no-console -- temporary visibility during refactor
+    console.warn("[TranslationSummary] failed to record stage timeline", {
+      runId: event.runId,
+      stage: event.stage,
+      error,
+    });
+  });
   emitter.emit(channelFor(event.jobId, "stage"), event);
 }
 
 export function emitTranslationPage(event: TranslationPageEvent): void {
+  const hasMore = Boolean(event.envelope.has_more);
+  const nextCursor =
+    typeof event.envelope.next_cursor === "string"
+      ? event.envelope.next_cursor
+      : null;
+  void updatePaginationMetrics({
+    projectId: event.projectId,
+    runId: event.runId,
+    hasMore,
+    nextCursor,
+    stage: event.stage,
+  }).catch((error) => {
+    // eslint-disable-next-line no-console -- temporary visibility during refactor
+    console.warn("[TranslationSummary] failed to record pagination", {
+      runId: event.runId,
+      stage: event.stage,
+      error,
+    });
+  });
   emitter.emit(channelFor(event.jobId, "page"), event);
 }
 

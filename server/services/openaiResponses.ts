@@ -67,7 +67,7 @@ const BASE_STAGE_SEQUENCE: Array<{
 }> = [
   { stage: "primary", multiplier: 1, usingFallback: false, usingSegmentRetry: false },
   { stage: "downshift", multiplier: 0.7, usingFallback: false, usingSegmentRetry: false },
-  { stage: "minimal", multiplier: 0.5, usingFallback: false, usingSegmentRetry: false },
+  { stage: "minimal", multiplier: 0.49, usingFallback: false, usingSegmentRetry: false },
 ];
 
 const isResponseIncomplete = (response: unknown): boolean => {

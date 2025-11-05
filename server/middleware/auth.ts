@@ -18,7 +18,7 @@ export async function requireAuthAndPlanCheck(
     let payload: any;
     try {
       payload = jwt.verify(token, jwtSecret);
-    } catch (e) {
+    } catch (_error) {
       return reply.status(401).send({ error: "Invalid or expired token" });
     }
     const user_id = payload.user_id;

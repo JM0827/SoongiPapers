@@ -877,45 +877,83 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
     parsedJson,
     usage: responseUsage,
     repairApplied,
+    finishReason,
+    status: responseStatus,
+    incompleteReason,
   } = safeExtractOpenAIResponse(runResult.response);
 
-  if (!parsedJson || typeof parsedJson !== "object") {
-    throw new Error("Draft response returned empty payload");
+  const truncatedByLength =
+    runResult.truncated ||
+    finishReason === "length" ||
+    responseStatus === "incomplete" ||
+    incompleteReason === "max_output_tokens";
+
+  if (truncatedByLength && !segmentRetrySegments) {
+    const fallbackContext =
+      runResult.attemptHistory[runResult.attemptHistory.length - 1] ?? {
+        attemptIndex: Math.max(runResult.attempts - 1, 0),
+        maxOutputTokens: runResult.maxOutputTokens,
+        stage: "segment",
+        reason: "incomplete",
+        usingFallback: false,
+        usingSegmentRetry: true,
+      } satisfies ResponsesRetryAttemptContext;
+    const aggregate = await draftSegmentsWithSplit(
+      originSegments,
+      fallbackContext,
+    );
+    if (aggregate) {
+      segmentRetrySegments = aggregate.segments;
+      segmentRetryUsage = aggregate.usage;
+      segmentRetryMeta = aggregate.meta;
+      segmentRetryModel = aggregate.model;
+    } else if (!parsedJson || typeof parsedJson !== "object") {
+      throw new Error("Draft response truncated and no segment retry available");
+    }
   }
 
-  const payload = parsedJson as RawDraftResponse;
-
-  validateDraftResponse(payload, expectedIds);
-
+  let extractedSegments: TranslationDraftAgentSegmentResult[] = [];
   const baseUsage = {
     inputTokens: responseUsage?.prompt_tokens ?? 0,
     outputTokens: responseUsage?.completion_tokens ?? 0,
   };
 
-  const extractedSegments = (
-    Array.isArray(payload.segments) ? payload.segments : []
-  )
-    .map((entry) => normalizeSegment(entry))
-    .filter((entry): entry is DraftSegmentNormalized => entry !== null)
-    .map((segment) => {
-      const origin = originSegments.find(
-        (item) => item.id === segment.segmentId,
-      );
-      const originalText = origin?.text ?? "";
-      const translation = segment.translation.trim();
-      const safeTranslation = translation.length ? translation : originalText;
-      return {
-        segment_id: segment.segmentId,
-        origin_segment: originalText,
-        translation_segment: safeTranslation,
-        notes: segment.notes,
-        spanPairs: buildSpanPairs(
-          segment.segmentId,
-          originalText,
-          safeTranslation,
-        ),
-      } satisfies TranslationDraftAgentSegmentResult;
-    });
+  if (!segmentRetrySegments) {
+    if (!parsedJson || typeof parsedJson !== "object") {
+      throw new Error("Draft response returned empty payload");
+    }
+
+    const payload = parsedJson as RawDraftResponse;
+
+    validateDraftResponse(payload, expectedIds);
+
+    extractedSegments = (
+      Array.isArray(payload.segments) ? payload.segments : []
+    )
+      .map((entry) => normalizeSegment(entry))
+      .filter((entry): entry is DraftSegmentNormalized => entry !== null)
+      .map((segment) => {
+        const origin = originSegments.find(
+          (item) => item.id === segment.segmentId,
+        );
+        const originalText = origin?.text ?? "";
+        const translation = segment.translation.trim();
+        const safeTranslation = translation.length ? translation : originalText;
+        return {
+          segment_id: segment.segmentId,
+          origin_segment: originalText,
+          translation_segment: safeTranslation,
+          notes: segment.notes,
+          spanPairs: buildSpanPairs(
+            segment.segmentId,
+            originalText,
+            safeTranslation,
+          ),
+        } satisfies TranslationDraftAgentSegmentResult;
+      });
+  } else if (truncatedByLength) {
+    forcedPaginationCount += 1;
+  }
 
   const retrySegments = segmentRetrySegments as
     | TranslationDraftAgentSegmentResult[]
@@ -928,7 +966,12 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
 
   const finalSegments = retrySegments ?? extractedSegments;
 
-  const usage = retryUsage ? { ...retryUsage } : baseUsage;
+  const usage = retryUsage
+    ? {
+        inputTokens: retryUsage.inputTokens + baseUsage.inputTokens,
+        outputTokens: retryUsage.outputTokens + baseUsage.outputTokens,
+      }
+    : baseUsage;
 
   const mergedText = mergeSegmentsToText(originSegments, finalSegments);
   const lastAttemptContext =

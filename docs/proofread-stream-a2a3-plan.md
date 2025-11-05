@@ -11,12 +11,12 @@
      - `setInterval` 기반 3–5s heartbeat 이벤트(`type:"heartbeat"`) 송출.
      - 스트림 open/close 및 heartbeat 전송 실패 시 `request.log.info/warn` 남기기.
      - 클라이언트 구독 식별용 runId/alias 로깅 유지.
-2. **Retry & Poll Fallback Hooks** *(✅ 요약/커서 REST 경로 + 스트림 메타 적용 — 실데이터 QA·영속화 남음)*
+2. **Retry & Poll Fallback Hooks** *(✅ 요약/커서 REST 경로 + 스트림 메타 적용 — 실데이터 QA 진행 중)*
    - `server/services/proofreadSummary.ts`
      - `getProofreadRunSummary`, `getProofreadItemsSlice`로 요약/페이지 슬라이스 노출.
    - `server/routes/proofreadStream.ts`
      - `/api/projects/:projectId/proofread/summary`, `/api/projects/:projectId/proofread/:runId/items` REST 엔드포인트 추가.
-    - 스트림 메타는 in-memory + Postgres(`proofread_stream_metrics`)에 저장되어 대시보드/요약 API에서 재활용.
+    - 스트림 메타는 in-memory + Postgres(`stream_run_metrics`)에 저장되어 대시보드/요약 API에서 재활용.
    - 번역 경로 확장 준비: 동일 패턴을 `translationStreamRoutes` / `translationEvents`에 반영할 수 있도록 구조화.
 3. **Zero-item Run Completion Guard** *(✅ 서버 이벤트 강제 및 NDJSON 스냅샷 검증 완료)*
    - stage/tier 실행 후 항목이 0개일 때도 `tier_complete` 및 `complete(scope:"run")`가 확실히 방출되도록 double-check.
@@ -28,7 +28,7 @@
    - Heartbeat 수신 시 `lastHeartbeatAt` 업데이트; 지연되면 `isStalled` true.
    - 재연결 로직: `Proofread run not found` → 한 번만 runId로 재구독, 실패 시 REST 요약(`api.fetchProofreadSummary`)으로 복구.
 2. **Pagination & has_more Handling** *(✅ 코드/테스트 정비 완료 — 실데이터 검증 대기)*
-   - 서버: `/api/projects/:projectId/proofread/:runId/items` 커서 API는 검증 테스트(`server/services/__tests__/proofreadItemsSlice.test.ts`)와 샘플(`proofreadItemsSlice.sample.ts`)로 회귀 커버리지 확보.
+   - 서버: `/api/projects/:projectId/proofread/:runId/items` 커서 API는 단위 테스트(`server/services/__tests__/proofreadItemsSlice.test.ts`)와 샘플(`proofreadItemsSlice.sample.ts`)로 회귀 커버리지 확보.
    - 클라이언트: `pendingCursors`/`processedCursors` 큐, 슬라이딩 윈도, zero-item 즉시 완료 처리, 재연결 성공/백오프 Vitest 케이스까지 반영(`useProofreadAgent`).
    - 남은 작업: 실 서비스 런으로 has_more 흐름 QA, 운영 백오프 파라미터 점검.
 3. **UI Components**
@@ -55,6 +55,6 @@
 - Heartbeat 이벤트는 번역 파이프라인에도 동일하게 도입될 예정이므로, `proofreadEvents` 구조는 generic하게 설계.
 - REST 폴링 엔드포인트는 아직 없으므로, Proofread Run Summary API (`GET /api/proofread/:runId/summary`) 정의 필요.
 - 서버 로그/메트릭 변경 시 ops와 공유하여 Kibana/Grafana 대시보드 업데이트.
-  - SSE 종료 시 `[ProofSSE] stream metrics snapshot` 로그가 남도록 연동되어 있으며, Postgres `proofread_stream_metrics` 테이블에 누적.
+  - SSE 종료 시 `[ProofSSE] stream metrics snapshot` 로그가 남도록 연동되어 있으며, Postgres `stream_run_metrics` 테이블에 누적.
 
 _Last reviewed: 2025-11-03 (실데이터 QA 및 운영 메타 영속화 진행 중)_

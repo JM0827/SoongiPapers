@@ -37,6 +37,9 @@ import {
   generateTranslationDraft,
   generateTranslationRevision,
   type OriginSegment,
+  type TranslationDraftAgentSegmentResult,
+  type TranslationReviseAgentResult,
+  type TranslationReviseLLMRunMeta,
   type ProjectMemory,
   type SequentialStageJob,
   type SequentialStageJobSegment,
@@ -72,7 +75,7 @@ import {
 } from "./services/workflowManager";
 import { cancelDrafts } from "./services/translationDrafts";
 import { persistStageResults } from "./services/translation/translationDraftStore";
-import { runMicroChecks } from "./services/translation/microCheckGuard";
+import { runMicroChecks, type MicroCheckResult } from "./services/translation/microCheckGuard";
 import {
   registerTranslationV2Processor,
   enqueueTranslationV2Job,
@@ -86,8 +89,19 @@ import {
   emitTranslationError,
   translationRunId,
 } from "./services/translationEvents";
+import {
+  recordTranslationMetricsSnapshot,
+} from "./services/translationStreamMeta";
+import {
+  updateFollowupMetrics,
+  updateSegmentsMetrics,
+} from "./services/translationSummaryState";
 import type { AgentItemsResponseV2 } from "./services/responsesSchemas";
 import { ensureProjectMemory } from "./services/translation/memory";
+import {
+  buildTranslationPages,
+  type TranslationSegmentText,
+} from "./services/translation/translationPages";
 import cleanText from "./utils/cleanText";
 
 type OAuth2AccessToken = {
@@ -460,11 +474,6 @@ type DraftAggregation = {
   model: string;
 };
 
-type TranslationSegmentText = {
-  segmentId: string;
-  text: string;
-};
-
 function extractDraftSegmentTexts(
   segments: DraftAgentResult["segments"],
 ): TranslationSegmentText[] {
@@ -500,114 +509,13 @@ function extractReviseSegmentTexts(
     .filter((entry) => entry.segmentId && entry.text.length);
 }
 
-function buildTranslationEnvelope(params: {
-  runId: string;
-  stage: string;
-  jobId: string;
-  model: string;
-  mergedText: string;
-  originSegments: OriginSegment[];
-  segmentTexts: TranslationSegmentText[];
-  usage: { inputTokens: number | null; outputTokens: number | null };
-  meta: {
-    truncated: boolean;
-    retryCount: number;
-    fallbackModelUsed: boolean;
-    jsonRepairApplied: boolean;
-  };
-  latencyMs: number;
-}): { envelope: AgentItemsResponseV2; itemCount: number } {
-  const {
-    runId,
-    stage,
-    jobId,
-    model,
-    mergedText,
-    originSegments,
-    segmentTexts,
-    usage,
-    meta,
-    latencyMs,
-  } = params;
-
-  const textLength = mergedText.length;
-  const map = new Map(segmentTexts.map((entry) => [entry.segmentId, entry.text]));
-  const items: AgentItemsResponseV2["items"] = [];
-  let searchCursor = 0;
-
-  originSegments.forEach((origin, index) => {
-    const translated = map.get(origin.id)?.trim();
-    if (!translated) return;
-    const bounded = translated.slice(0, textLength);
-    let start = mergedText.indexOf(bounded, searchCursor);
-    if (start === -1) {
-      start = mergedText.indexOf(bounded);
-    }
-    if (start === -1) {
-      return;
-    }
-    const end = start + bounded.length;
-    searchCursor = end;
-
-    const severity = stage === "draft" ? "suggestion" : "warning";
-    const snippet =
-      bounded.length > 160 ? `${bounded.slice(0, 157)}…` : bounded;
-
-    items.push({
-      uid: `${origin.id}:${stage}`,
-      k: `${stage}_segment`,
-      s: severity as AgentItemsResponseV2["items"][number]["s"],
-      r: snippet,
-      t: "replace",
-      i: [origin.index ?? index, origin.index ?? index],
-      o: [start, end],
-      fix: { text: bounded },
-      cid: origin.id,
-      side: "tgt",
-    });
-  });
-
-  const warnings: string[] = [];
-  if (meta.fallbackModelUsed) warnings.push("fallback_model_used");
-  if (meta.jsonRepairApplied) warnings.push("json_repair_applied");
-
-  const envelope: AgentItemsResponseV2 = {
-    version: "v2",
-    run_id: runId,
-    chunk_id: `${stage}:${jobId}`,
-    tier: stage,
-    model,
-    latency_ms: Math.max(0, latencyMs),
-    prompt_tokens: usage.inputTokens ?? 0,
-    completion_tokens: usage.outputTokens ?? 0,
-    finish_reason: meta.truncated ? "length" : "stop",
-    truncated: Boolean(meta.truncated),
-    partial: meta.retryCount > 0 ? true : undefined,
-    warnings,
-    index_base: 0,
-    offset_semantics: "[start,end)",
-    stats: {
-      item_count: items.length,
-      avg_item_bytes: items.length
-        ? Math.floor(
-            items.reduce((total, item) => total + Buffer.byteLength(item.r, "utf8"), 0) /
-              items.length,
-          )
-        : 0,
-    },
-    metrics: {
-      downshift_count: Math.max(0, meta.retryCount ?? 0),
-      forced_pagination: false,
-      cursor_retry_count: 0,
-    },
-    items,
-    has_more: false,
-    next_cursor: "",
-    provider_response_id: null,
-  };
-
-  return { envelope, itemCount: items.length };
-}
+const TRANSLATION_STREAM_PAGE_SIZE = (() => {
+  const raw = Number(process.env.TRANSLATION_STREAM_PAGE_SIZE ?? 40);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 40;
+  }
+  return Math.min(Math.floor(raw), 200);
+})();
 
 async function runDraftStageWithAdaptiveRetries(
   baseOptions: Omit<
@@ -764,6 +672,153 @@ async function runDraftStageWithAdaptiveRetries(
   }
 }
 
+interface RevisionLengthGuardParams {
+  revisionResult: TranslationReviseAgentResult;
+  draftSegments: TranslationDraftAgentSegmentResult[];
+  originSegments: OriginSegment[];
+  translationNotes: TranslationNotes | null;
+  projectId: string;
+  jobId: string;
+  sourceHash?: string;
+}
+
+interface RevisionLengthGuardOutcome {
+  revisionResult: TranslationReviseAgentResult;
+  microCheckResult: MicroCheckResult;
+  retried: boolean;
+}
+
+async function applyRevisionLengthGuardRetry(
+  params: RevisionLengthGuardParams,
+): Promise<RevisionLengthGuardOutcome> {
+  const {
+    revisionResult,
+    draftSegments,
+    originSegments,
+    translationNotes,
+    projectId,
+    jobId,
+    sourceHash,
+  } = params;
+
+  let workingRevision: TranslationReviseAgentResult = {
+    ...revisionResult,
+    segments: [...revisionResult.segments],
+    usage: { ...revisionResult.usage },
+    meta: { ...revisionResult.meta },
+    llm: revisionResult.llm?.runs?.length
+      ? { runs: [...revisionResult.llm.runs] }
+      : revisionResult.llm,
+  };
+
+  let microResult = runMicroChecks({
+    originSegments,
+    revisedSegments: workingRevision.segments,
+  });
+
+  const failingIds = microResult.segments
+    .filter((segment) => !segment.guards.lengthOk)
+    .map((segment) => segment.segmentId);
+
+  if (!failingIds.length) {
+    microResult = {
+      ...microResult,
+      segments: microResult.segments.map((segment) => ({
+        ...segment,
+        needsFollowup: false,
+      })),
+    };
+    return { revisionResult: workingRevision, microCheckResult: microResult, retried: false };
+  }
+
+  let retried = false;
+  const updatedSegments = [...workingRevision.segments];
+  let updatedMeta = { ...workingRevision.meta };
+  const updatedUsage = { ...workingRevision.usage };
+  const updatedRuns: TranslationReviseLLMRunMeta[] =
+    workingRevision.llm?.runs?.length ? [...workingRevision.llm.runs] : [];
+
+  for (const segmentId of failingIds) {
+    const segmentIndex = originSegments.findIndex((segment) => segment.id === segmentId);
+    if (segmentIndex === -1) {
+      continue;
+    }
+    const originSegment = originSegments[segmentIndex];
+    const draftSegment = draftSegments.find(
+      (segment) => segment.segment_id === segmentId,
+    );
+    if (!draftSegment) {
+      continue;
+    }
+
+    const retryMaxTokens = computeMaxOutputTokensForTexts(
+      [draftSegment.translation_segment ?? originSegment.text ?? ""],
+      REVISE_TOKEN_BUDGET_FACTOR,
+      DEFAULT_REVISE_MAX_OUTPUT_TOKENS,
+      REVISE_MAX_OUTPUT_TOKENS_CAP,
+    );
+
+    const retryResult = await generateTranslationRevision({
+      projectId,
+      jobId,
+      sourceHash,
+      originSegments: [originSegment],
+      draftSegments: [draftSegment],
+      translationNotes,
+      maxOutputTokens: retryMaxTokens,
+      allowSegmentRetry: true,
+    });
+
+    retried = true;
+    updatedUsage.inputTokens += retryResult.usage.inputTokens;
+    updatedUsage.outputTokens += retryResult.usage.outputTokens;
+    updatedMeta = mergeAgentMeta(updatedMeta, retryResult.meta);
+    if (retryResult.llm?.runs?.length) {
+      updatedRuns.push(...retryResult.llm.runs);
+    }
+
+    const replacement = retryResult.segments.find(
+      (segment) => segment.segment_id === segmentId,
+    );
+    if (replacement) {
+      updatedSegments[segmentIndex] = replacement;
+    }
+  }
+
+  if (retried) {
+    workingRevision = {
+      ...workingRevision,
+      segments: updatedSegments,
+      usage: updatedUsage,
+      meta: {
+        ...updatedMeta,
+        truncated: false,
+      },
+      llm: updatedRuns.length ? { runs: updatedRuns } : undefined,
+      mergedText: buildMergedRevisionText(originSegments, updatedSegments),
+    };
+  }
+
+  microResult = runMicroChecks({
+    originSegments,
+    revisedSegments: workingRevision.segments,
+  });
+
+  microResult = {
+    ...microResult,
+    segments: microResult.segments.map((segment) => ({
+      ...segment,
+      needsFollowup: !segment.guards.lengthOk,
+    })),
+  };
+
+  return {
+    revisionResult: workingRevision,
+    microCheckResult: microResult,
+    retried,
+  };
+}
+
 function buildMergedDraftText(
   originSegments: OriginSegment[],
   translatedSegments: DraftAgentResult["segments"],
@@ -806,6 +861,37 @@ function buildMergedDraftText(
       return `${acc}${separator}${current.text}`;
     }, "")
     .trim();
+}
+
+function buildMergedRevisionText(
+  originSegments: OriginSegment[],
+  revisedSegments: TranslationReviseAgentResult["segments"],
+): string {
+  const revisionMap = new Map<string, string>(
+    revisedSegments.map((segment, index) => {
+      const key =
+        (segment as { segment_id?: string }).segment_id ??
+        (segment as { segmentId?: string }).segmentId ??
+        originSegments[index]?.id ??
+        "";
+      const value =
+        (segment as { revised_segment?: string }).revised_segment ??
+        (segment as { translation_segment?: string }).translation_segment ??
+        "";
+      return [key, typeof value === "string" ? value : ""];
+    }),
+  );
+
+  const ordered = originSegments.map((origin, index, array) => {
+    const revisionText = (revisionMap.get(origin.id) ?? "").trim();
+    const previous = index > 0 ? array[index - 1] : null;
+    const needsBreak =
+      previous && previous.paragraphIndex !== origin.paragraphIndex;
+    const separator = index === 0 ? "" : needsBreak ? "\n\n" : "\n";
+    return revisionText ? `${separator}${revisionText}` : "";
+  });
+
+  return ordered.join("").trim();
 }
 
 if (HTTPS_ENABLED) {
@@ -3844,6 +3930,24 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
   let failureReason: string | null = null;
   let activeStage: string | null = null;
   const runId = translationRunId(data.jobId);
+  let cachedMicroCheckResult: MicroCheckResult | null = null;
+  let microCheckRetried = false;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let aggregateDownshiftCount = 0;
+  let aggregateForcedPaginationCount = 0;
+  let aggregateCursorRetryCount = 0;
+  let primaryModel: string | null = null;
+
+  await updateSegmentsMetrics({
+    projectId: data.projectId,
+    runId,
+    total: Array.isArray(data.originSegments)
+      ? data.originSegments.length
+      : 0,
+    processed: 0,
+    microcheckCompleted: false,
+  });
 
   try {
     activeStage = "draft";
@@ -3879,31 +3983,50 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     );
     const draftDuration = Date.now() - draftStageStartedAt;
     const draftSegmentTexts = extractDraftSegmentTexts(draftResult.segments);
-    const { envelope: draftEnvelope, itemCount: draftItemCount } =
-      buildTranslationEnvelope({
-        runId,
-        stage: "draft",
-        jobId: data.jobId,
-        model: draftResult.model,
-        mergedText: draftResult.mergedText,
-        originSegments: data.originSegments,
-        segmentTexts: draftSegmentTexts,
-        usage: draftResult.usage,
-        meta: {
-          truncated: draftResult.meta.truncated,
-          retryCount: draftResult.meta.retryCount,
-          fallbackModelUsed: draftResult.meta.fallbackModelUsed,
-          jsonRepairApplied: draftResult.meta.jsonRepairApplied,
-        },
-        latencyMs: draftDuration,
-      });
-    emitTranslationPage({
-      projectId: data.projectId,
-      jobId: data.jobId,
+    const draftPagesResult = buildTranslationPages({
       runId,
       stage: "draft",
-      envelope: draftEnvelope,
+      jobId: data.jobId,
+      model: draftResult.model,
+      mergedText: draftResult.mergedText,
+      originSegments: data.originSegments,
+      segmentTexts: draftSegmentTexts,
+      usage: draftResult.usage,
+      meta: {
+        truncated: draftResult.meta.truncated,
+        retryCount: draftResult.meta.retryCount,
+        fallbackModelUsed: draftResult.meta.fallbackModelUsed,
+        jsonRepairApplied: draftResult.meta.jsonRepairApplied,
+        downshiftCount: draftResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: draftResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: draftResult.meta.cursorRetryCount ?? 0,
+      },
+      latencyMs: draftDuration,
     });
+    app.log.info(
+      {
+        jobId: data.jobId,
+        projectId: data.projectId,
+        runId,
+        stage: "draft",
+        pageCount: draftPagesResult.pages.length,
+        hasMore: draftPagesResult.pages.some((page) => page.has_more),
+        firstNextCursor:
+          draftPagesResult.pages.find((page) => page.has_more)?.next_cursor ??
+          null,
+      },
+      "[TRANSLATION_V2] Draft pages prepared",
+    );
+    draftPagesResult.pages.forEach((page) => {
+      emitTranslationPage({
+        projectId: data.projectId,
+        jobId: data.jobId,
+        runId,
+        stage: "draft",
+        envelope: page,
+      });
+    });
+    const draftItemCount = draftPagesResult.itemCount;
 
     if (await isJobCancelled(data.jobId)) {
       return;
@@ -3947,6 +4070,26 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         forcedPaginationCount: draftResult.meta.forcedPaginationCount ?? 0,
         cursorRetryCount: draftResult.meta.cursorRetryCount ?? 0,
       },
+    });
+
+    totalTokensIn += draftResult.usage.inputTokens;
+    totalTokensOut += draftResult.usage.outputTokens;
+    aggregateDownshiftCount += draftResult.meta.downshiftCount ?? 0;
+    aggregateForcedPaginationCount += draftResult.meta.forcedPaginationCount ?? 0;
+    aggregateCursorRetryCount += draftResult.meta.cursorRetryCount ?? 0;
+    primaryModel = primaryModel ?? draftResult.model;
+
+    await recordTranslationMetricsSnapshot({
+      runId,
+      projectId: data.projectId,
+      status: "running",
+      downshiftCount: aggregateDownshiftCount,
+      forcedPaginationCount: aggregateForcedPaginationCount,
+      cursorRetryCount: aggregateCursorRetryCount,
+      model: primaryModel,
+      maxOutputTokens: draftResult.meta.maxOutputTokens,
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
     });
 
     if (draftResult.meta.truncated) {
@@ -4030,7 +4173,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       chunkId: `revise:${data.jobId}`,
     });
     const reviseStartedAt = Date.now();
-    const revisionResult = await generateTranslationRevision({
+    let revisionResult = await generateTranslationRevision({
       projectId: data.projectId,
       jobId: data.jobId,
       sourceHash: data.sourceHash,
@@ -4050,6 +4193,19 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     if (await isJobCancelled(data.jobId)) {
       return;
     }
+
+    const lengthGuardOutcome = await applyRevisionLengthGuardRetry({
+      revisionResult,
+      draftSegments: draftResult.segments,
+      originSegments: data.originSegments,
+      translationNotes: data.translationNotes ?? null,
+      projectId: data.projectId,
+      jobId: data.jobId,
+      sourceHash: data.sourceHash,
+    });
+    revisionResult = lengthGuardOutcome.revisionResult;
+    cachedMicroCheckResult = lengthGuardOutcome.microCheckResult;
+    microCheckRetried = lengthGuardOutcome.retried;
 
     await recordTokenUsage(app.log, {
       project_id: data.projectId,
@@ -4073,35 +4229,74 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       },
     });
 
+    totalTokensIn += revisionResult.usage.inputTokens;
+    totalTokensOut += revisionResult.usage.outputTokens;
+    aggregateDownshiftCount += revisionResult.meta.downshiftCount ?? 0;
+    aggregateForcedPaginationCount += revisionResult.meta.forcedPaginationCount ?? 0;
+    aggregateCursorRetryCount += revisionResult.meta.cursorRetryCount ?? 0;
+    primaryModel = primaryModel ?? revisionResult.model;
+
+    await recordTranslationMetricsSnapshot({
+      runId,
+      projectId: data.projectId,
+      status: "running",
+      downshiftCount: aggregateDownshiftCount,
+      forcedPaginationCount: aggregateForcedPaginationCount,
+      cursorRetryCount: aggregateCursorRetryCount,
+      model: primaryModel,
+      maxOutputTokens: revisionResult.meta.maxOutputTokens,
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
+    });
+
     const reviseDuration = Date.now() - reviseStartedAt;
     const reviseSegmentTexts = extractReviseSegmentTexts(
       revisionResult.segments,
     );
-    const { envelope: reviseEnvelope, itemCount: reviseItemCount } =
-      buildTranslationEnvelope({
-        runId,
-        stage: "revise",
-        jobId: data.jobId,
-        model: revisionResult.model,
-        mergedText: revisionResult.mergedText,
-        originSegments: data.originSegments,
-        segmentTexts: reviseSegmentTexts,
-        usage: revisionResult.usage,
-        meta: {
-          truncated: revisionResult.meta.truncated,
-          retryCount: revisionResult.meta.retryCount,
-          fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
-          jsonRepairApplied: revisionResult.meta.jsonRepairApplied,
-        },
-        latencyMs: reviseDuration,
-      });
-    emitTranslationPage({
-      projectId: data.projectId,
-      jobId: data.jobId,
+    const revisePagesResult = buildTranslationPages({
       runId,
       stage: "revise",
-      envelope: reviseEnvelope,
+      jobId: data.jobId,
+      model: revisionResult.model,
+      mergedText: revisionResult.mergedText,
+      originSegments: data.originSegments,
+      segmentTexts: reviseSegmentTexts,
+      usage: revisionResult.usage,
+      meta: {
+        truncated: revisionResult.meta.truncated,
+        retryCount: revisionResult.meta.retryCount,
+        fallbackModelUsed: revisionResult.meta.fallbackModelUsed,
+        jsonRepairApplied: revisionResult.meta.jsonRepairApplied,
+        downshiftCount: revisionResult.meta.downshiftCount ?? 0,
+        forcedPaginationCount: revisionResult.meta.forcedPaginationCount ?? 0,
+        cursorRetryCount: revisionResult.meta.cursorRetryCount ?? 0,
+      },
+      latencyMs: reviseDuration,
     });
+    app.log.info(
+      {
+        jobId: data.jobId,
+        projectId: data.projectId,
+        runId,
+        stage: "revise",
+        pageCount: revisePagesResult.pages.length,
+        hasMore: revisePagesResult.pages.some((page) => page.has_more),
+        firstNextCursor:
+          revisePagesResult.pages.find((page) => page.has_more)?.next_cursor ??
+          null,
+      },
+      "[TRANSLATION_V2] Revise pages prepared",
+    );
+    revisePagesResult.pages.forEach((page) => {
+      emitTranslationPage({
+        projectId: data.projectId,
+        jobId: data.jobId,
+        runId,
+        stage: "revise",
+        envelope: page,
+      });
+    });
+    const reviseItemCount = revisePagesResult.itemCount;
 
     if (revisionResult.meta.truncated) {
       failureReason = "revise_truncated";
@@ -4180,10 +4375,24 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       chunkId: `micro-check:${data.jobId}`,
     });
 
-    const microCheckResult = runMicroChecks({
-      originSegments: data.originSegments,
-      revisedSegments: revisionResult.segments,
-    });
+    const microCheckResult = cachedMicroCheckResult ??
+      runMicroChecks({
+        originSegments: data.originSegments,
+        revisedSegments: revisionResult.segments,
+      });
+
+    if (microCheckRetried) {
+      app.log.info(
+        {
+          jobId: data.jobId,
+          projectId: data.projectId,
+          remainingFollowups: microCheckResult.segments.filter(
+            (segment) => segment.needsFollowup,
+          ).length,
+        },
+        "[TRANSLATION_V2] Applied length guard retry for micro-check",
+      );
+    }
 
     const microStageJob: SequentialStageJob = {
       jobId: data.jobId,
@@ -4206,6 +4415,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         textTarget: segment.textTarget,
         guards: segment.guards,
         notes: segment.notes,
+        needsFollowup: segment.needsFollowup ?? false,
       }));
 
     await persistStageResults(microStageJob, microStageResults);
@@ -4224,6 +4434,46 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       chunkId: `micro-check:${data.jobId}`,
     });
     activeStage = null;
+
+    const followupsByStage = {
+      draft: 0,
+      revise: 0,
+      microcheck: 0,
+    } as Record<"draft" | "revise" | "microcheck", number>;
+    const followupsByReason: Record<string, number> = {};
+
+    microCheckResult.segments.forEach((segment) => {
+      const guardOk = segment.guards?.allOk ?? true;
+      const needsFollowup = !guardOk || Boolean(segment.needsFollowup);
+      if (!needsFollowup) {
+        return;
+      }
+      followupsByStage.microcheck += 1;
+      const findings = segment.notes?.guardFindings ?? [];
+      if (Array.isArray(findings) && findings.length > 0) {
+        findings.forEach((finding) => {
+          const reasonKey = finding.type ?? "guard";
+          followupsByReason[reasonKey] =
+            (followupsByReason[reasonKey] ?? 0) + 1;
+        });
+      } else {
+        followupsByReason.guard = (followupsByReason.guard ?? 0) + 1;
+      }
+    });
+
+    await updateSegmentsMetrics({
+      projectId: data.projectId,
+      runId,
+      processed: microCheckResult.segments.length,
+      microcheckCompleted: true,
+    });
+
+    await updateFollowupMetrics({
+      projectId: data.projectId,
+      runId,
+      byStage: followupsByStage,
+      byReason: followupsByReason,
+    });
 
     const finalText = revisionResult.mergedText;
     const originText = reconstructOriginText(data.originSegments);
@@ -4277,11 +4527,26 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
           synthesis_notes: {
             guards: micro?.guards ?? null,
             guardFindings: micro?.notes.guardFindings ?? [],
-            needsReview: !(micro?.guards?.allOk ?? true),
+            needsReview:
+              !(micro?.guards?.allOk ?? true) || Boolean(micro?.needsFollowup),
+            needsFollowup: micro?.needsFollowup ?? false,
           },
         };
       }),
     );
+
+    await recordTranslationMetricsSnapshot({
+      runId,
+      projectId: data.projectId,
+      status: "done",
+      downshiftCount: aggregateDownshiftCount,
+      forcedPaginationCount: aggregateForcedPaginationCount,
+      cursorRetryCount: aggregateCursorRetryCount,
+      model: primaryModel,
+      maxOutputTokens: revisionResult.meta.maxOutputTokens,
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
+    });
 
     await markJobSucceeded(data.jobId);
     if (data.workflowRunId) {
@@ -4335,6 +4600,20 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       { err: error, jobId: data.jobId, projectId: data.projectId },
       "[TRANSLATION_V2] Translation job failed",
     );
+
+    await recordTranslationMetricsSnapshot({
+      runId,
+      projectId: data.projectId,
+      status: "error",
+      errorCode: failureReason,
+      errorMessage: message,
+      downshiftCount: aggregateDownshiftCount,
+      forcedPaginationCount: aggregateForcedPaginationCount,
+      cursorRetryCount: aggregateCursorRetryCount,
+      model: primaryModel,
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
+    });
   }
 
   if (failureReason) {

@@ -1441,20 +1441,35 @@ export const RightPanel = ({
 
   if (!content) {
     return (
-      <div className="flex h-full flex-col gap-4 bg-white px-4 py-6 text-slate-800">
-        <div>
-          <h3 className="text-xl font-semibold text-slate-900">
-            {translate("rightpanel_empty_title", locale)}
-          </h3>
-          <p className="mt-1 text-sm text-slate-600">
-            {translate("rightpanel_empty_subtitle", locale)}
-          </p>
+      <div className="flex h-full flex-col bg-white text-slate-800">
+        <div className="flex items-center justify-end border-b border-slate-200 px-2 py-2">
+          <UserProfileMenu
+            avatarInitial={avatarInitial}
+            avatarTone={avatarTone}
+            avatarPreview={null}
+            userName={user?.name ?? null}
+            userEmail={user?.email ?? null}
+            onOpenTab={(tabKey, label) => openExtraTab({ key: tabKey, label })}
+            onLogout={logout}
+            advancedProofreadEnabled={advancedProofreadEnabled}
+            onToggleAdvancedProofread={handleAdvancedProofreadToggle}
+          />
         </div>
-        <ol className="space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-          <li>{translate("rightpanel_empty_step_upload", locale)}</li>
-          <li>{translate("rightpanel_empty_step_chat", locale)}</li>
-          <li>{translate("rightpanel_empty_step_tour", locale)}</li>
-        </ol>
+        <div className="flex flex-1 flex-col gap-4 px-4 py-6">
+          <div>
+            <h3 className="text-xl font-semibold text-slate-900">
+              {translate("rightpanel_empty_title", locale)}
+            </h3>
+            <p className="mt-1 text-sm text-slate-600">
+              {translate("rightpanel_empty_subtitle", locale)}
+            </p>
+          </div>
+          <ol className="space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            <li>{translate("rightpanel_empty_step_upload", locale)}</li>
+            <li>{translate("rightpanel_empty_step_chat", locale)}</li>
+            <li>{translate("rightpanel_empty_step_tour", locale)}</li>
+          </ol>
+        </div>
       </div>
     );
   }

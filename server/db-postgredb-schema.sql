@@ -233,11 +233,28 @@ CREATE TABLE IF NOT EXISTS proofreading_logs (
 CREATE INDEX IF NOT EXISTS idx_proofreading_logs_project_created_at
   ON proofreading_logs (project_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS proofread_stream_metrics (
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'run_type_enum') THEN
+    CREATE TYPE run_type_enum AS ENUM ('intake', 'translate', 'proofread', 'quality');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'run_status_enum') THEN
+    CREATE TYPE run_status_enum AS ENUM ('running', 'done', 'error');
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS stream_run_metrics (
   run_id TEXT PRIMARY KEY,
   project_id UUID,
+  run_type run_type_enum,
+  stage TEXT,
+  status run_status_enum,
+  error_code TEXT,
+  error_message TEXT,
   connection_count INT NOT NULL DEFAULT 0,
   reconnect_attempts INT NOT NULL DEFAULT 0,
+  sse_disconnects INT NOT NULL DEFAULT 0,
   last_connection_at TIMESTAMPTZ,
   last_disconnection_at TIMESTAMPTZ,
   last_heartbeat_at TIMESTAMPTZ,
@@ -246,11 +263,28 @@ CREATE TABLE IF NOT EXISTS proofread_stream_metrics (
   fallback_count INT NOT NULL DEFAULT 0,
   last_fallback_at TIMESTAMPTZ,
   last_fallback_reason TEXT,
+  downshift_count INT NOT NULL DEFAULT 0,
+  forced_pagination_count INT NOT NULL DEFAULT 0,
+  cursor_retry_count INT NOT NULL DEFAULT 0,
+  last_downshift_at TIMESTAMPTZ,
+  model TEXT,
+  max_output_tokens INT,
+  tokens_in INT,
+  tokens_out INT,
+  cost_usd NUMERIC(12, 6),
+  extras JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_proofread_stream_metrics_project
-  ON proofread_stream_metrics (project_id);
+CREATE INDEX IF NOT EXISTS idx_srm_project
+  ON stream_run_metrics (project_id);
+
+CREATE INDEX IF NOT EXISTS idx_srm_type_status_ts
+  ON stream_run_metrics (run_type, status, last_event_at);
+
+CREATE INDEX IF NOT EXISTS idx_srm_extras
+  ON stream_run_metrics USING GIN (extras);
 
 CREATE TABLE IF NOT EXISTS token_usage_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -70,7 +70,8 @@ const sanitizeAgentItemFix = (item: AgentItemV2): AgentItemV2 => {
     nextFix.note = clampFixNote(item.fix.note);
   }
   if (Object.keys(nextFix).length === 0) {
-    const { fix: _omit, ...rest } = item;
+    const rest = { ...item };
+    delete rest.fix;
     return rest;
   }
   return {
@@ -813,7 +814,7 @@ async function callWithRetries(
         if (versionTag === "v2") {
           try {
             v2Candidate = AgentItemsPayloadSchemaV2.parse(payloadForParse);
-          } catch (error) {
+          } catch (_error) {
             try {
               const light = AgentItemsPayloadLightSchemaV2.parse(payloadForParse);
               v2Candidate = convertLightPayloadToRich(light);
@@ -919,7 +920,7 @@ async function callWithRetries(
           attempt.stage === "downshift" || attempt.stage === "minimal",
       ).length;
       const truncatedOrPartial = runResult.truncated || Boolean(agentPayload.partial);
-      let forcedPagination = truncatedOrPartial || parseFailed;
+      const forcedPagination = truncatedOrPartial || parseFailed;
       if (forcedPagination) {
         hasMore = true;
       }

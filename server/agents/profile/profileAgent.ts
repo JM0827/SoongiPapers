@@ -196,26 +196,6 @@ function normalizePositiveInteger(
   return fallback;
 }
 
-const VERBOSITY_ORDER: ResponseVerbosity[] = ["low", "medium", "high"];
-const EFFORT_ORDER: ResponseReasoningEffort[] = [
-  "minimal",
-  "low",
-  "medium",
-  "high",
-];
-
-function escalateVerbosity(current: ResponseVerbosity): ResponseVerbosity {
-  const index = VERBOSITY_ORDER.indexOf(current);
-  return VERBOSITY_ORDER[Math.min(VERBOSITY_ORDER.length - 1, index + 1)];
-}
-
-function escalateReasoningEffort(
-  current: ResponseReasoningEffort,
-): ResponseReasoningEffort {
-  const index = EFFORT_ORDER.indexOf(current);
-  return EFFORT_ORDER[Math.min(EFFORT_ORDER.length - 1, index + 1)];
-}
-
 export type ProfileVariant = "origin" | "translation";
 
 export interface ProfileAgentInput {
@@ -638,7 +618,6 @@ ${truncated}
       break;
     } catch (error) {
       lastError = error;
-      // eslint-disable-next-line no-console
       console.warn("[PROFILE] attempt failed", {
         attempt: attempts[index],
         error,

@@ -159,7 +159,7 @@ describe("useProofreadAgent", () => {
             key: "style",
             chunk_index: 1,
             page: makePage({
-              run_id: "run-more",
+              run_id: "resp-run-more-followup",
               chunk_id: "chunk-1",
               items: [{ ...pagedItem, k: "style-second" }],
               stats: { item_count: 1 },
@@ -202,7 +202,7 @@ describe("useProofreadAgent", () => {
             key: "style",
             chunk_index: 0,
             page: makePage({
-              run_id: "run-more",
+              run_id: "resp-run-more-initial",
               chunk_id: "chunk-0",
               items: [{ ...pagedItem, k: "style-first" }],
               stats: { item_count: 1 },

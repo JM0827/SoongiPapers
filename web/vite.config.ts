@@ -50,6 +50,11 @@ const config = {
           : "http://localhost:8080",
         changeOrigin: true,
         secure: httpsEnabled ? false : true,
+        configure: (proxy: { on: (event: string, handler: (req: { setHeader: (key: string, value: string) => void }) => void) => void }) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("accept-encoding", "identity");
+          });
+        },
       },
     },
   },
