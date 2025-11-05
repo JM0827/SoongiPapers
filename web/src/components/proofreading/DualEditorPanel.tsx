@@ -16,6 +16,7 @@ import {
   type EditingEditorAdapter,
   type EditorSelectionContext,
 } from '../../store/editingCommand.store';
+import { useWorkflowStore } from '../../store/workflow.store';
 import type {
   SelectionRange,
   ProofreadingIssue,
@@ -35,6 +36,19 @@ import { useUILocale } from '../../hooks/useUILocale';
 import { translate } from '../../lib/locale';
 import { useTranslationStageDrafts } from '../../hooks/useTranslationStageDrafts';
 import { Modal } from '../common/Modal';
+
+const FollowupIcon = ({ className = '' }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" fill="none" />
+    <path d="M12 7V13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <circle cx="12" cy="17" r="1" fill="currentColor" />
+  </svg>
+);
 
 const RECORD_SEPARATOR = '\u241E';
 const SEGMENT_DELIMITER = `\n${RECORD_SEPARATOR}\n`;
@@ -428,6 +442,12 @@ export const DualEditorPanel = ({
     },
     [locale],
   );
+  const translationFollowups = useWorkflowStore(
+    (state) => state.translation.followupSummary,
+  );
+  const followupCount = translationFollowups?.total ?? 0;
+  const [showFollowupPopover, setShowFollowupPopover] = useState(false);
+  const followupIndicatorRef = useRef<HTMLDivElement | null>(null);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const originSummary = useMemo(
     () => originProfile?.summary ?? originFallback?.summary ?? null,
@@ -502,6 +522,22 @@ export const DualEditorPanel = ({
       translationNotes,
     ],
   );
+  useEffect(() => {
+    if (!showFollowupPopover) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!followupIndicatorRef.current?.contains(event.target as Node)) {
+        setShowFollowupPopover(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showFollowupPopover]);
+
+  useEffect(() => {
+    if (followupCount === 0 && showFollowupPopover) {
+      setShowFollowupPopover(false);
+    }
+  }, [followupCount, showFollowupPopover]);
   const summaryButtonLabel = localize(
     'proofread_editor_origin_summary_button',
     '원작 요약 보기',
@@ -2465,6 +2501,91 @@ export const DualEditorPanel = ({
               >
                 <ShieldCheck className="h-4 w-4" />
               </button>
+              {followupCount > 0 && (
+                <div ref={followupIndicatorRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowFollowupPopover((value) => !value)}
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2 py-1 text-[11px] font-semibold text-amber-700 shadow-sm transition hover:border-amber-300 hover:bg-amber-50"
+                    aria-pressed={showFollowupPopover}
+                    aria-label={localize(
+                      'chat_translation_followup_title',
+                      'Follow-up required',
+                    )}
+                  >
+                    <FollowupIcon className="h-4 w-4 text-amber-600" />
+                    <span>{followupCount}</span>
+                  </button>
+                  {showFollowupPopover && (
+                    <div className="absolute right-0 z-20 mt-2 w-64 rounded-md border border-amber-200 bg-white p-3 text-xs text-amber-800 shadow-lg">
+                      <div className="font-semibold text-amber-700">
+                        {localize(
+                          'chat_translation_followup_title',
+                          'Follow-up required',
+                        )}
+                      </div>
+                      <p className="mt-1 text-amber-700">
+                        {localize(
+                          'chat_translation_followup_toast',
+                          'Follow-up items pending: {{count}}',
+                          { count: followupCount },
+                        )}
+                      </p>
+                      <div className="mt-2">
+                        <div className="font-medium text-amber-700">
+                          {localize(
+                            'chat_translation_followup_by_stage',
+                            'By stage',
+                          )}
+                        </div>
+                        <ul className="mt-1 space-y-1">
+                          {Object.entries(translationFollowups?.byStage ?? {}).map(
+                            ([stage, count]) => {
+                              const normalized = stage === 'microcheck' ? 'micro-check' : stage;
+                              const fallback =
+                                STAGE_META[normalized as TranslationStageKey]?.fallback ??
+                                normalized;
+                              const label = localize(
+                                `chat_stage_${normalized}`,
+                                fallback,
+                              );
+                              return (
+                                <li key={stage} className="flex justify-between">
+                                  <span>{label}</span>
+                                  <span className="font-semibold text-amber-800">{count}</span>
+                                </li>
+                              );
+                            },
+                          )}
+                        </ul>
+                      </div>
+                      {translationFollowups?.byReason &&
+                        Object.keys(translationFollowups.byReason).length > 0 && (
+                          <div className="mt-3">
+                            <div className="font-medium text-amber-700">
+                              {localize(
+                                'chat_translation_followup_by_reason',
+                                'By reason',
+                              )}
+                            </div>
+                            <ul className="mt-1 space-y-1">
+                              {Object.entries(translationFollowups.byReason).map(
+                                ([reason, count]) => (
+                                  <li key={reason} className="flex justify-between">
+                                    <span className="capitalize text-amber-700">
+                                      {reason.replace(/_/g, ' ')}
+                                    </span>
+                                    <span className="font-semibold text-amber-800">{count}</span>
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-1">
               {stageOrder.map((stageKey) => {

@@ -1110,7 +1110,6 @@ export async function callQualityModel(
     model = DEFAULT_LITERARY_MODEL,
     maxCharsPerChunk = DEFAULT_CHUNK_SIZE,
     overlap = DEFAULT_CHUNK_OVERLAP,
-    strict = true,
     projectId,
     jobId,
   }: EvaluateParams,
@@ -1388,11 +1387,6 @@ export async function callQualityModel(
     "Cultural Resonance",
     "Creative Autonomy",
   ];
-
-  const weightedScores = completedRecords.map((record) => ({
-    weight: Math.max(record.sourceTokens, record.translatedTokens),
-    overall: record.data.overallScore,
-  }));
 
   const quantitativeEntries = keys.map((key) => ({
     key,

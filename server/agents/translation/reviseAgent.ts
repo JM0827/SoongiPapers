@@ -507,43 +507,85 @@ export async function generateTranslationRevision(
     usage: responseUsage,
     repairApplied,
     requestId,
+    finishReason,
+    status: responseStatus,
+    incompleteReason,
   } = safeExtractOpenAIResponse(runResult.response);
 
-  if (!parsedJson || typeof parsedJson !== "object") {
-    throw new Error("Revision response did not include any segments");
-  }
+  const truncatedByLength =
+    runResult.truncated ||
+    finishReason === "length" ||
+    responseStatus === "incomplete" ||
+    incompleteReason === "max_output_tokens";
 
-  const payload = parsedJson as {
-    segments?: Array<{ segmentId?: string; revision?: string }>;
-  };
-
-  if (!payload.segments) {
-    throw new Error("Revision response did not include any segments");
-  }
-
-  const hasAll = payload.segments.every(
-    (segment) =>
-      typeof segment?.segmentId === "string" &&
-      typeof segment?.revision === "string",
-  );
-  if (!hasAll) {
-    throw new Error("Revision response returned invalid segment entries");
-  }
-
-  const providedIds = new Set(
-    payload.segments.map((segment) => segment.segmentId as string),
-  );
-  const missing = expectedIds.filter((id) => !providedIds.has(id));
-  if (missing.length) {
-    throw new Error(
-      `Revision response missing segments: ${missing.slice(0, 5).join(", ")}`,
+  if (truncatedByLength && !segmentRetrySegments) {
+    const fallbackContext =
+      runResult.attemptHistory[runResult.attemptHistory.length - 1] ?? {
+        attemptIndex: Math.max(runResult.attempts - 1, 0),
+        maxOutputTokens: runResult.maxOutputTokens,
+        stage: "segment",
+        reason: "incomplete",
+        usingFallback: false,
+        usingSegmentRetry: true,
+      } satisfies ResponsesRetryAttemptContext;
+    const aggregate = await reviseSegmentsWithSplit(
+      options.originSegments,
+      fallbackContext,
     );
+    if (aggregate) {
+      segmentRetrySegments = aggregate.segments;
+      segmentRetryUsage = aggregate.usage;
+      segmentRetryMeta = aggregate.meta;
+      segmentRetryModel = aggregate.model;
+      segmentRetryRuns = aggregate.llm?.runs ?? null;
+    } else if (!parsedJson || typeof parsedJson !== "object") {
+      throw new Error("Revision response truncated and no segment retry available");
+    }
   }
 
-  const parsedSegments = payload.segments.map((segment) => ({
-    segmentId: segment.segmentId as string,
-    revision: (segment.revision ?? "").toString(),
-  }));
+  let parsedSegments: Array<{ segmentId: string; revision: string }> = [];
+
+  if (!segmentRetrySegments) {
+    if (!parsedJson || typeof parsedJson !== "object") {
+      throw new Error("Revision response did not include any segments");
+    }
+
+    const payload = parsedJson as {
+      segments?: Array<{ segmentId?: string; revision?: string }>;
+    };
+
+    if (!payload.segments) {
+      throw new Error("Revision response did not include any segments");
+    }
+
+    const hasAll = payload.segments.every(
+      (segment) =>
+        typeof segment?.segmentId === "string" &&
+        typeof segment?.revision === "string",
+    );
+    if (!hasAll) {
+      throw new Error("Revision response returned invalid segment entries");
+    }
+
+    const providedIds = new Set(
+      payload.segments.map((segment) => segment.segmentId as string),
+    );
+    const missing = expectedIds.filter((id) => !providedIds.has(id));
+    if (missing.length) {
+      throw new Error(
+        `Revision response missing segments: ${missing
+          .slice(0, 5)
+          .join(", ")}`,
+      );
+    }
+
+    parsedSegments = payload.segments.map((segment) => ({
+      segmentId: segment.segmentId as string,
+      revision: (segment.revision ?? "").toString(),
+    }));
+  } else if (truncatedByLength) {
+    forcedPaginationCount += 1;
+  }
 
   const baseUsage = {
     inputTokens: responseUsage?.prompt_tokens ?? 0,
@@ -586,12 +628,17 @@ export async function generateTranslationRevision(
 
   fallbackModelUsed = fallbackModelUsed || Boolean(segmentMeta?.fallbackModelUsed);
   const jsonRepairFlag = Boolean(repairApplied) || Boolean(segmentMeta?.jsonRepairApplied);
-  const truncatedFlag = retrySegments ? false : runResult.truncated;
+  const truncatedFlag = retrySegments ? false : truncatedByLength;
   const maxTokensUsed = Math.max(
     runResult.maxOutputTokens,
     segmentMeta?.maxOutputTokens ?? runResult.maxOutputTokens,
   );
-  const usage = retryUsage ? { ...retryUsage } : baseUsage;
+  const usage = retryUsage
+    ? {
+        inputTokens: retryUsage.inputTokens + baseUsage.inputTokens,
+        outputTokens: retryUsage.outputTokens + baseUsage.outputTokens,
+      }
+    : baseUsage;
 
   if (isTranslationDebugEnabled()) {
     console.debug("[TRANSLATION] revise run success", {

@@ -673,6 +673,8 @@ export const ProjectProfileCard = ({
   const consentStatusLabel = consentEnabled
     ? consentStatusEnabled
     : consentStatusDisabled;
+  const consentOffClass = consentEnabled ? "text-slate-400" : "text-rose-500";
+  const consentOnClass = consentEnabled ? "text-emerald-600" : "text-slate-400";
   const savedBadgeLabel = localize(
     "project_profile_status_saved_badge",
     "Saved",
@@ -687,36 +689,33 @@ export const ProjectProfileCard = ({
           <span>{statusInfo.label}</span>
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-          <button
-            type="button"
-            onClick={handleConsentToggle}
-            className={clsx(
-              "relative h-5 w-9 rounded-full border transition-colors duration-150",
-              consentEnabled
-                ? "border-emerald-500 bg-emerald-500"
-                : "border-slate-300 bg-slate-200",
-            )}
-            aria-pressed={consentEnabled}
-            aria-label={consentLabel}
-          >
-            <span
-              className={clsx(
-                "absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-white transition-transform duration-150",
-                consentEnabled ? "translate-x-4" : "translate-x-0",
-              )}
-            />
-          </button>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col gap-1 text-xs font-semibold text-slate-500">
           <span>{consentLabel}</span>
-          <span
-            className={clsx(
-              "font-semibold",
-              consentEnabled ? "text-emerald-600" : "text-slate-400",
-            )}
-          >
-            {consentStatusLabel}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className={consentOffClass}>{consentStatusDisabled}</span>
+            <button
+              type="button"
+              onClick={handleConsentToggle}
+              className={clsx(
+                "relative h-5 w-9 rounded-full border transition-colors duration-150",
+                consentEnabled
+                  ? "border-emerald-500 bg-emerald-500"
+                  : "border-slate-300 bg-slate-200",
+              )}
+              aria-pressed={consentEnabled}
+              aria-label={consentLabel}
+            >
+              <span
+                className={clsx(
+                  "absolute top-[2px] left-[2px] h-4 w-4 rounded-full bg-white transition-transform duration-150",
+                  consentEnabled ? "translate-x-4" : "translate-x-0",
+                )}
+              />
+            </button>
+            <span className={consentOnClass}>{consentStatusEnabled}</span>
+          </div>
+          <span className="sr-only">{consentStatusLabel}</span>
         </div>
         {showSavedBadge ? (
           <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
@@ -726,14 +725,14 @@ export const ProjectProfileCard = ({
         ) : null}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-center md:gap-2">
+          <span className="md:w-22">
             {localize(
               "project_profile_field_book_title",
-              "Original title (required)",
+              "Book title*",
             )}
           </span>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-1 flex-col gap-1">
             <input
               value={draft.bookTitleKo}
               onChange={handleFieldChange("bookTitleKo")}
@@ -754,14 +753,14 @@ export const ProjectProfileCard = ({
             ) : null}
           </div>
         </label>
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-center md:gap-2">
+          <span className="md:w-22">
             {localize(
               "project_profile_field_book_title_en",
               "Translated title",
             )}
           </span>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-1 flex-col gap-1">
             <input
               value={draft.bookTitleEn}
               onChange={handleFieldChange("bookTitleEn")}
@@ -782,12 +781,11 @@ export const ProjectProfileCard = ({
             ) : null}
           </div>
         </label>
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
-            {localize("project_profile_field_author", "Author (original)")}
-            {requireAuthor ? "*" : ""}
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-center md:gap-2">
+          <span className="md:w-22">
+            {localize("project_profile_field_author", "Author*")}
           </span>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-1 flex-col gap-1">
             <input
               value={draft.authorNameKo}
               onChange={handleFieldChange("authorNameKo")}
@@ -808,11 +806,11 @@ export const ProjectProfileCard = ({
             ) : null}
           </div>
         </label>
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-center md:gap-2">
+          <span className="md:w-22">
             {localize("project_profile_field_translator", "Translator")}
           </span>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-1 flex-col gap-1">
             <input
               value={draft.translatorName}
               onChange={handleFieldChange("translatorName")}
@@ -835,22 +833,22 @@ export const ProjectProfileCard = ({
         </label>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-start md:gap-2">
+          <span className="md:w-22">
             {localize("project_profile_field_author_notes", "Author notes")}
           </span>
           <textarea
             value={draft.originalAuthorNotes}
             onChange={handleFieldChange("originalAuthorNotes")}
-            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-[13px] font-normal text-slate-600 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
               "project_profile_placeholder_author_notes",
               "Capture author intent, background, or notes for readers.",
             )}
           />
         </label>
-        <label className="grid grid-cols-[minmax(6.5rem,150px),1fr] items-start gap-x-3 text-xs font-semibold tracking-wide text-slate-500">
-          <span className="pt-1">
+        <label className="flex flex-col gap-1 text-xs font-semibold tracking-wide text-slate-500 md:flex-row md:items-start md:gap-2">
+          <span className="md:w-28">
             {localize(
               "project_profile_field_translator_notes",
               "Translator notes",
@@ -859,7 +857,7 @@ export const ProjectProfileCard = ({
           <textarea
             value={draft.translatorNotes}
             onChange={handleFieldChange("translatorNotes")}
-            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            className="min-h-[88px] w-full rounded border border-slate-300 px-3 py-2 text-[13px] font-normal text-slate-600 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             placeholder={localize(
               "project_profile_placeholder_translator_notes",
               "Share context or reminders for the translation team.",

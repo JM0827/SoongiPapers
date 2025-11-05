@@ -417,6 +417,100 @@ export interface ProofreadRunSummary {
   streamMeta: ProofreadStreamMeta | null;
 }
 
+export interface TranslationStreamMeta {
+  runId: string;
+  projectId: string | null;
+  connectionCount: number;
+  reconnectAttempts: number;
+  lastConnectionAt: string | null;
+  lastDisconnectionAt: string | null;
+  lastHeartbeatAt: string | null;
+  lastEventAt: string | null;
+  lastEventType: string | null;
+  fallbackCount: number;
+  lastFallbackAt: string | null;
+  lastFallbackReason: string | null;
+}
+
+export type TranslationStageId = "draft" | "revise" | "microcheck";
+
+export interface TranslationRunSummary {
+  projectId: string;
+  runId: string | null;
+  runStatus: "queued" | "running" | "done" | "error";
+  runCreatedAt: string | null;
+  runCompletedAt: string | null;
+  lastEventAt: string | null;
+  jobId: string | null;
+  sourceFileId: string | null;
+  memoryVersion: number | null;
+  translation: {
+    id: string | null;
+    status: "queued" | "running" | "done" | "error";
+    createdAt: string | null;
+    completedAt: string | null;
+    currentStage: TranslationStageId | null;
+    stages: Array<{
+      stage: TranslationStageId;
+      status: "queued" | "running" | "done" | "error";
+      startedAt: string | null;
+      completedAt: string | null;
+    }>;
+  };
+  workflowRun: {
+    runId: string;
+    status: string;
+    label: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  progress: {
+    segmentsTotal: number;
+    segmentsCompleted: number;
+    percent: number;
+    byStage: Record<TranslationStageId, {
+      segmentsDone: number;
+      segmentsTotal: number;
+      tokensOut: number;
+    }>;
+  };
+  resilience: {
+    downshiftCount: number;
+    forcedPaginationCount: number;
+    cursorRetryCount: number;
+    reconnectLimitReached: boolean;
+    reconnectAttempts: number;
+  };
+  followups: {
+    needsFollowupTotal: number;
+    byStage: Record<TranslationStageId, number>;
+    byReason: {
+      guardFail?: number;
+      overlength?: number;
+      truncation?: number;
+    };
+  };
+  usage: {
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number | null;
+    primaryModel: string | null;
+    maxOutputTokens: number | null;
+  };
+  pagination: {
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+  errors: {
+    lastErrorCode: string | null;
+    lastErrorMessage: string | null;
+  };
+  streamMeta: TranslationStreamMeta | null;
+  updatedAt: string | null;
+  summarySchemaVersion: number;
+}
+
 export interface ProofreadingLogEntry {
   id: string;
   projectId: string;

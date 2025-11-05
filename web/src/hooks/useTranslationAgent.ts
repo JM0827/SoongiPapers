@@ -4,6 +4,7 @@ import type {
   ChatAction,
   JobSummary,
   OriginPrepSnapshot,
+  TranslationRunSummary,
 } from "../types/domain";
 import { useWorkflowStore } from "../store/workflow.store";
 import type {
@@ -11,6 +12,7 @@ import type {
   AgentSubState,
   TranslationAgentState,
   TranslationStatus,
+  TranslationAgentPageV2,
 } from "../store/workflow.store";
 import {
   getOriginPrepGuardMessage,
@@ -18,10 +20,6 @@ import {
 } from "../lib/originPrep";
 import { dedupeAgentPages, normalizeAgentPageEvent } from "../lib/agentPage";
 import type { TranslationStreamEvent } from "../services/api";
-
-type TranslationAgentPatch = Partial<
-  Omit<TranslationAgentState, "run">
-> & { run?: Partial<AgentRunState> };
 
 const V2_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
 
@@ -32,10 +30,43 @@ const STAGE_LABELS: Record<string, string> = {
   finalizing: "후처리",
 };
 
+const MAX_TRANSLATION_CURSOR_HISTORY = 96;
+const MAX_STREAM_RECONNECT_ATTEMPTS = 10;
+
+type CursorTask = {
+  cursor: string;
+  runId: string;
+};
+
+type StreamConnectionState = "idle" | "connecting" | "streaming" | "backoff";
+
+const trimHistory = (values: string[], max: number): string[] =>
+  values.length > max ? values.slice(values.length - max) : values;
+
 const toStreamRecord = (
   value: TranslationStreamEvent["data"],
 ): Record<string, unknown> =>
   (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isTranslationRunSummaryPayload = (
+  value: unknown,
+): value is TranslationRunSummary => {
+  if (!isRecord(value)) return false;
+  if (typeof value.projectId !== "string") return false;
+  if (!isRecord(value.translation) || !Array.isArray(value.translation.stages)) {
+    return false;
+  }
+  if (!isRecord(value.progress) || !isRecord(value.progress.byStage)) {
+    return false;
+  }
+  if (!isRecord(value.followups)) return false;
+  if (typeof value.followups.needsFollowupTotal !== "number") return false;
+  if (!isRecord(value.followups.byStage)) return false;
+  return true;
+};
 
 const toStringOrNull = (value: unknown): string | null =>
   typeof value === "string" ? value : null;
@@ -55,6 +86,24 @@ const normalizeStageStatus = (
     return value;
   }
   return "in_progress";
+};
+
+const deriveCursorForEnvelope = (
+  envelope: TranslationAgentPageV2,
+): string | null => {
+  const chunkParts = envelope.chunk_id.split(":");
+  if (!chunkParts.length) return null;
+  const stage = chunkParts[0]?.trim();
+  if (!stage) return null;
+  if (chunkParts.length <= 2) {
+    return `${stage}:0`;
+  }
+  const indexPart = chunkParts[chunkParts.length - 1];
+  const pageIndex = Number(indexPart);
+  if (!Number.isFinite(pageIndex) || pageIndex < 0) {
+    return `${stage}:0`;
+  }
+  return `${stage}:${Math.floor(pageIndex)}`;
 };
 
 const getStageLabelSequence = (pipelineStages: string[]) =>
@@ -164,22 +213,51 @@ export const useTranslationAgent = ({
   const translation = useWorkflowStore((state) => state.translation);
   const setTranslation = useWorkflowStore((state) => state.setTranslation);
   const resetTranslation = useWorkflowStore((state) => state.resetTranslation);
+  const onCompletedRef = useRef(onCompleted ?? null);
+  const completedNotifiedRef = useRef(false);
+  const setTranslationForProject = useCallback(
+    (
+      update:
+        | Partial<TranslationAgentState>
+        | ((current: TranslationAgentState) => Partial<TranslationAgentState>),
+    ) => {
+      if (!projectId) return;
+      setTranslation(projectId, update);
+    },
+    [projectId, setTranslation],
+  );
 
-  const pollingRef = useRef(false);
-  const lastStatusRef = useRef<string | null>(translation.status);
+  const [connectionState, setConnectionState] = useState<StreamConnectionState>(
+    "idle",
+  );
+  const connectionStateRef = useRef<StreamConnectionState>("idle");
+  const streamRef = useRef<(() => void) | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const pollingTimerRef = useRef<number | null>(null);
+  const hydrationTokenRef = useRef<symbol | null>(null);
+  const hydratedTokenRef = useRef<symbol | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectLimitReachedRef = useRef(false);
   const lastStageRef = useRef<string | null>(null);
   const finalizingRef = useRef(false);
   const finalizationTimeoutRef = useRef<number | null>(null);
-  const pollingErrorShownRef = useRef(false);
   const originPrepRef = useRef<OriginPrepSnapshot | null>(originPrep ?? null);
-  const [streamEpoch, setStreamEpoch] = useState(0);
-  const streamAbortRef = useRef<(() => void) | null>(null);
   const streamJobIdRef = useRef<string | null>(null);
-  const lastStreamJobIdRef = useRef<string | null>(null);
-  const streamFailureCountRef = useRef(0);
   const streamCompletedRef = useRef(false);
-  const streamRetryTimeoutRef = useRef<number | null>(null);
   const translationStatusRef = useRef<TranslationStatus>(translation.status);
+  const cursorQueueRef = useRef<CursorTask[]>([]);
+  const cursorProcessingRef = useRef(false);
+  const handleStreamEventRef = useRef<
+    (event: TranslationStreamEvent) => CursorTask | null
+  >(() => null);
+  const scheduleCursorDrainRef = useRef<() => void>(() => undefined);
+  const startStreamRef = useRef<
+    (jobId: string, options?: { hydrationToken?: symbol | null }) => void
+  >(() => undefined);
+
+  const triggerTranslationFallback = useCallback(() => {
+    scheduleCursorDrainRef.current();
+  }, []);
 
   useEffect(() => {
     originPrepRef.current = originPrep ?? null;
@@ -189,39 +267,306 @@ export const useTranslationAgent = ({
     translationStatusRef.current = translation.status;
   }, [translation.status]);
 
-  const clearStreamRetryTimeout = useCallback(() => {
-    if (streamRetryTimeoutRef.current !== null) {
-      window.clearTimeout(streamRetryTimeoutRef.current);
-      streamRetryTimeoutRef.current = null;
+  useEffect(() => {
+    onCompletedRef.current = onCompleted ?? null;
+  }, [onCompleted]);
+
+  useEffect(() => {
+    if (translation.status === "done") {
+      if (!completedNotifiedRef.current) {
+        completedNotifiedRef.current = true;
+        onCompletedRef.current?.();
+      }
+    } else {
+      completedNotifiedRef.current = false;
+    }
+  }, [translation.status]);
+
+  const setConnectionStateSafe = useCallback(
+    (next: StreamConnectionState) => {
+      if (connectionStateRef.current === next) return;
+      connectionStateRef.current = next;
+      setConnectionState(next);
+    },
+    [],
+  );
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
   }, []);
 
-  const cleanupStream = useCallback(() => {
-    if (streamAbortRef.current) {
-      streamAbortRef.current();
+  const clearPollingTimer = useCallback(() => {
+    if (pollingTimerRef.current !== null) {
+      window.clearTimeout(pollingTimerRef.current);
+      pollingTimerRef.current = null;
     }
-    streamAbortRef.current = null;
-    streamJobIdRef.current = null;
-    streamCompletedRef.current = false;
-    clearStreamRetryTimeout();
-  }, [clearStreamRetryTimeout]);
+  }, []);
 
-  const scheduleStreamRetry = useCallback(
-    (attempt: number) => {
-      const clampedAttempt = Math.max(1, Math.min(attempt, 5));
-      const delay = Math.min(clampedAttempt * 1000, 5000);
-      clearStreamRetryTimeout();
-      streamRetryTimeoutRef.current = window.setTimeout(() => {
-        streamRetryTimeoutRef.current = null;
-        setStreamEpoch((value) => value + 1);
-      }, delay);
+  const stopStreamInternal = useCallback(
+    (options?: { preserveState?: boolean }) => {
+      if (streamRef.current) {
+        streamRef.current();
+      }
+      streamRef.current = null;
+      streamJobIdRef.current = null;
+      hydrationTokenRef.current = null;
+      if (!options?.preserveState) {
+        hydratedTokenRef.current = null;
+        reconnectAttemptRef.current = 0;
+        setConnectionStateSafe("idle");
+      }
+      clearReconnectTimer();
+      clearPollingTimer();
     },
-    [clearStreamRetryTimeout, setStreamEpoch],
+    [clearPollingTimer, clearReconnectTimer, setConnectionStateSafe],
+  );
+
+  const markStreamHealthy = useCallback(() => {
+    reconnectAttemptRef.current = 0;
+    clearReconnectTimer();
+    clearPollingTimer();
+    setConnectionStateSafe("streaming");
+  }, [clearPollingTimer, clearReconnectTimer, setConnectionStateSafe]);
+
+  const applySummaryToState = useCallback(
+    (summary: TranslationRunSummary) => {
+      if (!projectId) return;
+
+      const normalizeStage = (stage: string | null | undefined) =>
+        stage === "microcheck"
+          ? "micro-check"
+          : stage === "micro-check"
+            ? "micro-check"
+            : stage ?? null;
+
+      const normalizedStages = summary.translation.stages.map((stage) => {
+        const key = normalizeStage(stage.stage);
+        const status = stage.status === "error"
+          ? "failed"
+          : stage.status === "done"
+            ? "done"
+            : "running";
+        return {
+          id: key ?? stage.stage,
+          status,
+          label: key ?? stage.stage,
+        } satisfies AgentSubState;
+      });
+
+      const stageCounts = Object.fromEntries(
+        Object.entries(summary.progress.byStage).map(([key, value]) => [
+          key === "microcheck" ? "micro-check" : key,
+          value.segmentsDone,
+        ]),
+      );
+
+      const runStatus: TranslationStatus =
+        summary.runStatus === "error"
+          ? "failed"
+          : summary.runStatus === "done"
+            ? "done"
+            : summary.runStatus === "queued"
+              ? "queued"
+              : "running";
+
+      const heartbeatAt = summary.streamMeta?.lastHeartbeatAt
+        ? Date.parse(summary.streamMeta.lastHeartbeatAt)
+        : Date.now();
+
+      const reconnectAttempts = summary.resilience?.reconnectAttempts ?? 0;
+      const reconnectLimitReached =
+        summary.resilience?.reconnectLimitReached ?? false;
+      const retryLimitMessage = localize(
+        "translation_stream_retry_limit",
+        "The translation stream disconnected repeatedly. Please retry.",
+      );
+
+      reconnectAttemptRef.current = reconnectAttempts;
+      reconnectLimitReachedRef.current = reconnectLimitReached;
+      if (reconnectLimitReached) {
+        reconnectAttemptRef.current = Math.max(
+          reconnectAttempts,
+          MAX_STREAM_RECONNECT_ATTEMPTS + 1,
+        );
+        clearReconnectTimer();
+        clearPollingTimer();
+        setConnectionStateSafe("idle");
+        stopStreamInternal({ preserveState: true });
+      }
+
+      if (reconnectLimitReached) {
+        setConnectionStateSafe("idle");
+      }
+
+      const followupByReason = Object.entries(summary.followups.byReason ?? {})
+        .reduce<Record<string, number>>((acc, [key, value]) => {
+          if (typeof value === "number" && Number.isFinite(value)) {
+            acc[key] = value;
+          }
+          return acc;
+        }, {});
+
+      setTranslationForProject((current) => ({
+        status:
+          reconnectLimitReached && runStatus === "running"
+            ? "recovering"
+            : runStatus,
+        jobId: summary.jobId ?? current.jobId,
+        progressCompleted: summary.progress.segmentsCompleted,
+        progressTotal: summary.progress.segmentsTotal,
+        stageCounts,
+        completedStages: summary.translation.stages
+          .filter((stage) => stage.status === "done")
+          .map((stage) => normalizeStage(stage.stage) ?? stage.stage),
+        currentStage: normalizeStage(summary.translation.currentStage),
+        needsReviewCount: summary.followups.needsFollowupTotal,
+        totalSegments: summary.progress.segmentsTotal,
+        guardFailures: Object.keys(followupByReason).length
+          ? followupByReason
+          : current.guardFailures,
+        pipelineStages: summary.translation.stages.map(
+          (stage) => normalizeStage(stage.stage) ?? stage.stage,
+        ),
+        lastError: reconnectLimitReached
+          ? retryLimitMessage
+          : summary.errors.lastErrorMessage ?? current.lastError,
+        lastMessage: reconnectLimitReached ? retryLimitMessage : current.lastMessage,
+        updatedAt: summary.updatedAt ?? current.updatedAt,
+        run: {
+          status:
+            reconnectLimitReached && runStatus === "running"
+              ? "recovering"
+              : runStatus,
+          heartbeatAt,
+          willRetry: reconnectLimitReached ? false : current.run.willRetry ?? false,
+          nextRetryDelayMs: reconnectLimitReached
+            ? null
+            : current.run.nextRetryDelayMs ?? null,
+        },
+        subStates: normalizedStages,
+        followupSummary: {
+          total: summary.followups.needsFollowupTotal,
+          byStage: Object.fromEntries(
+            Object.entries(summary.followups.byStage).map(([key, value]) => [
+              key === "microcheck" ? "micro-check" : key,
+              value,
+            ]),
+          ),
+          byReason: followupByReason,
+        },
+      }));
+    },
+    [
+      projectId,
+      setTranslationForProject,
+      localize,
+      setConnectionStateSafe,
+      clearReconnectTimer,
+      clearPollingTimer,
+      stopStreamInternal,
+      MAX_STREAM_RECONNECT_ATTEMPTS,
+    ],
+  );
+
+  const refreshSummary = useCallback(
+    async (options?: {
+      runId?: string | null;
+      jobId?: string | null;
+      force?: boolean;
+      hydrationToken?: symbol | null;
+    }) => {
+      if (!token || !projectId) return null;
+      if (!options?.force && connectionStateRef.current === "streaming") {
+        return null;
+      }
+      try {
+        const summary = await api.fetchTranslationSummary(token, projectId, {
+          runId: options?.runId ?? null,
+          jobId: options?.jobId ?? null,
+        });
+        if (summary) {
+          applySummaryToState(summary);
+          if (options?.hydrationToken) {
+            hydratedTokenRef.current = options.hydrationToken;
+          }
+        }
+        return summary;
+      } catch (error) {
+        console.warn("[translation] failed to fetch summary", error);
+        return null;
+      }
+    },
+    [token, projectId, applySummaryToState],
+  );
+
+  const scheduleBackoffReconnect = useCallback(
+    (jobId: string | null) => {
+      if (!jobId) return;
+      if (reconnectLimitReachedRef.current) return;
+      reconnectAttemptRef.current += 1;
+      const attempt = reconnectAttemptRef.current;
+      if (attempt > MAX_STREAM_RECONNECT_ATTEMPTS) {
+        reconnectLimitReachedRef.current = true;
+        clearReconnectTimer();
+        clearPollingTimer();
+        setConnectionStateSafe("idle");
+        stopStreamInternal({ preserveState: true });
+        return;
+      }
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 30000);
+      setConnectionStateSafe("backoff");
+      clearReconnectTimer();
+      clearPollingTimer();
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (reconnectLimitReachedRef.current) {
+          return;
+        }
+        const token = Symbol("stream-retry");
+        hydrationTokenRef.current = token;
+        void (async () => {
+          await refreshSummary({ jobId, hydrationToken: token });
+          if (hydrationTokenRef.current !== token) {
+            return;
+          }
+          if (reconnectLimitReachedRef.current) {
+            return;
+          }
+          stopStreamInternal({ preserveState: true });
+          setConnectionStateSafe("connecting");
+          startStreamRef.current(jobId, { hydrationToken: token });
+        })().catch((error) => {
+          console.warn("[translation] reconnect attempt failed", error);
+        });
+      }, delay);
+
+      if (attempt >= 3 && pollingTimerRef.current === null) {
+        pollingTimerRef.current = window.setTimeout(() => {
+          pollingTimerRef.current = null;
+          if (reconnectLimitReachedRef.current) {
+            return;
+          }
+          void refreshSummary({ jobId, force: true });
+        }, Math.min(delay + 2000, 12000));
+      }
+    },
+    [
+      refreshSummary,
+      setConnectionStateSafe,
+      stopStreamInternal,
+      clearReconnectTimer,
+      clearPollingTimer,
+      MAX_STREAM_RECONNECT_ATTEMPTS,
+      reconnectLimitReachedRef,
+    ],
   );
 
   const handleStreamEvent = useCallback(
-    (event: TranslationStreamEvent) => {
-      if (!projectId) return;
+    (event: TranslationStreamEvent): CursorTask | null => {
+      if (!projectId) return null;
 
       const mapStageToSubState = (
         status: "queued" | "in_progress" | "done" | "error",
@@ -236,9 +581,21 @@ export const useTranslationAgent = ({
         }
       };
 
+      if (event.type === "summary") {
+        if (isTranslationRunSummaryPayload(event.data)) {
+          try {
+            applySummaryToState(event.data);
+          } catch (error) {
+            console.warn("[translation] failed to apply summary", error);
+          }
+        } else {
+          console.warn("[translation] ignored malformed summary", event.data);
+        }
+        return null;
+      }
+
       if (event.type === "stage") {
-        streamFailureCountRef.current = 0;
-        clearStreamRetryTimeout();
+        markStreamHealthy();
         const data = toStreamRecord(event.data);
         const stage = toStringOrNull(data.stage) ?? "unknown";
         const status = normalizeStageStatus(data.status);
@@ -310,14 +667,14 @@ export const useTranslationAgent = ({
             run: createRunState(targetRunStatus, runOverrides),
           };
         });
-        return;
+        return null;
       }
 
       if (event.type === "items") {
-        streamFailureCountRef.current = 0;
-        clearStreamRetryTimeout();
+        markStreamHealthy();
         const envelope = normalizeAgentPageEvent(event.data ?? null);
-        if (!envelope) return;
+        if (!envelope) return null;
+        const cursorForPage = deriveCursorForEnvelope(envelope);
         setTranslation(projectId, (current) => {
           const key = `${envelope.run_id}:${envelope.chunk_id}`;
           const nextPages = [...current.pages];
@@ -332,6 +689,20 @@ export const useTranslationAgent = ({
           const dedupedPages = dedupeAgentPages(nextPages);
           const nextRunStatus =
             current.run.status === "idle" ? "running" : current.run.status;
+          const pending = new Set(current.pendingCursors ?? []);
+          const processed = new Set(current.processedCursors ?? []);
+          if (cursorForPage) {
+            pending.delete(cursorForPage);
+            processed.add(cursorForPage);
+          }
+          const pendingHistory = trimHistory(
+            Array.from(pending),
+            MAX_TRANSLATION_CURSOR_HISTORY,
+          );
+          const processedHistory = trimHistory(
+            Array.from(processed),
+            MAX_TRANSLATION_CURSOR_HISTORY,
+          );
           return {
             status: current.status === "idle" ? "running" : current.status,
             pages: dedupedPages,
@@ -340,17 +711,29 @@ export const useTranslationAgent = ({
               current.lastMessage ?? "번역 결과가 수신되고 있습니다.",
             lastError: null,
             run: createRunState(nextRunStatus, {
-              willRetry: envelope.has_more,
+              willRetry: envelope.has_more || pendingHistory.length > 0,
               nextRetryDelayMs: current.run.nextRetryDelayMs ?? null,
             }),
+            pendingCursors: pendingHistory,
+            processedCursors: processedHistory,
           };
         });
-        return;
+        const nextCursorValue =
+          typeof envelope.next_cursor === "string" &&
+          envelope.next_cursor.trim().length
+            ? envelope.next_cursor.trim()
+            : null;
+        if (envelope.has_more && nextCursorValue) {
+          return {
+            cursor: nextCursorValue,
+            runId: envelope.run_id,
+          } satisfies CursorTask;
+        }
+        return null;
       }
 
       if (event.type === "progress") {
-        streamFailureCountRef.current = 0;
-        clearStreamRetryTimeout();
+        markStreamHealthy();
         const data = toStreamRecord(event.data);
         const hasMore = toBooleanOrNull(data.has_more);
         setTranslation(projectId, (current) => {
@@ -365,12 +748,12 @@ export const useTranslationAgent = ({
             }),
           };
         });
-        return;
+        return null;
       }
 
       if (event.type === "complete") {
         streamCompletedRef.current = true;
-        clearStreamRetryTimeout();
+        markStreamHealthy();
         setTranslation(projectId, (current) => ({
           status: "done",
           lastMessage: current.lastMessage ?? "번역이 완료되었습니다.",
@@ -379,12 +762,16 @@ export const useTranslationAgent = ({
             willRetry: false,
             nextRetryDelayMs: null,
           }),
+          pendingCursors: [],
+          processedCursors: trimHistory(
+            current.processedCursors ?? [],
+            MAX_TRANSLATION_CURSOR_HISTORY,
+          ),
         }));
-        return;
+        return null;
       }
 
       if (event.type === "error") {
-        clearStreamRetryTimeout();
         const data = toStreamRecord(event.data);
         const message =
           toStringOrNull(data.message) ?? "번역 스트림에서 오류가 발생했습니다.";
@@ -398,131 +785,362 @@ export const useTranslationAgent = ({
             nextRetryDelayMs: current.run.nextRetryDelayMs ?? null,
           }),
         }));
-        return;
+        stopStreamInternal();
+        triggerTranslationFallback();
+        return null;
       }
 
       if (event.type === "end") {
-        streamAbortRef.current = null;
-        streamJobIdRef.current = null;
         const data = toStreamRecord(event.data);
         const completed = toBooleanOrNull(data.completed) ?? false;
         streamCompletedRef.current = completed;
-        clearStreamRetryTimeout();
+        const jobIdForReconnect = streamJobIdRef.current ?? translation.jobId ?? null;
+
         if (!completed) {
-          if (
-            translationStatusRef.current !== "failed" &&
-            translationStatusRef.current !== "done" &&
-            translationStatusRef.current !== "cancelled"
-          ) {
-            const nextAttempt = streamFailureCountRef.current + 1;
-            streamFailureCountRef.current = nextAttempt;
-            if (nextAttempt <= 5) {
-              scheduleStreamRetry(nextAttempt);
+          stopStreamInternal({ preserveState: true });
+          scheduleBackoffReconnect(jobIdForReconnect);
+          triggerTranslationFallback();
+        } else {
+          markStreamHealthy();
+          stopStreamInternal();
+        }
+        return null;
+      }
+
+      return null;
+    },
+    [
+      projectId,
+      setTranslation,
+      applySummaryToState,
+      markStreamHealthy,
+      scheduleBackoffReconnect,
+      stopStreamInternal,
+      triggerTranslationFallback,
+      translation.jobId,
+    ],
+  );
+
+  handleStreamEventRef.current = handleStreamEvent;
+
+  const scheduleCursorDrain = useCallback(() => {
+    if (cursorProcessingRef.current) return;
+    if (!token || !projectId) return;
+    if (!cursorQueueRef.current.length) return;
+
+    cursorProcessingRef.current = true;
+
+    const drain = async () => {
+      const queueTask = (task: CursorTask) => {
+        if (!task.cursor || !task.runId) return;
+        const alreadyQueued = cursorQueueRef.current.some(
+          (entry) => entry.cursor === task.cursor,
+        );
+        if (!alreadyQueued) {
+          cursorQueueRef.current.unshift(task);
+        }
+        setTranslation(projectId, (current) => {
+          const processed = new Set(current.processedCursors ?? []);
+          if (processed.has(task.cursor)) {
+            return {};
+          }
+          const pending = new Set(current.pendingCursors ?? []);
+          if (pending.has(task.cursor)) {
+            return {};
+          }
+          pending.add(task.cursor);
+          const pendingHistory = trimHistory(
+            Array.from(pending),
+            MAX_TRANSLATION_CURSOR_HISTORY,
+          );
+          return {
+            pendingCursors: pendingHistory,
+          };
+        });
+      };
+
+      while (cursorQueueRef.current.length) {
+        const task = cursorQueueRef.current.shift()!;
+        try {
+          const response = await api.fetchTranslationItems({
+            token,
+            projectId,
+            runId: task.runId,
+            cursor: task.cursor,
+          });
+
+          setTranslation(projectId, (current) => {
+            const pending = (current.pendingCursors ?? []).filter(
+              (value) => value !== task.cursor,
+            );
+            const processed = new Set(current.processedCursors ?? []);
+            processed.add(task.cursor);
+            const pendingHistory = trimHistory(
+              pending,
+              MAX_TRANSLATION_CURSOR_HISTORY,
+            );
+            const processedHistory = trimHistory(
+              Array.from(processed),
+              MAX_TRANSLATION_CURSOR_HISTORY,
+            );
+            return {
+              pendingCursors: pendingHistory,
+              processedCursors: processedHistory,
+              run: createRunState(current.run.status, {
+                willRetry:
+                  (response.hasMore ?? false) || pendingHistory.length > 0,
+                heartbeatAt: Date.now(),
+                nextRetryDelayMs: current.run.nextRetryDelayMs ?? null,
+              }),
+            };
+          });
+
+          for (const event of response.events ?? []) {
+            const outcome = handleStreamEventRef.current(event);
+            if (outcome) {
+              queueTask(outcome);
             }
           }
-        } else {
-          streamFailureCountRef.current = 0;
+
+          if (response.nextCursor) {
+            queueTask({ cursor: response.nextCursor, runId: task.runId });
+          }
+        } catch (error) {
+          console.warn("[translation] failed to load cursor", {
+            cursor: task.cursor,
+            error,
+          });
+          setTranslation(projectId, (current) => ({
+            pendingCursors: (current.pendingCursors ?? []).filter(
+              (value) => value !== task.cursor,
+            ),
+            processedCursors: current.processedCursors ?? [],
+          }));
         }
       }
+
+      cursorProcessingRef.current = false;
+      if (cursorQueueRef.current.length) {
+        scheduleCursorDrain();
+      }
+    };
+
+    drain().catch((error) => {
+      cursorProcessingRef.current = false;
+      console.warn("[translation] cursor drain failed", error);
+    });
+  }, [projectId, setTranslation, token]);
+
+  useEffect(() => {
+    scheduleCursorDrainRef.current = scheduleCursorDrain;
+  }, [scheduleCursorDrain]);
+
+  scheduleCursorDrainRef.current = scheduleCursorDrain;
+
+  const enqueueCursor = useCallback(
+    (task: CursorTask, options?: { skipDrain?: boolean; prepend?: boolean }) => {
+      if (!projectId) return;
+      if (!task.cursor || !task.runId) return;
+
+      const alreadyQueued = cursorQueueRef.current.some(
+        (entry) => entry.cursor === task.cursor,
+      );
+      if (!alreadyQueued) {
+        if (options?.prepend) {
+          cursorQueueRef.current.unshift(task);
+        } else {
+          cursorQueueRef.current.push(task);
+        }
+      }
+
+      setTranslation(projectId, (current) => {
+        const processed = new Set(current.processedCursors ?? []);
+        if (processed.has(task.cursor)) {
+          return {};
+        }
+        const pending = new Set(current.pendingCursors ?? []);
+        if (pending.has(task.cursor)) {
+          return {};
+        }
+        pending.add(task.cursor);
+        const pendingHistory = trimHistory(
+          Array.from(pending),
+          MAX_TRANSLATION_CURSOR_HISTORY,
+        );
+        return {
+          pendingCursors: pendingHistory,
+        };
+      });
+
+      if (!options?.skipDrain) {
+        scheduleCursorDrain();
+      }
     },
-    [projectId, scheduleStreamRetry, setTranslation, clearStreamRetryTimeout],
+    [projectId, scheduleCursorDrain, setTranslation],
   );
+
+  const startStream = useCallback(
+    (jobId: string, options?: { hydrationToken?: symbol | null }) => {
+      if (!token || !projectId) return;
+      if (reconnectLimitReachedRef.current) return;
+      const attemptToken = options?.hydrationToken ?? Symbol("stream-start");
+      hydrationTokenRef.current = attemptToken;
+
+      if (streamJobIdRef.current !== jobId) {
+        reconnectAttemptRef.current = 0;
+        hydratedTokenRef.current = null;
+        reconnectLimitReachedRef.current = false;
+      }
+
+      setConnectionStateSafe("connecting");
+
+      const ensureHydrated = async () => {
+        if (hydratedTokenRef.current === attemptToken) return;
+        await refreshSummary({ jobId, hydrationToken: attemptToken });
+      };
+
+      const openStream = async () => {
+        try {
+          await ensureHydrated();
+        } catch (error) {
+          console.warn("[translation] hydration failed before stream", error);
+        }
+
+        if (hydrationTokenRef.current !== attemptToken) {
+          return;
+        }
+
+        if (streamRef.current) {
+          streamRef.current();
+        }
+
+        let firstPayloadSeen = false;
+        const unsubscribe = api.streamTranslation({
+          token,
+          projectId,
+          jobId,
+          onEvent: (event) => {
+            if (hydrationTokenRef.current !== attemptToken) {
+              return;
+            }
+            if (!firstPayloadSeen) {
+              firstPayloadSeen = true;
+              markStreamHealthy();
+            }
+            const outcome = handleStreamEventRef.current(event);
+            if (outcome) {
+              enqueueCursor(outcome, { skipDrain: true });
+            }
+          },
+          onError: () => {
+            if (hydrationTokenRef.current !== attemptToken) {
+              return;
+            }
+            stopStreamInternal({ preserveState: true });
+            scheduleBackoffReconnect(jobId);
+            triggerTranslationFallback();
+            void refreshSummary({ jobId });
+          },
+        });
+
+        streamRef.current = () => {
+          unsubscribe();
+        };
+        streamJobIdRef.current = jobId;
+      };
+
+      void openStream();
+    },
+    [
+      token,
+      projectId,
+      refreshSummary,
+      markStreamHealthy,
+      stopStreamInternal,
+      scheduleBackoffReconnect,
+      triggerTranslationFallback,
+      enqueueCursor,
+    ],
+  );
+
+  startStreamRef.current = startStream;
 
   useEffect(() => {
     if (!token || !projectId) {
-      cleanupStream();
-      streamFailureCountRef.current = 0;
+      stopStreamInternal();
       return;
     }
 
     const jobId = translation.jobId;
-    const status = translation.status;
-
-    if (
-      !jobId ||
-      status === "done" ||
-      status === "failed" ||
-      status === "cancelled"
-    ) {
-      cleanupStream();
-      lastStreamJobIdRef.current = null;
-      streamFailureCountRef.current = 0;
+    if (!jobId) {
+      stopStreamInternal();
       return;
     }
 
     if (
       streamJobIdRef.current === jobId &&
-      streamAbortRef.current !== null &&
-      streamCompletedRef.current === false
+      (connectionStateRef.current === "connecting" ||
+        connectionStateRef.current === "streaming")
     ) {
       return;
     }
 
-    cleanupStream();
-    streamCompletedRef.current = false;
-    if (lastStreamJobIdRef.current !== jobId) {
-      streamFailureCountRef.current = 0;
+    if (
+      connectionStateRef.current === "backoff" &&
+      reconnectTimerRef.current !== null
+    ) {
+      return;
     }
 
-    let cancelled = false;
+    if (reconnectLimitReachedRef.current) {
+      return;
+    }
 
-    const unsubscribe = api.streamTranslation({
-      token,
-      projectId,
-      jobId,
-      onEvent: (event) => {
-        if (cancelled) return;
-        handleStreamEvent(event);
-      },
-      onError: () => {
-        if (cancelled) return;
-        streamAbortRef.current = null;
-        streamJobIdRef.current = null;
-        if (
-          translationStatusRef.current !== "failed" &&
-          translationStatusRef.current !== "done" &&
-          translationStatusRef.current !== "cancelled"
-        ) {
-          const nextAttempt = streamFailureCountRef.current + 1;
-          streamFailureCountRef.current = nextAttempt;
-          if (nextAttempt <= 5) {
-            scheduleStreamRetry(nextAttempt);
-          }
-        }
-      },
-    });
-
-    streamAbortRef.current = unsubscribe;
-    streamJobIdRef.current = jobId;
-    lastStreamJobIdRef.current = jobId;
+    const tokenSymbol = Symbol("stream-init");
+    hydrationTokenRef.current = tokenSymbol;
+    startStream(jobId, { hydrationToken: tokenSymbol });
 
     return () => {
-      cancelled = true;
-      cleanupStream();
-      lastStreamJobIdRef.current = null;
+      stopStreamInternal();
     };
   }, [
     token,
     projectId,
     translation.jobId,
-    translation.status,
-    streamEpoch,
-    cleanupStream,
-    handleStreamEvent,
-    scheduleStreamRetry,
+    startStream,
+    stopStreamInternal,
   ]);
 
   useEffect(() => {
     // Reset translation state when project changes
-    lastStatusRef.current = "idle";
+    stopStreamInternal();
     resetTranslation(projectId ?? null);
     lastStageRef.current = null;
     finalizingRef.current = false;
+    reconnectAttemptRef.current = 0;
+    reconnectLimitReachedRef.current = false;
     if (finalizationTimeoutRef.current !== null) {
       window.clearTimeout(finalizationTimeoutRef.current);
       finalizationTimeoutRef.current = null;
     }
-  }, [projectId, resetTranslation]);
+  }, [projectId, resetTranslation, stopStreamInternal]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const status = translation.status;
+    if (
+      status === "done" ||
+      status === "failed" ||
+      status === "cancelled"
+    ) {
+      stopStreamInternal();
+    }
+  }, [projectId, translation.status, stopStreamInternal]);
+
+  useEffect(() => () => {
+    cursorQueueRef.current = [];
+    cursorProcessingRef.current = false;
+  }, []);
 
   const translationReadyFlag = isTranslationReady?.() ?? false;
 
@@ -622,19 +1240,6 @@ export const useTranslationAgent = ({
     translationReadyFlag,
   ]);
 
-  const waitForTranslationResult = useCallback(async () => {
-    if (!projectId) return false;
-    const attempts = 3;
-    for (let index = 0; index < attempts; index += 1) {
-      await refreshContent?.();
-      if (!isTranslationReady || isTranslationReady()) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-    }
-    return Boolean(isTranslationReady ? isTranslationReady() : true);
-  }, [projectId, refreshContent, isTranslationReady]);
-
   const cancelTranslation = useCallback(
     async ({
       jobId,
@@ -677,6 +1282,8 @@ export const useTranslationAgent = ({
           totalSegments: 0,
           guardFailures: {},
           flaggedSegments: [],
+          pendingCursors: [],
+          processedCursors: [],
         });
 
         pushAssistant(
@@ -999,559 +1606,6 @@ export const useTranslationAgent = ({
     ],
   );
 
-  useEffect(() => {
-    const jobId = translation.jobId;
-    if (!projectId || !jobId || !token || pollingRef.current) return;
-
-    pollingRef.current = true;
-    finalizingRef.current = false;
-    let cancelled = false;
-    let intervalId: number | null = null;
-
-    const clearFinalizationTimer = () => {
-      if (finalizationTimeoutRef.current !== null) {
-        window.clearTimeout(finalizationTimeoutRef.current);
-        finalizationTimeoutRef.current = null;
-      }
-    };
-
-    const stopPolling = () => {
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-        intervalId = null;
-      }
-      pollingRef.current = false;
-    };
-
-    clearFinalizationTimer();
-
-    const poll = async () => {
-      try {
-        const job = await api.getJob(token, jobId);
-        if (cancelled) return;
-        if (!job) return;
-
-        if (pollingErrorShownRef.current) {
-          pollingErrorShownRef.current = false;
-        }
-
-        const currentTranslation = useWorkflowStore.getState().translation;
-
-        const sequential = job.sequential ?? null;
-
-        if (sequential) {
-          const inferredPipelineStages = sequential.pipelineStages?.length
-            ? sequential.pipelineStages
-            : Array.from(V2_STAGE_ORDER);
-          const totalStages = inferredPipelineStages.length;
-          const stageCounts = (sequential.stageCounts ?? {}) as Record<string, number>;
-          const completedStages = sequential.completedStages ?? [];
-          const guardFailures = sequential.guardFailures ?? {};
-          const flaggedSegments = sequential.flaggedSegments ?? [];
-          const progressCompleted = Math.min(
-            completedStages.length,
-            totalStages,
-          );
-          const progressTotal = totalStages;
-          const totalSegments = sequential.totalSegments ?? 0;
-          const needsReviewCount = sequential.needsReviewCount ?? 0;
-
-          const stageIndex = Math.min(progressCompleted, totalStages - 1);
-          const inferredStage =
-            sequential.currentStage ??
-            inferredPipelineStages[stageIndex] ??
-            null;
-          const currentStage = inferredStage ?? null;
-          const stageLabel = currentStage
-            ? (STAGE_LABELS[currentStage] ?? currentStage)
-            : null;
-
-          const jobStatus =
-            typeof job.status === "string" ? job.status : "unknown";
-          lastStatusRef.current = jobStatus;
-
-          const jobFailed = jobStatus === "failed";
-          const jobCancelled = jobStatus === "cancelled";
-          const jobDone =
-            jobStatus === "done" ||
-            jobStatus === "succeeded" ||
-            progressCompleted >= totalStages;
-
-          const nowIso = new Date().toISOString();
-
-          const updateState = (patch: TranslationAgentPatch) =>
-            setTranslation(projectId, (current) => {
-              const nextJobId =
-                patch.jobId !== undefined
-                  ? patch.jobId
-                  : patch.status === "done" ||
-                      patch.status === "failed" ||
-                      patch.status === "cancelled"
-                    ? null
-                    : (current.jobId ?? job.id);
-              const nextStatus = (patch.status ??
-                current.status) as AgentRunState["status"];
-              const runOverrides = patch.run ?? {};
-              const shouldRebuildRun =
-                patch.run !== undefined || nextStatus !== current.run.status;
-              const runState = shouldRebuildRun
-                ? createRunState(runOverrides.status ?? nextStatus, {
-                    ...runOverrides,
-                    willRetry:
-                      runOverrides.willRetry ?? current.run.willRetry ?? false,
-                    nextRetryDelayMs:
-                      runOverrides.nextRetryDelayMs ??
-                      current.run.nextRetryDelayMs ??
-                      null,
-                  })
-                : current.run;
-              return {
-                ...patch,
-                stageCounts,
-                completedStages,
-                currentStage,
-                needsReviewCount,
-                totalSegments,
-                guardFailures,
-                flaggedSegments,
-                pipelineStages: inferredPipelineStages,
-                progressCompleted,
-                progressTotal,
-                updatedAt: nowIso,
-                jobId: nextJobId,
-                run: runState,
-              };
-            });
-
-          if (jobFailed) {
-            const failureMessage =
-              (typeof job.last_error === "string" && job.last_error) ||
-              "번역이 실패했습니다.";
-            pushAssistant(failureMessage, {
-              label: "Translation failed",
-              tone: "error",
-            });
-            updateState({
-              status: "failed",
-              lastMessage: failureMessage,
-              lastError: failureMessage,
-              guardFailures,
-              flaggedSegments,
-              jobId: null,
-            });
-            lastStageRef.current = null;
-            stopPolling();
-            clearFinalizationTimer();
-            finalizingRef.current = false;
-            return;
-          }
-
-          if (jobCancelled) {
-            pushAssistant("진행 중이던 번역 작업을 중지했습니다.", {
-              label: "Translation cancelled",
-              tone: "default",
-            });
-            updateState({
-              status: "cancelled",
-              lastMessage: "번역 작업이 중지되었습니다.",
-              lastError: null,
-              guardFailures,
-              flaggedSegments,
-              jobId: null,
-            });
-            lastStageRef.current = null;
-            stopPolling();
-            clearFinalizationTimer();
-            finalizingRef.current = false;
-            return;
-          }
-
-          if (jobDone) {
-            if (finalizingRef.current) {
-              return;
-            }
-
-            updateState({
-              status: "running",
-              lastMessage: "번역 결과를 정리하고 있습니다.",
-              lastError: null,
-              guardFailures,
-              flaggedSegments,
-              jobId: null,
-            });
-            lastStageRef.current = null;
-            pushAssistant(
-              "번역 결과를 정리하고 있습니다.",
-              {
-                label: "Translation finalizing",
-                tone: "default",
-              },
-              undefined,
-              true,
-            );
-
-            const finalize = async (attempt: number) => {
-              if (cancelled) return;
-              const ready = await waitForTranslationResult();
-              if (cancelled) return;
-
-              if (ready) {
-                updateState({
-                  status: "done",
-                  jobId: null,
-                  lastMessage: needsReviewCount
-                    ? "QA 점검이 필요한 항목이 있습니다."
-                    : "번역이 완료되었습니다.",
-                  lastError: null,
-                  guardFailures,
-                  flaggedSegments,
-                });
-                pushAssistant(
-                  needsReviewCount
-                    ? "QA 점검이 필요한 항목이 있습니다."
-                    : "번역이 완료되었습니다. 번역본을 확인해 주세요.",
-                  {
-                    label: needsReviewCount
-                      ? "QA review pending"
-                      : "Translation done",
-                    tone: needsReviewCount ? "default" : "success",
-                  },
-                  [
-                    {
-                      type: "viewTranslatedText",
-                      reason: "View translated text",
-                    },
-                  ],
-                  true,
-                );
-                finalizingRef.current = false;
-                onCompleted?.();
-                clearFinalizationTimer();
-                return;
-              }
-
-              updateState({
-                status: "running",
-                lastMessage:
-                  "번역 결과를 불러오는 중입니다. 잠시 후 다시 확인해 주세요.",
-                lastError: null,
-                guardFailures,
-                flaggedSegments,
-                jobId: null,
-              });
-
-              if (attempt === 0) {
-                pushAssistant(
-                  "번역이 완료되었지만 결과를 정리하고 있습니다. 잠시 후 다시 확인해 주세요.",
-                  {
-                    label: "Translation pending refresh",
-                    tone: "default",
-                  },
-                  undefined,
-                  true,
-                );
-              }
-
-              const nextDelay = Math.min(2000 * (attempt + 1), 10000);
-              finalizationTimeoutRef.current = window.setTimeout(() => {
-                void finalize(attempt + 1);
-              }, nextDelay);
-            };
-
-            stopPolling();
-            finalizingRef.current = true;
-            clearFinalizationTimer();
-            void finalize(0);
-            return;
-          }
-
-          const message = stageLabel
-            ? `${stageLabel} 진행 중${
-                needsReviewCount > 0 && currentStage === "micro-check"
-                  ? ` (검토 ${needsReviewCount}개)`
-                  : ""
-              }`
-            : "번역 진행 중입니다.";
-
-          const guardAlertCount = Object.entries(guardFailures)
-            .filter(([key, count]) => key !== "allOk" && Number(count ?? 0) > 0)
-            .reduce((acc, [, count]) => acc + Number(count ?? 0), 0);
-
-          const extendedMessage =
-            guardAlertCount > 0
-              ? `${message} · 가드 점검 ${guardAlertCount}건`
-              : message;
-
-          updateState({
-            status: "running",
-            lastMessage: extendedMessage,
-            lastError: null,
-            guardFailures,
-            flaggedSegments,
-          });
-
-          if (currentStage && lastStageRef.current !== currentStage) {
-            lastStageRef.current = currentStage;
-            pushAssistant(extendedMessage, {
-              label: "Translation running",
-              tone: "default",
-            });
-          }
-
-          return;
-        }
-
-        const drafts = job.drafts ?? [];
-        const completedPasses = drafts.filter(
-          (draft) => draft.status === "succeeded",
-        ).length;
-        const failedDraft =
-          drafts.find((draft) => draft.status === "failed") ?? null;
-        const plannedPasses = drafts.length;
-        const knownTotalPasses =
-          plannedPasses || currentTranslation.progressTotal || 0;
-        const runStatusMessage = (() => {
-          if (
-            job.status === "succeeded" ||
-            completedPasses >= knownTotalPasses
-          ) {
-            return "번역이 완료되었습니다.";
-          }
-          if (job.status === "failed" || failedDraft) {
-            return "번역이 실패했습니다.";
-          }
-          return "번역 진행 중입니다.";
-        })();
-
-        if (job.status !== lastStatusRef.current) {
-          lastStatusRef.current =
-            typeof job.status === "string" ? job.status : null;
-          if (job.status === "running") {
-            pushAssistant(
-              runStatusMessage,
-              {
-                label: "Translation running",
-                tone: "default",
-              },
-              [
-                {
-                  type: "viewTranslationStatus",
-                  reason: "Check translation status",
-                },
-              ],
-              true,
-            );
-            setTranslation(projectId, {
-              run: createRunState("running"),
-              status: "running",
-              lastMessage: runStatusMessage,
-              lastError: null,
-            });
-          } else if (job.status === "done") {
-            if (finalizingRef.current) {
-              return;
-            }
-
-            setTranslation(projectId, {
-              run: createRunState("running"),
-              status: "running",
-              lastMessage: "번역 결과를 정리하고 있습니다.",
-              lastError: null,
-              jobId: null,
-              progressCompleted: Math.max(completedPasses, knownTotalPasses),
-              progressTotal: Math.max(knownTotalPasses, completedPasses),
-            });
-            pushAssistant(
-              "번역 결과를 정리하고 있습니다.",
-              {
-                label: "Translation finalizing",
-                tone: "default",
-              },
-              undefined,
-              true,
-            );
-
-            const finalizeLegacy = async (attempt: number) => {
-              if (cancelled) return;
-              const ready = await waitForTranslationResult();
-              if (cancelled) return;
-
-              if (ready) {
-                setTranslation(projectId, {
-                  run: createRunState("done"),
-                  status: "done",
-                  lastMessage: "번역이 완료되었습니다.",
-                  lastError: null,
-                  jobId: null,
-                  progressCompleted: Math.max(
-                    completedPasses,
-                    knownTotalPasses,
-                  ),
-                  progressTotal: Math.max(knownTotalPasses, completedPasses),
-                });
-                pushAssistant(
-                  "번역이 완료되었습니다. 번역본을 확인하려면 클릭하세요.",
-                  {
-                    label: "Translation done",
-                    tone: "success",
-                  },
-                  [
-                    {
-                      type: "viewTranslatedText",
-                      reason: "View translated text",
-                    },
-                  ],
-                  true,
-                );
-                finalizingRef.current = false;
-                onCompleted?.();
-                clearFinalizationTimer();
-                return;
-              }
-
-              setTranslation(projectId, {
-                run: createRunState("recovering", {
-                  willRetry: true,
-                  nextRetryDelayMs: Math.min(2000 * (attempt + 1), 10000),
-                }),
-                status: "running",
-                lastMessage:
-                  "번역 결과를 불러오는 중입니다. 잠시 후 다시 확인해 주세요.",
-                lastError: null,
-                jobId: null,
-              });
-
-              if (attempt === 0) {
-                pushAssistant(
-                  "번역이 완료되었지만 결과를 정리하고 있습니다. 잠시 후 다시 확인해 주세요.",
-                  {
-                    label: "Translation pending refresh",
-                    tone: "default",
-                  },
-                  undefined,
-                  true,
-                );
-              }
-
-              const nextDelay = Math.min(2000 * (attempt + 1), 10000);
-              finalizationTimeoutRef.current = window.setTimeout(() => {
-                void finalizeLegacy(attempt + 1);
-              }, nextDelay);
-            };
-
-            stopPolling();
-            clearFinalizationTimer();
-            finalizingRef.current = true;
-            void finalizeLegacy(0);
-            return;
-          } else if (job.status === "failed") {
-            const rawFailureMessage =
-              failedDraft?.error ?? job?.last_error ?? "번역이 실패했습니다.";
-            const failureMessage = rawFailureMessage.includes(
-              "Draft response did not include any segments",
-            )
-              ? "번역 초안 생성이 실패했습니다. 다시 시도해 주세요."
-              : rawFailureMessage;
-            pushAssistant(
-              failureMessage,
-              {
-                label: "Translation failed",
-                tone: "error",
-              },
-              undefined,
-              true,
-            );
-            setTranslation(projectId, {
-              run: createRunState("failed"),
-              status: "failed",
-              lastMessage: failureMessage,
-              lastError: failureMessage,
-              jobId: null,
-            });
-            stopPolling();
-            clearFinalizationTimer();
-            finalizingRef.current = false;
-            return;
-          } else if (job.status === "cancelled") {
-            pushAssistant(
-              "진행 중이던 번역 작업을 중지했습니다.",
-              {
-                label: "Translation cancelled",
-                tone: "default",
-              },
-              undefined,
-              true,
-            );
-            setTranslation(projectId, {
-              run: createRunState("cancelled"),
-              status: "cancelled",
-              lastMessage: "번역 작업이 중지되었습니다.",
-              lastError: null,
-              jobId: null,
-            });
-            stopPolling();
-            clearFinalizationTimer();
-            finalizingRef.current = false;
-            return;
-          }
-        }
-
-        setTranslation(projectId, (current) => {
-          const inferredTotal =
-            knownTotalPasses || current.progressTotal || drafts.length;
-          const normalizedTotal = inferredTotal || completedPasses;
-          return {
-            progressCompleted: completedPasses,
-            progressTotal: normalizedTotal,
-            updatedAt: new Date().toISOString(),
-            ...(job.status === "running"
-              ? { lastMessage: runStatusMessage }
-              : {}),
-          };
-        });
-      } catch (err) {
-        if (cancelled) return;
-
-        const errorMessage =
-          err instanceof Error ? err.message : "Unknown error";
-
-        if (!pollingErrorShownRef.current) {
-          console.warn("[translation] polling warning", errorMessage);
-          pollingErrorShownRef.current = true;
-        } else {
-          console.warn("[translation] polling error", errorMessage);
-        }
-
-        setTranslation(projectId, (current) => ({
-          ...current,
-          lastError: errorMessage,
-          updatedAt: new Date().toISOString(),
-        }));
-
-        return;
-      }
-    };
-
-    intervalId = window.setInterval(poll, 4000);
-    void poll();
-
-    return () => {
-      cancelled = true;
-      stopPolling();
-      clearFinalizationTimer();
-      pollingErrorShownRef.current = false;
-    };
-  }, [
-    translation.jobId,
-    token,
-    projectId,
-    pushAssistant,
-    setTranslation,
-    onCompleted,
-    refreshContent,
-    waitForTranslationResult,
-  ]);
-
   const canStart = useMemo(
     () =>
       translation.status === "idle" ||
@@ -1563,6 +1617,7 @@ export const useTranslationAgent = ({
 
   return {
     state: translation,
+    connectionState,
     canStart,
     startTranslation,
     cancelTranslation,

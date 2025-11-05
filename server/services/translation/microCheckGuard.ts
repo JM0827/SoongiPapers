@@ -17,6 +17,7 @@ export interface MicroCheckSegmentResult {
   notes: {
     guardFindings: GuardFindingDetail[];
   };
+  needsFollowup?: boolean;
 }
 
 export interface MicroCheckResult {
@@ -65,6 +66,7 @@ export function runMicroChecks(options: MicroCheckOptions): MicroCheckResult {
       notes: {
         guardFindings: findings,
       },
+      needsFollowup: false,
     });
   });
 

@@ -9,6 +9,7 @@ Soongi Pagers is a monorepo for an AI-assisted literary translation studio. The 
 - Fastify API that brokers OpenAI workflows, manages project state across PostgreSQL and MongoDB, and coordinates BullMQ workers via Redis.
 - Modular agents for translation, proofreading, evaluation, dictionaries, and ebook generation, each with dedicated prompts and pipelines.
 - Shared `@bookko/*` packages for AI image generation and strongly typed translation schemas.
+- Streaming resilience hardened with reconnect/fallback metrics that power the new `stream_run_metrics` table and NDJSON pagination for `has_more` workloads.
 
 ## Repository Layout
 
@@ -60,8 +61,9 @@ Before running the Fastify API, make sure PostgreSQL, MongoDB, and Redis are ins
 
 ### Redis
 
-- Install Redis 6+ (`brew install redis`, `apt install redis-server`, or `docker run --name soongi-redis -p 6379:6379 redis:6`) and start it(`sudo service redis-server start` in WSL. `redis-cli ping` to check its health ) before you launch the API.
+- Install Redis 6+ (`brew install redis`, `apt install redis-server`, or `docker run --name soongi-redis -p 6379:6379 redis:6`) and start it (`sudo service redis-server start` in WSL, `redis-cli ping` to check its health) before you launch the API.
 - Set `REDIS_URL=redis://localhost:6379/0` (or point it to your managed instance). BullMQ queues (예: `translation_v2` 번역 파이프라인, 품질/교정 보조 큐)이 이 연결을 공유하며, Redis에 연결하지 못하면 서버가 초기화 단계에서 종료된다.
+- Proofread SSE resilience instrumentation persists to the `stream_run_metrics` table; keep Redis available if you rely on those reconnect/fallback analytics dashboards.
 
 ## Local Development
 
@@ -96,6 +98,7 @@ The web dev server defaults to http://localhost:5173 and the API to http://local
 - Create production bundles: `npm run build --prefix web` and `npm run build --prefix server`
 - Front-end unit/component tests (Vitest): `npm test --prefix web`
 - Backend tests (tsx test runner): `npm test --prefix server`
+- Proofread pagination helper regression: `npm test --prefix server -- --test server/services/__tests__/proofreadItemsSlice.test.ts`
 - Repository formatting (Prettier): `npm run format`
 
 Always review snapshot diffs and run the relevant test suites before merging changes.

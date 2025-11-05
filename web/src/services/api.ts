@@ -38,6 +38,7 @@ import type {
   EditingSuggestionResponse,
   ProofreadingLogEntry,
   ProofreadRunSummary,
+  TranslationRunSummary,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
 import { streamNdjson } from "./sse";
@@ -64,6 +65,13 @@ export type ProofreadStreamEvent = {
 
 export interface ProofreadItemsFetchResponse {
   events: ProofreadStreamEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
+}
+
+export interface TranslationItemsFetchResponse {
+  events: TranslationStreamEvent[];
   nextCursor: string | null;
   hasMore: boolean;
   total: number;
@@ -2089,6 +2097,30 @@ export const api = {
     return handle<ProofreadItemsFetchResponse>(res);
   },
 
+  async fetchTranslationItems(config: {
+    token: string;
+    projectId: string;
+    runId: string;
+    cursor: string;
+    limit?: number;
+  }): Promise<TranslationItemsFetchResponse> {
+    const { token, projectId, runId, cursor, limit } = config;
+    const search = new URLSearchParams();
+    if (cursor) search.set("cursor", cursor);
+    if (typeof limit === "number" && Number.isFinite(limit)) {
+      search.set("limit", String(limit));
+    }
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/translations/${runId}/items${
+      query ? `?${query}` : ""
+    }`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: defaultHeaders(token),
+    });
+    return handle<TranslationItemsFetchResponse>(res);
+  },
+
   async fetchProofreadSummary(
     token: string,
     projectId: string,
@@ -2111,6 +2143,31 @@ export const api = {
     }
 
     const data = await handle<{ summary?: ProofreadRunSummary | null }>(res);
+    return data.summary ?? null;
+  },
+
+  async fetchTranslationSummary(
+    token: string,
+    projectId: string,
+    params: { runId?: string | null; jobId?: string | null },
+  ): Promise<TranslationRunSummary | null> {
+    const search = new URLSearchParams();
+    if (params.runId) search.set("runId", params.runId);
+    if (params.jobId) search.set("jobId", params.jobId);
+    const query = search.toString();
+    const url = `${API_BASE}/api/projects/${projectId}/translations/summary${
+      query ? `?${query}` : ""
+    }`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: defaultHeaders(token),
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+
+    const data = await handle<{ summary?: TranslationRunSummary | null }>(res);
     return data.summary ?? null;
   },
 

@@ -1,4 +1,4 @@
-import { getProofreadStreamMetrics, upsertProofreadStreamMetrics } from "../db/proofreadStreamMetrics";
+import { getStreamRunMetrics, upsertStreamRunMetrics } from "../db/streamRunMetrics";
 
 export interface ProofreadStreamMeta {
   runId: string;
@@ -72,9 +72,10 @@ const persistMeta = async (runId: string): Promise<void> => {
   const meta = metaStore.get(runId);
   if (!meta) return;
   try {
-    await upsertProofreadStreamMetrics({
+    await upsertStreamRunMetrics({
       runId: meta.runId,
       projectId: meta.projectId,
+      runType: "proofread",
       connectionCount: meta.connectionCount,
       reconnectAttempts: Math.max(0, meta.connectionCount - 1),
       lastConnectionAt: meta.lastConnectionAt,
@@ -197,7 +198,7 @@ export const fetchProofreadStreamMeta = async (
     return null;
   }
   try {
-    const row = await getProofreadStreamMetrics(runId);
+    const row = await getStreamRunMetrics(runId);
     if (!row) return null;
     return {
       runId: row.run_id,

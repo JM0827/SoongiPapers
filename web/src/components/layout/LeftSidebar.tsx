@@ -1789,10 +1789,6 @@ export const LeftSidebar = () => {
       {modalState?.type === "delete" && (
         <Modal
           title={localize("sidebar_project_delete_title", "Delete project")}
-          description={localize(
-            "sidebar_project_delete_description",
-            "You can restore deleted projects within 7 days.",
-          )}
           onClose={() => {
             if (modalState.submitting) return;
             closeModal();
