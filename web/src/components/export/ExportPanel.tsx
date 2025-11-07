@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Circle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
 import { useAuthStore } from "../../store/auth.store";
@@ -82,8 +83,6 @@ export const ExportPanel = ({
   const [coverPreviewLoading, setCoverPreviewLoading] = useState(false);
   const [coverSetIndex, setCoverSetIndex] = useState(0);
   const [ebookDetails, setEbookDetails] = useState<EbookDetails | null>(null);
-  const [ebookLoading, setEbookLoading] = useState(false);
-  const [ebookError, setEbookError] = useState<string | null>(null);
   const [translationOptions, setTranslationOptions] = useState<
     ProjectTranslationOption[]
   >([]);
@@ -162,21 +161,13 @@ export const ExportPanel = ({
   const fetchEbookDetailsInfo = useCallback(async () => {
     if (!token || !projectId) {
       setEbookDetails(null);
-      setEbookLoading(false);
       return;
     }
     try {
-      setEbookLoading(true);
-      setEbookError(null);
       const data = await api.fetchEbookDetails(token, projectId);
       setEbookDetails(data);
     } catch (err) {
       setEbookDetails(null);
-      setEbookError(
-        err instanceof Error ? err.message : t("export.summary.error.fetch"),
-      );
-    } finally {
-      setEbookLoading(false);
     }
   }, [projectId, t, token]);
 
@@ -484,8 +475,15 @@ export const ExportPanel = ({
 
   const rightsAccepted = profileStatus?.consent ?? false;
 
-  const downloadUrl =
-    latestAsset?.publicUrl ?? currentEbook?.storageRef ?? null;
+  const downloadUrl = useMemo(() => {
+    if (latestAsset?.publicUrl) {
+      return latestAsset.publicUrl;
+    }
+    if (latestAsset?.assetId && projectId) {
+      return `/api/projects/${projectId}/ebook/download/${latestAsset.assetId}`;
+    }
+    return currentEbook?.storageRef ?? null;
+  }, [latestAsset?.assetId, latestAsset?.publicUrl, currentEbook?.storageRef, projectId]);
   const downloadFilename =
     latestAsset?.fileName ?? currentEbook?.filename ?? "ebook";
   const downloadAssetId = latestAsset?.assetId ?? currentEbook?.assetId ?? null;
@@ -576,9 +574,14 @@ export const ExportPanel = ({
   const persistedProgress = useMemo(() => {
     if (!latestVersion?.format) return [];
     const normalized = latestVersion.format.toLowerCase();
-    if (normalized !== "pdf" && normalized !== "epub") return [];
+    const mappedFormat: GenerationFormat | null = normalized.includes("pdf")
+      ? "pdf"
+      : normalized.includes("epub")
+        ? "epub"
+        : null;
+    if (!mappedFormat) return [];
     const chip: GenerationProgressChip = {
-      format: normalized as GenerationFormat,
+      format: mappedFormat,
       status: "done",
     };
     return [chip];
@@ -587,6 +590,13 @@ export const ExportPanel = ({
   const displayProgress = generationProgress.length
     ? generationProgress
     : persistedProgress;
+
+  useEffect(() => {
+    if (generationProgress.length || !persistedProgress.length) {
+      return;
+    }
+    setGenerationProgress(persistedProgress);
+  }, [generationProgress.length, persistedProgress]);
 
   const runGenerateForFormat = useCallback(
     async (format: GenerationFormat) => {
@@ -797,12 +807,35 @@ export const ExportPanel = ({
       ? t("export.download.labelWithName", { name: downloadFilename })
       : t("export.download.label");
 
+  const profileFieldsComplete = Boolean(
+    profileDraft?.bookTitleEn?.trim() &&
+      profileDraft?.authorNameKo?.trim() &&
+      profileDraft?.translatorName?.trim(),
+  );
+  const profileComplete = Boolean(profileStatus?.consent && profileFieldsComplete);
+
   const profileSection = (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
+    <section className="rounded-xl bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        {profileComplete ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />
+        ) : (
+          <Circle className="h-4 w-4 text-amber-400" aria-hidden />
+        )}
         <p className="text-sm font-semibold text-slate-700">
           {t("rightpanel_preview_profile_title", "Profile")}
         </p>
+        <span
+          className={`text-xs font-semibold ${
+            profileStatus?.consent
+              ? "text-emerald-600"
+              : "text-rose-600"
+          }`}
+        >
+          {profileStatus?.consent
+            ? t("export.profile.consent.received", "원작자 저작권 동의 받음")
+            : t("export.profile.consent.missing", "원작자 저작권 동의 안받음")}
+        </span>
       </div>
       <ProjectProfileCard
         content={content}
@@ -856,73 +889,6 @@ export const ExportPanel = ({
           {coverError}
         </div>
       )}
-
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-700">
-          {t("export.summary.title")}
-        </h3>
-        {ebookLoading ? (
-          <p className="mt-2 text-xs text-slate-500">
-            {t("export.summary.loading")}
-          </p>
-        ) : ebookDetails?.ebook ? (
-          <dl className="mt-3 space-y-2 text-xs text-slate-600">
-            <div className="flex justify-between">
-              <dt>{t("export.summary.status")}</dt>
-              <dd className="font-semibold text-slate-800">
-                {ebookDetails.status}
-              </dd>
-            </div>
-            {metadataDraft.writer && (
-              <div className="flex justify-between">
-                <dt>{t("export.summary.sourceAuthor")}</dt>
-                <dd className="font-semibold text-slate-800">
-                  {metadataDraft.writer}
-                </dd>
-              </div>
-            )}
-            {metadataDraft.translator && (
-              <div className="flex justify-between">
-                <dt>{t("export.summary.translator")}</dt>
-                <dd className="font-semibold text-slate-800">
-                  {metadataDraft.translator}
-                </dd>
-              </div>
-            )}
-            {latestVersionLabel && (
-              <div className="flex justify-between">
-                <dt>{t("export.summary.latest")}</dt>
-                <dd className="font-semibold text-slate-800">
-                  {latestVersionLabel}
-                </dd>
-              </div>
-            )}
-            {latestVersion && latestVersion.wordCount !== null && (
-              <div className="flex justify-between">
-                <dt>{t("export.summary.words")}</dt>
-                <dd className="font-semibold text-slate-800">
-                  {latestVersion.wordCount.toLocaleString()}
-                </dd>
-              </div>
-            )}
-            {metadataDraft.language && (
-              <div className="flex justify-between">
-                <dt>{t("export.summary.language")}</dt>
-                <dd className="font-semibold text-slate-800">
-                  {metadataDraft.language}
-                </dd>
-              </div>
-            )}
-          </dl>
-        ) : (
-          <p className="mt-2 text-xs text-slate-500">
-            {t("export.summary.empty")}
-          </p>
-        )}
-        {ebookError && (
-          <p className="mt-2 text-xs text-rose-600">{ebookError}</p>
-        )}
-      </section>
 
       {isTranslationDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 py-8">
