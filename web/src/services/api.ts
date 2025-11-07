@@ -2431,26 +2431,6 @@ export const api = {
     return finalResult;
   },
 
-  async saveQualityAssessment(
-    token: string,
-    payload: {
-      projectId: string;
-      jobId?: string;
-      sourceText: string;
-      translatedText: string;
-      qualityResult: QualityAssessmentResultPayload;
-      translationMethod?: "auto" | "manual";
-      modelUsed?: string;
-    },
-  ) {
-    const res = await fetch(`${API_BASE}/api/quality/save`, {
-      method: "POST",
-      headers: defaultHeaders(token),
-      body: JSON.stringify(payload),
-    });
-    return handle(res);
-  },
-
   async chatPrompt(): Promise<{ prompt: string }> {
     const res = await fetch(`${API_BASE}/api/chat/prompt`);
     return handle(res);

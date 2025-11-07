@@ -892,25 +892,8 @@ export const useProofreadAgent = ({
         appendActivity("complete", "교정이 완료되었습니다.", {
           proofreadingId,
         });
-        const tierParts = Object.entries(tierIssueCounts)
-          .filter(([, value]) => value > 0)
-          .map(([key, value]) => `${key}: ${value}건`);
-        const topSubfeatures = Object.entries(countsBySubfeature)
-          .filter(([, value]) => value > 0)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
-          .map(([key, value]) => `${key} ${value}건`);
-        const summarySegments = [
-          `총 이슈 ${totalIssues}건`,
-          tierParts.length ? `티어 ${tierParts.join(", ")}` : null,
-          topSubfeatures.length
-            ? `주요 서브피처 ${topSubfeatures.join(", ")}`
-            : null,
-        ].filter(Boolean);
         pushAssistant(
-          summarySegments.length
-            ? `교정이 완료되었습니다. ${summarySegments.join(" · ")}.`
-            : "교정이 완료되었습니다. 우측 패널에서 결과를 확인하세요.",
+          "교정이 완료되었습니다.",
           {
             label: "Proofread done",
             tone: "success",

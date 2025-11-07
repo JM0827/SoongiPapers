@@ -8,6 +8,7 @@ import type {
   EbookDetails,
   EbookResponse,
   ProjectContent,
+  ProjectSummary,
   ProjectTranslationOption,
 } from "../../types/domain";
 import { projectKeys } from "../../hooks/useProjectData";
@@ -17,7 +18,6 @@ import { trackEvent } from "../../lib/telemetry";
 import { evaluateReadiness } from "../../lib/ebook/readiness";
 import {
   type BuildState,
-  type EssentialsSnapshot,
   type GenerationFormat,
   type GenerationProgressChip,
   type MetadataDraft,
@@ -26,12 +26,19 @@ import {
 } from "./ebookTypes";
 import { ExportEssentialsCard } from "./ExportEssentialsCard";
 import { PromotionPanel } from "./PromotionPanel";
+import {
+  ProjectProfileCard,
+  type ProjectProfileDraft,
+  type ProjectProfileStatusSnapshot,
+} from "../project/ProjectProfileCard";
 
 const fallbackCover =
   "https://dummyimage.com/320x480/ede9fe/4338ca.png&text=Project-T1";
 
 interface ExportPanelProps {
   content?: ProjectContent | null;
+  projectSummary?: ProjectSummary | null;
+  onProfileUpdated?: () => void;
 }
 
 const formatDateTime = (value?: string | null) => {
@@ -41,7 +48,11 @@ const formatDateTime = (value?: string | null) => {
   return date.toLocaleString();
 };
 
-export const ExportPanel = ({ content }: ExportPanelProps) => {
+export const ExportPanel = ({
+  content,
+  projectSummary,
+  onProfileUpdated,
+}: ExportPanelProps) => {
   const token = useAuthStore((state) => state.token);
   const projectId = useProjectStore((state) => state.activeProjectId);
   const projects = useProjectStore((state) => state.projects);
@@ -85,7 +96,6 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
   >(null);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [rightsAccepted, setRightsAccepted] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<MetadataDraft>({
     title: "",
     writer: "",
@@ -96,12 +106,28 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     identifier: null,
     modifiedISO: null,
   });
+  const [profileDraft, setProfileDraft] = useState<ProjectProfileDraft | null>(
+    null,
+  );
+  const [profileStatus, setProfileStatus] =
+    useState<ProjectProfileStatusSnapshot | null>(null);
   const [generationProgress, setGenerationProgress] = useState<
     GenerationProgressChip[]
   >([]);
   const [uploadedCoverUrl, setUploadedCoverUrl] = useState<string | null>(null);
   const uploadedCoverObjectUrlRef = useRef<string | null>(null);
   const [isTranslationDialogOpen, setIsTranslationDialogOpen] = useState(false);
+
+  const handleProfileDraftChange = useCallback((next: ProjectProfileDraft) => {
+    setProfileDraft(next);
+  }, []);
+
+  const handleProfileStatusChange = useCallback(
+    (status: ProjectProfileStatusSnapshot) => {
+      setProfileStatus(status);
+    },
+    [],
+  );
 
   const selectedTranslation = useMemo(() => {
     return (
@@ -380,48 +406,66 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
 
   useEffect(() => {
     setMetadataDraft((prev) => {
-      let changed = false;
       const next: MetadataDraft = { ...prev };
-      if (!prev.title) {
-        const fallbackTitle = targetLangTitle ?? projectTitle;
-        if (fallbackTitle) {
-          next.title = fallbackTitle;
-          changed = true;
-        }
-      }
-      if (!prev.language && targetLang) {
-        next.language = targetLang;
+      let changed = false;
+
+      const derivedTitle =
+        (profileDraft?.bookTitleEn ?? "").trim() ||
+        (profileDraft?.bookTitleKo ?? "").trim() ||
+        targetLangTitle ||
+        projectTitle;
+      if (derivedTitle && derivedTitle !== prev.title) {
+        next.title = derivedTitle;
         changed = true;
       }
-      if (!prev.writer && authorName) {
-        next.writer = authorName;
+
+      const derivedWriter =
+        (profileDraft?.authorNameKo ?? authorName ?? "").trim();
+      if (derivedWriter !== prev.writer) {
+        next.writer = derivedWriter;
         changed = true;
       }
-      if (!prev.translator && translatorName) {
-        next.translator = translatorName;
+
+      const derivedTranslator =
+        (profileDraft?.translatorName ?? translatorName ?? "").trim();
+      if (derivedTranslator !== prev.translator) {
+        next.translator = derivedTranslator;
         changed = true;
       }
-      if (prev.writerNote == null && metadata.writerNote != null) {
-        next.writerNote = metadata.writerNote;
+
+      const derivedLanguage = targetLang || null;
+      if (derivedLanguage !== prev.language) {
+        next.language = derivedLanguage;
         changed = true;
       }
-      if (prev.translatorNote == null && metadata.translatorNote != null) {
-        next.translatorNote = metadata.translatorNote;
+
+      const derivedWriterNote =
+        profileDraft?.originalAuthorNotes ?? metadata.writerNote ?? null;
+      if (derivedWriterNote !== prev.writerNote) {
+        next.writerNote = derivedWriterNote;
         changed = true;
       }
-      if (!prev.identifier) {
-        const identifier = ebookDetails?.ebook?.ebookId ?? projectId ?? null;
-        if (identifier) {
-          next.identifier = identifier;
-          changed = true;
-        }
+
+      const derivedTranslatorNote =
+        profileDraft?.translatorNotes ?? metadata.translatorNote ?? null;
+      if (derivedTranslatorNote !== prev.translatorNote) {
+        next.translatorNote = derivedTranslatorNote;
+        changed = true;
       }
-      if (!prev.modifiedISO) {
-        const modified =
-          ebookDetails?.ebook?.updatedAt ?? new Date().toISOString();
+
+      const identifier = ebookDetails?.ebook?.ebookId ?? projectId ?? null;
+      if (identifier && identifier !== prev.identifier) {
+        next.identifier = identifier;
+        changed = true;
+      }
+
+      const modified =
+        ebookDetails?.ebook?.updatedAt ?? new Date().toISOString();
+      if (modified !== prev.modifiedISO) {
         next.modifiedISO = modified;
         changed = true;
       }
+
       return changed ? next : prev;
     });
   }, [
@@ -430,12 +474,15 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     ebookDetails?.ebook?.updatedAt,
     metadata.translatorNote,
     metadata.writerNote,
+    profileDraft,
     projectId,
     projectTitle,
     targetLang,
     targetLangTitle,
     translatorName,
   ]);
+
+  const rightsAccepted = profileStatus?.consent ?? false;
 
   const downloadUrl =
     latestAsset?.publicUrl ?? currentEbook?.storageRef ?? null;
@@ -454,23 +501,6 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       targetLang: targetLang || "",
     }),
     [selectedTranslation?.qualityScore, selectedTranslationId, targetLang],
-  );
-
-  const essentialsSnapshot: EssentialsSnapshot = useMemo(
-    () => ({
-      translation: translationSummary,
-      meta: { ...metadataDraft },
-      wantPDF: formats.pdf,
-      wantEPUB: formats.epub,
-      accepted: rightsAccepted,
-    }),
-    [
-      formats.epub,
-      formats.pdf,
-      metadataDraft,
-      rightsAccepted,
-      translationSummary,
-    ],
   );
 
   const readiness = useMemo(
@@ -542,6 +572,21 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     }
     return (completed / total) * 100;
   }, [generationProgress]);
+
+  const persistedProgress = useMemo(() => {
+    if (!latestVersion?.format) return [];
+    const normalized = latestVersion.format.toLowerCase();
+    if (normalized !== "pdf" && normalized !== "epub") return [];
+    const chip: GenerationProgressChip = {
+      format: normalized as GenerationFormat,
+      status: "done",
+    };
+    return [chip];
+  }, [latestVersion?.format]);
+
+  const displayProgress = generationProgress.length
+    ? generationProgress
+    : persistedProgress;
 
   const runGenerateForFormat = useCallback(
     async (format: GenerationFormat) => {
@@ -689,15 +734,6 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
     [],
   );
 
-  const handleSnapshotChange = useCallback((draft: EssentialsSnapshot) => {
-    setFormats({ pdf: draft.wantPDF, epub: draft.wantEPUB });
-    setRightsAccepted(draft.accepted);
-    setMetadataDraft((prev) => ({
-      ...prev,
-      ...draft.meta,
-    }));
-  }, []);
-
   const openTranslationPicker = useCallback(() => {
     setIsTranslationDialogOpen(true);
   }, []);
@@ -761,17 +797,35 @@ export const ExportPanel = ({ content }: ExportPanelProps) => {
       ? t("export.download.labelWithName", { name: downloadFilename })
       : t("export.download.label");
 
+  const profileSection = (
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm font-semibold text-slate-700">
+          {t("rightpanel_preview_profile_title", "Profile")}
+        </p>
+      </div>
+      <ProjectProfileCard
+        content={content}
+        projectSummary={projectSummary}
+        onUpdated={onProfileUpdated}
+        onStatusChange={handleProfileStatusChange}
+        onDraftChange={handleProfileDraftChange}
+      />
+    </section>
+  );
+
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto p-4">
       <ExportEssentialsCard
         t={t}
-        snap={essentialsSnapshot}
-        setSnap={handleSnapshotChange}
         readiness={readiness}
         buildState={buildState}
         buildPercent={buildPercent}
-        progress={generationProgress}
+        progress={displayProgress}
         translation={translationSummary}
+        wantPDF={formats.pdf}
+        wantEPUB={formats.epub}
+        profileSection={profileSection}
         onOpenTranslation={openTranslationPicker}
         onToggleFormat={handleToggleFormat}
         onGenerate={handleGenerateSelected}

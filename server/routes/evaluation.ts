@@ -639,6 +639,48 @@ async function loadProofreading(projectId: string, jobId?: string) {
   }
 }
 
+interface PersistQualityAssessmentParams {
+  projectId: string;
+  userId: string;
+  sourceText: string;
+  translatedText: string;
+  qualityResult: FinalEvaluation | QualityAssessmentDoc["qualityResult"];
+  jobId?: string | null;
+  translationMethod?: "auto" | "manual";
+  modelUsed?: string | null;
+}
+
+async function persistQualityAssessment({
+  projectId,
+  userId,
+  sourceText,
+  translatedText,
+  qualityResult,
+  jobId,
+  translationMethod,
+  modelUsed,
+}: PersistQualityAssessmentParams) {
+  const assessmentId = nanoid();
+  const derivedModel =
+    modelUsed ??
+    ((qualityResult as FinalEvaluation | null)?.meta?.model ?? null);
+
+  const saved = await QualityAssessment.create({
+    projectId,
+    jobId: jobId ?? undefined,
+    assessmentId,
+    timestamp: new Date(),
+    sourceText,
+    translatedText,
+    qualityResult,
+    translationMethod: translationMethod ?? "auto",
+    modelUsed: derivedModel ?? "gpt-4o-mini",
+    userId,
+  });
+
+  return { assessmentId, id: saved._id };
+}
+
 async function loadQualityHistory(projectId: string, userId: string) {
   // Return all assessments for the project across jobs/users so trend charts reflect project-wide history
   const items = (await QualityAssessment.find({ projectId })
@@ -887,6 +929,26 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           sendEvent({ type: "complete", result });
         }
 
+        if (finalResult && body.projectId && userId) {
+          try {
+            await persistQualityAssessment({
+              projectId: body.projectId,
+              userId,
+              sourceText: body.source,
+              translatedText: body.translated,
+              qualityResult: finalResult,
+              jobId: body.jobId ?? null,
+              translationMethod: "auto",
+              modelUsed: finalResult.meta?.model ?? null,
+            });
+          } catch (persistError) {
+            request.log.warn(
+              { err: persistError, projectId: body.projectId },
+              "[QUALITY] Failed to persist streamed assessment",
+            );
+          }
+        }
+
         const tokens = finalResult.meta?.tokens;
         if ((body.projectId || body.jobId) && tokens) {
           await recordTokenUsage(request.log, {
@@ -1014,6 +1076,26 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           jobId: body.jobId,
         });
 
+        if (body.projectId && userId) {
+          try {
+            await persistQualityAssessment({
+              projectId: body.projectId,
+              userId,
+              sourceText: body.source,
+              translatedText: body.translated,
+              qualityResult: result,
+              jobId: body.jobId ?? null,
+              translationMethod: "auto",
+              modelUsed: result.meta?.model ?? null,
+            });
+          } catch (persistError) {
+            request.log.warn(
+              { err: persistError, projectId: body.projectId },
+              "[QUALITY] Failed to persist assessment",
+            );
+          }
+        }
+
         const tokens = result.meta?.tokens;
         if ((body.projectId || body.jobId) && tokens) {
           await recordTokenUsage(request.log, {
@@ -1093,23 +1175,20 @@ const evaluationRoutes: FastifyPluginAsync = async (fastify) => {
           modelUsed?: string;
         };
 
-        const assessmentId = nanoid();
-        const saved = await QualityAssessment.create({
+        const saved = await persistQualityAssessment({
           projectId: body.projectId,
-          jobId: body.jobId,
-          assessmentId,
-          timestamp: new Date(),
+          jobId: body.jobId ?? null,
+          userId,
           sourceText: body.sourceText,
           translatedText: body.translatedText,
-          qualityResult: body.qualityResult,
+          qualityResult: body.qualityResult as QualityAssessmentDoc["qualityResult"],
           translationMethod: body.translationMethod ?? "auto",
-          modelUsed: body.modelUsed ?? "gpt-4o-mini",
-          userId,
+          modelUsed: body.modelUsed ?? null,
         });
 
         return ok(reply, {
-          assessmentId,
-          id: saved._id,
+          assessmentId: saved.assessmentId,
+          id: saved.id,
           message: "Quality assessment saved successfully",
         });
       } catch (err) {

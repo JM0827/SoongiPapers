@@ -39,7 +39,12 @@ import type {
   ProjectContent,
 } from "../../types/domain";
 import { api } from "../../services/api";
-import { useWorkflowStore } from "../../store/workflow.store";
+import {
+  scopeProofreadingState,
+  scopeQualityState,
+  scopeTranslationState,
+  useWorkflowStore,
+} from "../../store/workflow.store";
 import { projectKeys } from "../../hooks/useProjectData";
 import {
   DocumentSummarySection,
@@ -671,9 +676,17 @@ export const RightPanel = ({
     }
   }, [token, content?.projectId, queryClient, onRefreshContent, localize]);
 
-  const translationAgentState = useWorkflowStore((state) => state.translation);
-  const proofreadingAgentState = useWorkflowStore(
+  const translationAgentStateRaw = useWorkflowStore((state) => state.translation);
+  const proofreadingAgentStateRaw = useWorkflowStore(
     (state) => state.proofreading,
+  );
+  const translationAgentState = useMemo(
+    () => scopeTranslationState(translationAgentStateRaw, snapshot.projectId ?? null),
+    [snapshot.projectId, translationAgentStateRaw],
+  );
+  const proofreadingAgentState = useMemo(
+    () => scopeProofreadingState(proofreadingAgentStateRaw, snapshot.projectId ?? null),
+    [snapshot.projectId, proofreadingAgentStateRaw],
   );
 
   const resolvedTabs = useMemo<
@@ -1628,7 +1641,13 @@ export const RightPanel = ({
               />
             </ProofreadEditorProvider>
           )}
-          {activeTab === "export" && <ExportPanel content={content} />}
+          {activeTab === "export" && (
+            <ExportPanel
+              content={content}
+              projectSummary={projectSummary}
+              onProfileUpdated={onProfileUpdated}
+            />
+          )}
           {activeTab === "profile" && (
             <div className="space-y-4 p-4 text-sm text-slate-700">
               <section className="rounded border border-slate-200 bg-white p-4 shadow-sm">
