@@ -734,6 +734,8 @@
   "export.summary.latest": "Latest version",
   "export.summary.words": "Word count",
   "export.summary.language": "Target language",
+  "export.profile.consent.received": "Author rights consent received",
+  "export.profile.consent.missing": "Author rights consent missing",
   "export.summary.empty": "Generate an eBook to see the latest status.",
   "export.summary.error.fetch": "Unable to load eBook summary.",
   "export.translation.dialog.title": "Select translation",

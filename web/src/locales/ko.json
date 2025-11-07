@@ -734,6 +734,8 @@
   "export.summary.latest": "최신 버전",
   "export.summary.words": "단어 수",
   "export.summary.language": "타깃 언어",
+  "export.profile.consent.received": "원작자 저작권 동의 받음",
+  "export.profile.consent.missing": "원작자 저작권 동의 안받음",
   "export.summary.empty": "전자책을 생성하면 상태가 표시됩니다.",
   "export.translation.dialog.title": "번역본 선택",
   "export.translation.dialog.close": "닫기",

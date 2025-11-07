@@ -3,6 +3,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Check,
+  CheckCircle2,
   Circle,
   ExternalLink,
   Loader2,
@@ -115,15 +116,12 @@ export function ExportEssentialsCard({
     });
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div className="rounded-xl bg-white shadow-sm">
       <div className="flex flex-col gap-4 border-b border-slate-100 p-4 md:flex-row md:items-start md:justify-between">
-        <div className="space-y-1">
+        <div>
           <h2 className="text-base font-semibold text-slate-800">
             {t("export.essentials.title")}
           </h2>
-          <p className="text-sm text-slate-500">
-            {t("export.essentials.description")}
-          </p>
         </div>
         <div className="flex flex-col items-end gap-2">
           <button
@@ -166,48 +164,45 @@ export function ExportEssentialsCard({
         </div>
       </div>
 
-      <div className="space-y-6 p-4">
-        <section className="space-y-3">
-          <div
-            className={`rounded-xl border p-4 ${
-              missingSet.has("translation") && !translationReady
-                ? "border-rose-300"
-                : "border-slate-200"
-            }`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="space-y-4 p-4">
+        <section className="flex flex-col gap-4 md:flex-row">
+          <div className="rounded-xl p-4 md:basis-3/5">
+            <div className="flex flex-wrap items-center gap-3">
+              {translationReady ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />
+              ) : (
+                <Circle className="h-4 w-4 text-amber-400" aria-hidden />
+              )}
               <div className="text-sm font-semibold text-slate-700">
                 {t("export.essentials.translation.pick")}
               </div>
               <button
                 type="button"
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                className="inline-flex items-center justify-center rounded-full border border-slate-200 p-2 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
                 onClick={onOpenTranslation}
                 aria-label={t("export.essentials.translation.open")}
+                title={t("export.essentials.translation.open")}
               >
                 <ExternalLink className="h-4 w-4" aria-hidden />
-                <span>{t("export.essentials.translation.open")}</span>
               </button>
             </div>
             <div className="mt-3 space-y-1 text-xs text-slate-500">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-slate-600">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">
-                    {t("export.essentials.translation.detail")}
+              <div className="flex flex-wrap items-center gap-2 text-slate-600">
+                <span className="font-semibold">
+                  {t("export.essentials.translation.detail")}
+                </span>
+                {translation.targetLang && (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                    {translation.targetLang}
                   </span>
-                  {translation.targetLang && (
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-                      {translation.targetLang}
-                    </span>
-                  )}
-                  {typeof translation.qaScore === "number" && (
-                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-600">
-                      {t("export.essentials.translation.score", {
-                        score: translation.qaScore.toFixed(1),
-                      })}
-                    </span>
-                  )}
-                </div>
+                )}
+                {typeof translation.qaScore === "number" && (
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-600">
+                    {t("export.essentials.translation.score", {
+                      score: translation.qaScore.toFixed(1),
+                    })}
+                  </span>
+                )}
                 {translationStatusBadge}
               </div>
               <div className="text-[11px] text-slate-500">
@@ -223,24 +218,12 @@ export function ExportEssentialsCard({
               </div>
             </div>
           </div>
-        </section>
-
-        {profileSection ? <div className="space-y-4">{profileSection}</div> : null}
-
-        {missingSet.has("rightsAccepted") && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
-            {t("export.essentials.rights.description")}
-          </div>
-        )}
-
-        <section className="flex flex-col gap-4 md:flex-row">
-          <div className="flex-1 rounded-xl border border-slate-200 p-4">
+          <div className="rounded-xl p-4 md:basis-2/5">
             <p className="text-sm font-semibold text-slate-700">
               {t("export.essentials.format.title")}
             </p>
-            <div className="mt-3 space-y-2">
-              <label className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:border-indigo-300">
-                <span>{t("export.essentials.format.pdf")}</span>
+            <div className="mt-2 space-y-1.5">
+              <label className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
@@ -250,9 +233,9 @@ export function ExportEssentialsCard({
                   }
                   aria-label={t("export.essentials.format.pdf.aria")}
                 />
+                <span>{t("export.essentials.format.pdf")}</span>
               </label>
-              <label className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:border-indigo-300">
-                <span>{t("export.essentials.format.epub")}</span>
+              <label className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
@@ -262,10 +245,14 @@ export function ExportEssentialsCard({
                   }
                   aria-label={t("export.essentials.format.epub.aria")}
                 />
+                <span>{t("export.essentials.format.epub")}</span>
               </label>
             </div>
           </div>
         </section>
+
+        {profileSection ? <div className="space-y-4">{profileSection}</div> : null}
+
 
         {displayError && (
           <div

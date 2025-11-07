@@ -59,9 +59,6 @@ export function PromotionPanel({ t, coverProps }: PromotionPanelProps) {
             {t("export.promotion.tabs.advanced.label")}
           </button>
         </div>
-        <span className="text-xs text-slate-400">
-          {t("export.promotion.subtitle")}
-        </span>
       </div>
 
       <div className="p-4">

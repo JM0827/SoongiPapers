@@ -779,15 +779,19 @@ const normalizeEbookDetails = (payload: unknown): EbookDetails => {
     : {};
   const assetRecord = isRecord(versionRecord.asset) ? versionRecord.asset : {};
 
+  const assetIdRaw =
+    typeof assetRecord.assetId === "string"
+      ? assetRecord.assetId
+      : typeof assetRecord.asset_id === "string"
+        ? assetRecord.asset_id
+        : typeof assetRecord.ebook_asset_id === "string"
+          ? assetRecord.ebook_asset_id
+          : null;
+
   const asset =
-    versionRecord && isRecord(versionRecord.asset)
+    versionRecord && isRecord(versionRecord.asset) && assetIdRaw
       ? {
-          assetId: String(
-            assetRecord.assetId ??
-              assetRecord.asset_id ??
-              assetRecord.ebook_asset_id ??
-              "",
-          ),
+          assetId: assetIdRaw,
           fileName:
             typeof assetRecord.fileName === "string"
               ? assetRecord.fileName
