@@ -14,6 +14,52 @@ import {
   mergeDraftSegmentResults,
   splitOriginSegmentForRetry,
 } from "./segmentRetryHelpers";
+import { calculateTokenBudget } from "../../services/translation/tokenBudget";
+
+const estimateTokens = (text: string): number => {
+  const trimmed = text.trim();
+  if (!trimmed.length) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+};
+
+const normalizeLang = (value?: string | null): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  const [primary] = trimmed.split(/[-_]/);
+  if (!primary) return null;
+  if (primary.startsWith("ko")) return "ko";
+  if (primary.startsWith("en")) return "en";
+  return primary.slice(0, 2);
+};
+
+const buildDirection = (
+  sourceLang?: string | null,
+  targetLang?: string | null,
+): string | null => {
+  const source = normalizeLang(sourceLang);
+  const target = normalizeLang(targetLang);
+  if (!source || !target) return null;
+  return `${source}-${target}`;
+};
+
+const buildBudgetSegments = (segments: OriginSegment[]) =>
+  segments.map((segment) => {
+    const text = segment.text ?? "";
+    return {
+      tokenEstimate: estimateTokens(text),
+      text,
+    };
+  });
+
+const resolveRetryMinTokens = (cap: number): number => {
+  if (!Number.isFinite(cap) || cap <= 0) {
+    return 1;
+  }
+  const half = Math.floor(cap * 0.5);
+  const baseline = Math.max(40, half);
+  return Math.max(1, Math.min(cap, baseline));
+};
 
 export type ResponseVerbosity = "low" | "medium" | "high";
 export type ResponseReasoningEffort = "minimal" | "low" | "medium" | "high";
@@ -80,6 +126,11 @@ export interface TranslationDraftAgentResultMeta {
   downshiftCount?: number;
   forcedPaginationCount?: number;
   cursorRetryCount?: number;
+  lengthFailures?: Array<{
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }>;
 }
 
 export interface TranslationDraftAgentResult {
@@ -331,6 +382,11 @@ export async function generateTranslationDraft(
   const baseMaxOutputTokens =
     options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
+  const direction = buildDirection(
+    options.originLanguage ?? null,
+    options.targetLanguage ?? null,
+  );
+
   const systemPrompt = buildDraftSystemPrompt({
     projectTitle: options.projectTitle ?? null,
     authorName: options.authorName ?? null,
@@ -355,6 +411,11 @@ export async function generateTranslationDraft(
 
   const candidates: DraftCandidate[] = [];
   const aggregateUsage = { inputTokens: 0, outputTokens: 0 };
+  const lengthFailureEvents: Array<{
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }> = [];
 
   for (let index = 0; index < candidateCount; index += 1) {
     const candidate = await requestDraftCandidate({
@@ -364,6 +425,7 @@ export async function generateTranslationDraft(
       attempts: attemptsBase.map((attempt) => ({ ...attempt })),
       maxOutputTokens: baseMaxOutputTokens,
       allowSegmentRetry: options.allowSegmentRetry ?? true,
+      onLengthFailure: (event) => lengthFailureEvents.push(event),
     });
 
     const candidateId =
@@ -506,6 +568,11 @@ interface RequestCandidateParams {
   }>;
   maxOutputTokens: number;
   allowSegmentRetry?: boolean;
+  onLengthFailure?: (event: {
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }) => void;
 }
 
 async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
@@ -522,6 +589,7 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
     attempts,
     maxOutputTokens,
     allowSegmentRetry = true,
+    onLengthFailure,
   } = params;
 
   const payloadOptions: TranslationDraftAgentOptions = {
@@ -556,7 +624,15 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
   let segmentRetryUsage: { inputTokens: number; outputTokens: number } | null = null;
   let segmentRetryMeta: TranslationDraftAgentResultMeta | null = null;
   let segmentRetryModel: string | null = null;
-
+  const direction = buildDirection(
+    baseOptions.originLanguage ?? null,
+    baseOptions.targetLanguage ?? null,
+  );
+  const localLengthFailures: Array<{
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }> = [];
   const pickPrimaryAttemptConfig = (
     attemptIndex: number,
   ): {
@@ -687,21 +763,27 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
 
       const partialResults: TranslationDraftAgentResult[] = [];
       for (const subdivision of subdivisions) {
+        const budget = calculateTokenBudget({
+          originSegments: buildBudgetSegments([subdivision]),
+          mode: "draft",
+          direction: direction ?? undefined,
+        });
         const subsetOptions: TranslationDraftAgentOptions = {
           ...baseOptions,
           originSegments: [subdivision],
           candidateCount: 1,
           allowSegmentRetry,
-          maxOutputTokens,
+          maxOutputTokens: budget.tokensInCap,
         };
-        const subset = await requestDraftCandidate({
-          systemPrompt,
-          baseOptions: subsetOptions,
-          originSegments: [subdivision],
-          attempts: attempts.map((attempt) => ({ ...attempt })),
-          maxOutputTokens: context.maxOutputTokens,
-          allowSegmentRetry,
-        });
+    const subset = await requestDraftCandidate({
+      systemPrompt,
+      baseOptions: subsetOptions,
+      originSegments: [subdivision],
+      attempts: attempts.map((attempt) => ({ ...attempt })),
+      maxOutputTokens: budget.tokensInCap,
+      allowSegmentRetry,
+      onLengthFailure,
+    });
         partialResults.push(subset);
       }
 
@@ -741,37 +823,50 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
     const leftSegments = segmentsToProcess.slice(0, midpoint);
     const rightSegments = segmentsToProcess.slice(midpoint);
 
+    const leftBudget = calculateTokenBudget({
+      originSegments: buildBudgetSegments(leftSegments),
+      mode: "draft",
+      direction: direction ?? undefined,
+    });
+    const rightBudget = calculateTokenBudget({
+      originSegments: buildBudgetSegments(rightSegments),
+      mode: "draft",
+      direction: direction ?? undefined,
+    });
+
     const leftOptions: TranslationDraftAgentOptions = {
       ...baseOptions,
       originSegments: leftSegments,
       candidateCount: 1,
       allowSegmentRetry,
-      maxOutputTokens,
+      maxOutputTokens: leftBudget.tokensInCap,
     };
     const rightOptions: TranslationDraftAgentOptions = {
       ...baseOptions,
       originSegments: rightSegments,
       candidateCount: 1,
       allowSegmentRetry,
-      maxOutputTokens,
+      maxOutputTokens: rightBudget.tokensInCap,
     };
 
-    const leftResult = await requestDraftCandidate({
-      systemPrompt,
-      baseOptions: leftOptions,
-      originSegments: leftSegments,
-      attempts: attempts.map((attempt) => ({ ...attempt })),
-      maxOutputTokens: context.maxOutputTokens,
-      allowSegmentRetry,
-    });
-    const rightResult = await requestDraftCandidate({
-      systemPrompt,
-      baseOptions: rightOptions,
-      originSegments: rightSegments,
-      attempts: attempts.map((attempt) => ({ ...attempt })),
-      maxOutputTokens: context.maxOutputTokens,
-      allowSegmentRetry,
-    });
+  const leftResult = await requestDraftCandidate({
+    systemPrompt,
+    baseOptions: leftOptions,
+    originSegments: leftSegments,
+    attempts: attempts.map((attempt) => ({ ...attempt })),
+    maxOutputTokens: leftBudget.tokensInCap,
+    allowSegmentRetry,
+    onLengthFailure,
+  });
+  const rightResult = await requestDraftCandidate({
+    systemPrompt,
+    baseOptions: rightOptions,
+    originSegments: rightSegments,
+    attempts: attempts.map((attempt) => ({ ...attempt })),
+    maxOutputTokens: rightBudget.tokensInCap,
+    allowSegmentRetry,
+    onLengthFailure,
+  });
 
     const combinedUsage = {
       inputTokens:
@@ -809,12 +904,13 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
   let downshiftCount = 0;
   let forcedPaginationCount = 0;
   let cursorRetryCount = 0;
+  const minOutputTokens = resolveRetryMinTokens(maxOutputTokens);
   const runResult = await runResponsesWithRetry<Response>({
     client: openai,
     initialMaxOutputTokens: maxOutputTokens,
     maxOutputTokensCap: MAX_OUTPUT_TOKENS_CAP,
     maxAttempts: Math.max(attemptConfigs.length + 2, 3),
-    minOutputTokens: 200,
+    minOutputTokens,
     onAttempt: ({
       attemptIndex,
       maxOutputTokens: requestTokens,
@@ -887,6 +983,17 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
     finishReason === "length" ||
     responseStatus === "incomplete" ||
     incompleteReason === "max_output_tokens";
+
+  if (truncatedByLength) {
+    const intendedTokens = baseOptions.maxOutputTokens ?? maxOutputTokens;
+    const failureEvent = {
+      segmentIds: originSegments.map((segment) => segment.id),
+      maxOutputTokens: runResult.maxOutputTokens,
+      intendedTokens,
+    };
+    localLengthFailures.push(failureEvent);
+    onLengthFailure?.(failureEvent);
+  }
 
   if (truncatedByLength && !segmentRetrySegments) {
     const fallbackContext =
@@ -1040,6 +1147,10 @@ async function requestDraftCandidate(params: RequestCandidateParams): Promise<{
       downshiftCount,
       forcedPaginationCount,
       cursorRetryCount,
+      lengthFailures: [
+        ...localLengthFailures,
+        ...(segmentRetryMeta?.lengthFailures ?? []),
+      ],
     },
   };
 }

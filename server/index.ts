@@ -25,7 +25,6 @@ import { ensureTranslationPrereqs } from "./services/originPrep";
 import Proofreading from "./models/Proofreading";
 import EbookFile from "./models/EbookFile";
 import { recordTokenUsage } from "./services/usage";
-import { estimateTokens } from "./services/llm";
 import { getCoverService, parseCoverJobPayload } from "./services/cover";
 import { analyzeDocumentProfile } from "./agents/profile/profileAgent";
 import {
@@ -33,7 +32,6 @@ import {
   getTranslationSegmentationMode,
 } from "./config/appControlConfiguration";
 import {
-  segmentOriginText,
   generateTranslationDraft,
   generateTranslationRevision,
   type OriginSegment,
@@ -80,8 +78,16 @@ import {
   registerTranslationV2Processor,
   enqueueTranslationV2Job,
   type TranslationV2Job,
+  type TranslationV2JobData,
   removeTranslationV2Job,
 } from "./services/translationV2Queue";
+import {
+  registerCanonicalWarmupProcessor,
+  enqueueCanonicalWarmupJob,
+  type CanonicalWarmupJob,
+} from "./services/translation/canonicalWarmupQueue";
+import { getCanonicalCacheState } from "./services/translation/canonicalCache";
+import { registerTranslationWorkers } from "./services/translation/translationWorkerControl";
 import {
   emitTranslationStage,
   emitTranslationPage,
@@ -95,6 +101,7 @@ import {
 import {
   updateFollowupMetrics,
   updateSegmentsMetrics,
+  updateCanonicalCacheState,
 } from "./services/translationSummaryState";
 import type { AgentItemsResponseV2 } from "./services/responsesSchemas";
 import { ensureProjectMemory } from "./services/translation/memory";
@@ -102,6 +109,12 @@ import {
   buildTranslationPages,
   type TranslationSegmentText,
 } from "./services/translation/translationPages";
+import {
+  calculateTokenBudget,
+  type TokenBudgetResult,
+} from "./services/translation/tokenBudget";
+import type { CanonicalSegment } from "./services/translation/segmentationEngine";
+import { ensureCanonicalSegments } from "./services/translation/segmentationEngine";
 import cleanText from "./utils/cleanText";
 
 type OAuth2AccessToken = {
@@ -196,6 +209,7 @@ interface AnalyzePipelineBody {
 interface TranslatePipelineBody {
   documentId?: string;
   originalText?: string;
+  originDocumentId?: string | null;
   targetLang?: string;
   project_id?: string;
   created_by?: string | null;
@@ -372,6 +386,7 @@ const ensureUserId = (
 };
 
 import { pool, query } from "./db";
+import { getStreamRunMetrics } from "./db/streamRunMetrics";
 import { nanoid } from "nanoid";
 import { v4 as uuidv4 } from "uuid";
 import { readFile, writeFile, mkdir } from "fs/promises";
@@ -401,10 +416,20 @@ function resolveLoggerOption(): LoggerOption {
   if (loggerFlag === "false" || loggerFlag === "0") {
     return false;
   }
+  const level = process.env.LOG_LEVEL ?? "info";
+  if (IS_PRODUCTION){
+    return {level};
+  }
   return {
-    level: process.env.LOG_LEVEL ?? (IS_PRODUCTION ? "info" : "warn"),
+    level,
+    transport:{
+      target: "pino-pretty",
+      translateTime: "SYS:standard",
+      ignore:"pid,hostname",
+    },
   };
 }
+
 
 function shouldDisableRequestLogging(): boolean {
   const requestLogFlag = (process.env.FASTIFY_DISABLE_REQUEST_LOGS ?? "")
@@ -446,24 +471,109 @@ const REVISE_TOKEN_BUDGET_FACTOR = 1.4;
 
 const MAX_SEGMENTS_PER_REQUEST = Number(process.env.MAX_SEGMENTS_PER_REQUEST) ?? 1;
 
-function sumEstimatedTokens(texts: string[]): number {
-  return texts.reduce((total, text) => total + estimateTokens(text), 0);
-}
+type CanonicalMap = Map<string, CanonicalSegment>;
 
-function computeMaxOutputTokensForTexts(
-  texts: string[],
-  factor: number,
-  fallback: number,
-  cap: number,
-): number {
-  if (!texts.length) {
-    return fallback;
+const normalizeLangCode = (value?: string | null): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  const [primary] = trimmed.split(/[-_]/);
+  if (!primary) return null;
+  if (primary.startsWith("ko")) return "ko";
+  if (primary.startsWith("en")) return "en";
+  return primary.slice(0, 2);
+};
+
+const buildTranslationDirection = (
+  sourceLanguage?: string | null,
+  targetLanguage?: string | null,
+): string | null => {
+  const source = normalizeLangCode(sourceLanguage);
+  const target = normalizeLangCode(targetLanguage);
+  if (!source || !target) {
+    return null;
   }
-  const estimated = Math.ceil(sumEstimatedTokens(texts) * factor);
-  const candidate =
-    Number.isFinite(estimated) && estimated > 0 ? estimated : fallback;
-  return Math.min(Math.max(fallback, candidate), cap);
-}
+  return `${source}-${target}`;
+};
+
+const extractBaseSegmentId = (segmentId: string): string => {
+  const separator = segmentId.indexOf("::");
+  return separator >= 0 ? segmentId.slice(0, separator) : segmentId;
+};
+
+const resolveCanonicalSegment = (
+  canonicalById: CanonicalMap,
+  segmentId: string,
+): CanonicalSegment | undefined => {
+  const direct = canonicalById.get(segmentId);
+  if (direct) return direct;
+  return canonicalById.get(extractBaseSegmentId(segmentId));
+};
+
+const mapSegmentIdsToHashes = (
+  canonicalById: CanonicalMap,
+  segmentIds: string[],
+): string[] => {
+  const hashes = new Set<string>();
+  segmentIds.forEach((segmentId) => {
+    const canonical = resolveCanonicalSegment(canonicalById, segmentId);
+    if (canonical?.hash) {
+      hashes.add(canonical.hash);
+    }
+  });
+  return Array.from(hashes);
+};
+
+const estimateTextTokens = (text: string): number => {
+  const trimmed = text.trim();
+  if (!trimmed.length) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+};
+
+const buildBudgetSegmentsFromOrigin = (
+  segments: OriginSegment[],
+  canonicalById: CanonicalMap,
+): Array<{ tokenEstimate: number; text: string }> =>
+  segments.map((segment) => {
+    const canonical = resolveCanonicalSegment(canonicalById, segment.id);
+    const isSplit = segment.id.includes("::");
+    const text = isSplit
+      ? segment.text ?? canonical?.text ?? ""
+      : canonical?.text ?? segment.text ?? "";
+    const canonicalEstimate = Number.isFinite(canonical?.tokenEstimate)
+      ? Number(canonical?.tokenEstimate)
+      : null;
+    const tokenEstimate = isSplit
+      ? estimateTextTokens(segment.text ?? text)
+      : canonicalEstimate && canonicalEstimate > 0
+        ? canonicalEstimate
+        : estimateTextTokens(text);
+    return {
+      tokenEstimate: Math.max(1, Math.floor(tokenEstimate)),
+      text,
+    };
+  });
+
+const calculateBudgetForOriginSegments = (
+  params: {
+    segments: OriginSegment[];
+    canonicalById: CanonicalMap;
+    direction: string | null;
+    mode: "draft" | "revise" | "micro-check" | "other";
+    isDeepRevise?: boolean;
+  },
+): TokenBudgetResult => {
+  const budgetSegments = buildBudgetSegmentsFromOrigin(
+    params.segments,
+    params.canonicalById,
+  );
+  return calculateTokenBudget({
+    originSegments: budgetSegments,
+    mode: params.mode,
+    direction: params.direction ?? undefined,
+    isDeepRevise: params.isDeepRevise,
+  });
+};
 
 type DraftAgentResult = Awaited<ReturnType<typeof generateTranslationDraft>>;
 
@@ -523,6 +633,7 @@ async function runDraftStageWithAdaptiveRetries(
     "originSegments" | "maxOutputTokens"
   >,
   originSegments: OriginSegment[],
+  budgetContext: TokenBudgetContext,
 ): Promise<DraftAgentResult> {
   const aggregation = await draftRecursive(originSegments);
   const mergedText = buildMergedDraftText(originSegments, aggregation.segments);
@@ -571,12 +682,13 @@ async function runDraftStageWithAdaptiveRetries(
       };
     }
 
-    const subsetMaxTokens = computeMaxOutputTokensForTexts(
-      segments.map((segment) => segment.text ?? ""),
-      DRAFT_TOKEN_BUDGET_FACTOR,
-      DEFAULT_DRAFT_MAX_OUTPUT_TOKENS,
-      DRAFT_MAX_OUTPUT_TOKENS_CAP,
-    );
+    const subsetBudget = calculateBudgetForOriginSegments({
+      segments,
+      canonicalById: budgetContext.canonicalById,
+      direction: budgetContext.direction,
+      mode: "draft",
+    });
+    const subsetMaxTokens = subsetBudget.tokensInCap;
     const subsetCandidateCount =
       segments.length <= 2 ? 1 : (baseOptions.candidateCount ?? 1);
 
@@ -672,6 +784,12 @@ async function runDraftStageWithAdaptiveRetries(
   }
 }
 
+interface TokenBudgetContext {
+  canonicalById: CanonicalMap;
+  direction: string | null;
+  isDeepRevise?: boolean;
+}
+
 interface RevisionLengthGuardParams {
   revisionResult: TranslationReviseAgentResult;
   draftSegments: TranslationDraftAgentSegmentResult[];
@@ -680,6 +798,9 @@ interface RevisionLengthGuardParams {
   projectId: string;
   jobId: string;
   sourceHash?: string;
+  budgetContext: TokenBudgetContext;
+  originLanguage?: string | null;
+  targetLanguage?: string | null;
 }
 
 interface RevisionLengthGuardOutcome {
@@ -699,6 +820,9 @@ async function applyRevisionLengthGuardRetry(
     projectId,
     jobId,
     sourceHash,
+    budgetContext,
+    originLanguage,
+    targetLanguage,
   } = params;
 
   let workingRevision: TranslationReviseAgentResult = {
@@ -751,12 +875,14 @@ async function applyRevisionLengthGuardRetry(
       continue;
     }
 
-    const retryMaxTokens = computeMaxOutputTokensForTexts(
-      [draftSegment.translation_segment ?? originSegment.text ?? ""],
-      REVISE_TOKEN_BUDGET_FACTOR,
-      DEFAULT_REVISE_MAX_OUTPUT_TOKENS,
-      REVISE_MAX_OUTPUT_TOKENS_CAP,
-    );
+    const retryBudget = calculateBudgetForOriginSegments({
+      segments: [originSegment],
+      canonicalById: budgetContext.canonicalById,
+      direction: budgetContext.direction,
+      mode: "revise",
+      isDeepRevise: budgetContext.isDeepRevise,
+    });
+    const retryMaxTokens = retryBudget.tokensInCap;
 
     const retryResult = await generateTranslationRevision({
       projectId,
@@ -767,6 +893,8 @@ async function applyRevisionLengthGuardRetry(
       translationNotes,
       maxOutputTokens: retryMaxTokens,
       allowSegmentRetry: true,
+      originLanguage: params.originLanguage ?? null,
+      targetLanguage: params.targetLanguage ?? null,
     });
 
     retried = true;
@@ -2654,13 +2782,29 @@ app.post("/api/pipeline/analyze", async (req, reply) => {
   reply.send({ jobId });
 });
 
-// Accepts: { documentId, originalText, targetLang }
+// ─────────────────────────────────────────────────────────
+// 모든 요청 진입 로깅(프록시/네트워크 vs 라우트 내부 블로킹 판별)
+// 서버가 listen하기 전에만 등록되면 위치는 자유지만,
+// 빠르게 확인하려고 번역 라우트 바로 위에 둡니다.
+// ─────────────────────────────────────────────────────────
+app.addHook("onRequest", async (req, _reply) => {
+  app.log.info({ method: req.method, url: req.url }, "[HTTP] incoming");
+});
+
+// Accepts: { documentId, originDocumentId?, targetLang }
 app.post("/api/pipeline/translate", async (req, reply) => {
+  app.log.info({ route: "/api/pipeline/translate" }, "[TRANSLATE] translate invoked");
+
   await requireAuthAndPlanCheck(req, reply);
-  if (reply.sent) return;
+
+  if (reply.sent) {
+    app.log.warn("[TRANSLATE] Auth/plan check sent early response");
+    return;
+  }
   const {
     documentId,
     originalText,
+    originDocumentId,
     targetLang = "English",
     project_id,
     created_by,
@@ -2672,10 +2816,8 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   const user_id = ensureUserId(req, reply);
   if (!user_id) return;
 
-  if (!originalText || !documentId) {
-    return reply
-      .status(400)
-      .send({ error: "documentId and originalText are required" });
+  if (!documentId?.trim()) {
+    return reply.status(400).send({ error: "documentId is required" });
   }
 
   if (project_id) {
@@ -2704,26 +2846,6 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     }
   }
 
-  const segmentationMode = getTranslationSegmentationMode();
-  const projectKey = project_id || documentId;
-
-  let segmentation;
-  try {
-    segmentation = segmentOriginText({
-      text: originalText,
-      projectId: projectKey,
-      modeOverride: segmentationMode,
-    });
-  } catch (error) {
-    app.log.error(
-      { err: error, projectId: project_id },
-      "[TRANSLATE] Segmentation failed",
-    );
-    return reply
-      .status(422)
-      .send({ error: "원작을 분할하지 못했습니다. 내용을 확인해 주세요." });
-  }
-
   let projectMetadata: ProjectMetadataRow | null = null;
   if (project_id) {
     try {
@@ -2742,6 +2864,14 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       );
     }
   }
+
+  const segmentationMode = getTranslationSegmentationMode();
+  const normalizedDocumentId = documentId.trim();
+  const normalizedOriginDocumentId =
+    typeof originDocumentId === "string" && originDocumentId.trim().length
+      ? originDocumentId.trim()
+      : null;
+  const projectKey = project_id || normalizedDocumentId;
 
   let translationNotes: TranslationNotes | null = null;
   if (project_id) {
@@ -2813,15 +2943,40 @@ app.post("/api/pipeline/translate", async (req, reply) => {
 
   let jobId: string;
   let originDocId: string | null = null;
-  const originFileSize = Buffer.byteLength(originalText, "utf8");
 
-  if (project_id && projectMetadata?.origin_file) {
+  if (normalizedOriginDocumentId) {
+    try {
+      const originDoc = await OriginFile.findById(normalizedOriginDocumentId)
+        .select({ _id: 1, project_id: 1 })
+        .lean<{ _id?: string; project_id?: string }>();
+      if (!originDoc?._id) {
+        return reply
+          .status(404)
+          .send({ error: "origin_document_not_found" });
+      }
+      const docProjectId = originDoc.project_id ?? null;
+      if (docProjectId && docProjectId !== projectKey) {
+        return reply.status(403).send({ error: "origin_document_mismatch" });
+      }
+      originDocId = originDoc._id;
+    } catch (err) {
+      app.log.error(
+        { err, originDocumentId: normalizedOriginDocumentId },
+        "[TRANSLATE] Failed to load provided origin document",
+      );
+      return reply
+        .status(500)
+        .send({ error: "원문을 확인하지 못했습니다." });
+    }
+  }
+
+  if (!originDocId && projectMetadata?.origin_file) {
     originDocId = String(projectMetadata.origin_file);
   }
 
-  if (project_id && !originDocId) {
+  if (!originDocId) {
     try {
-      const latestOrigin = await OriginFile.findOne({ project_id })
+      const latestOrigin = await OriginFile.findOne({ project_id: projectKey })
         .sort({ updated_at: -1 })
         .select({ _id: 1 })
         .lean<{ _id?: string }>();
@@ -2830,7 +2985,7 @@ app.post("/api/pipeline/translate", async (req, reply) => {
       }
     } catch (err) {
       app.log.warn(
-        { err, projectId: project_id },
+        { err, projectId: projectKey },
         "[TRANSLATE] Failed to reuse existing origin file",
       );
     }
@@ -2849,6 +3004,13 @@ app.post("/api/pipeline/translate", async (req, reply) => {
     });
 
     if (!originDocId) {
+      if (typeof originalText !== "string" || !originalText.trim().length) {
+        return reply.status(400).send({
+          error: "origin_document_missing",
+          message: "번역을 시작하려면 원문 파일을 먼저 저장하세요.",
+        });
+      }
+      const originFileSize = Buffer.byteLength(originalText, "utf8");
       const originFile = await OriginFile.create({
         project_id: projectKey,
         job_id: jobId,
@@ -2920,46 +3082,70 @@ app.post("/api/pipeline/translate", async (req, reply) => {
   }
 
   const sequentialConfig = getSequentialTranslationConfig();
-  await ensureProjectMemory(
-    projectKey,
-    buildMemorySeed(translationNotes ?? null, segmentation.segments),
-  );
-  await enqueueTranslationV2Job(
-    {
-      projectId: projectKey,
-      jobId,
-      workflowRunId: workflowRun?.runId ?? null,
-      sourceHash: segmentation.sourceHash,
-      originLanguage,
-      targetLanguage,
-      originSegments: segmentation.segments,
-      translationNotes,
-      projectTitle,
-      authorName,
-      synopsis,
-      register: null,
-      candidateCount: DEFAULT_V2_CANDIDATE_COUNT,
-      stageParameters: sequentialConfig.stageParameters,
-    },
-    {
-      jobId: `translation-v2-${jobId}`,
-      removeOnComplete: true,
-      removeOnFail: false,
-    },
-  );
+  try {
+    const job = await enqueueTranslationV2Job(
+      {
+        projectId: projectKey,
+        jobId,
+        workflowRunId: workflowRun?.runId ?? null,
+        originLanguage,
+        targetLanguage,
+        originDocumentId: originDocId,
+        translationNotes,
+        projectTitle,
+        authorName,
+        synopsis,
+        register: null,
+        candidateCount: DEFAULT_V2_CANDIDATE_COUNT,
+        stageParameters: sequentialConfig.stageParameters,
+      },
+      {
+        jobId: `translation-v2-${jobId}`,
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
 
-  app.log.info(
-    `[TRANSLATE] Queued V2 pipeline job ${jobId} with ${segmentation.segments.length} segments`,
-  );
+    app.log.info(
+      {
+        jobId,
+        projectId: projectKey,
+        originDocumentId: originDocId,
+      },
+      "[TRANSLATE] Queued V2 pipeline job",
+    );
 
-  reply.send({
-    jobId,
-    workflowRunId: workflowRun?.runId ?? null,
-    totalPasses: V2_PIPELINE_STAGES.length,
-    segmentCount: segmentation.segments.length,
-    segmentationMode,
-    pipeline: "v2",
-  });
+    return reply
+      .code(201)
+      .send({
+        queued: true,
+        jobId,
+        bullJobId: job.id,
+        workflowRunId: workflowRun?.runId ?? null,
+        totalPasses: V2_PIPELINE_STAGES.length,
+        segmentCount: 0,
+        segmentationMode,
+        pipeline: "v2",
+      });
+  } catch (e) {
+    app.log.warn(
+      { err: String(e), jobId, projectId: projectKey },
+      "[TRANSLATE] enqueue failed/timeout — returning 202 accepted",
+    );
+    // 운영 정책에 따라 202(수락) 또는 503(일시불가) 택1 가능. 여기서는 202로 UX 보호.
+    return reply
+      .code(202)
+      .send({
+        accepted: true,
+        queued: false,
+        jobId,
+        workflowRunId: workflowRun?.runId ?? null,
+        totalPasses: V2_PIPELINE_STAGES.length,
+        segmentCount: 0,
+        segmentationMode,
+        pipeline: "v2",
+      });
+  }
 });
 
 app.post("/api/projects/:projectId/origin/reanalyze", async (req, reply) => {
@@ -3918,6 +4104,73 @@ async function failWorkflowRunSafe(
   }
 }
 
+type LeanOriginDoc = {
+  _id?: unknown;
+  project_id?: string | null;
+  text_content?: string | null;
+  updated_at?: Date | null;
+};
+
+async function prepareOriginSegmentsForJob(
+  data: TranslationV2JobData,
+  runId: string,
+): Promise<{ text: string; segments: OriginSegment[]; sourceHash: string }> {
+  if (Array.isArray(data.originSegments) && data.originSegments.length) {
+    return {
+      text: reconstructOriginText(data.originSegments),
+      segments: data.originSegments,
+      sourceHash: data.sourceHash ?? "",
+    };
+  }
+
+  let originDoc: LeanOriginDoc | null = null;
+
+  if (data.originDocumentId) {
+    try {
+      originDoc = await OriginFile.findById(data.originDocumentId)
+        .lean<LeanOriginDoc>();
+    } catch (error) {
+      app.log.warn(
+        { err: error, originDocumentId: data.originDocumentId },
+        "[TRANSLATE] Failed to load origin document by id",
+      );
+    }
+  }
+
+  if (!originDoc) {
+    originDoc = await OriginFile.findOne({ project_id: data.projectId })
+      .sort({ updated_at: -1 })
+      .lean<LeanOriginDoc>();
+  }
+
+  const originText = originDoc?.text_content ?? null;
+  if (!originText?.trim()) {
+    throw new Error("Origin text not found for translation job");
+  }
+
+  const canonical = await ensureCanonicalSegments({
+    runId,
+    text: originText,
+    projectId: data.projectId,
+    sourceLanguage: data.originLanguage ?? null,
+    targetLanguage: data.targetLanguage ?? null,
+  });
+
+  const originSegments: OriginSegment[] = canonical.segments.map((segment) => ({
+    id: segment.id,
+    index: segment.segmentOrder,
+    text: segment.text,
+    paragraphIndex: segment.paragraphIndex,
+    sentenceIndex: segment.sentenceIndex,
+  }));
+
+  return {
+    text: originText,
+    segments: originSegments,
+    sourceHash: canonical.sourceHash,
+  };
+}
+
 async function handleTranslationV2Job(job: TranslationV2Job) {
   const { data } = job;
   if (await isJobCancelled(data.jobId)) {
@@ -3934,20 +4187,161 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
   let microCheckRetried = false;
   let totalTokensIn = 0;
   let totalTokensOut = 0;
+  let totalTokensIntended = 0;
+  const tokenStats = {
+    draft: { intended: 0, actual: 0 },
+    revise: { intended: 0, actual: 0 },
+    microCheck: { intended: 0, actual: 0 },
+  };
+  const lengthStats = {
+    draft: { attempts: 0, failures: 0 },
+    revise: { attempts: 0, failures: 0 },
+  };
+  let lastLengthFailure:
+    | {
+        stage: "draft" | "revise";
+        segmentHashes: string[];
+        maxOutputTokens: number;
+        intendedTokens: number;
+        timestamp: string;
+      }
+    | null = null;
   let aggregateDownshiftCount = 0;
   let aggregateForcedPaginationCount = 0;
   let aggregateCursorRetryCount = 0;
   let primaryModel: string | null = null;
 
-  await updateSegmentsMetrics({
+  let originTextForCanonical: string;
+  if (!Array.isArray(data.originSegments) || !data.originSegments.length) {
+    const prepared = await prepareOriginSegmentsForJob(data, runId);
+    data.originSegments = prepared.segments;
+    data.sourceHash = prepared.sourceHash;
+    originTextForCanonical = prepared.text;
+  } else {
+    originTextForCanonical = reconstructOriginText(data.originSegments);
+  }
+
+  if (!Array.isArray(data.originSegments) || !data.originSegments.length) {
+    throw new Error("origin_segments_unavailable");
+  }
+  const originSegments = data.originSegments as OriginSegment[];
+
+  try {
+    await ensureProjectMemory(
+      data.projectId,
+      buildMemorySeed(data.translationNotes ?? null, originSegments),
+    );
+  } catch (error) {
+    app.log.warn(
+      { err: error, projectId: data.projectId },
+      "[TRANSLATE] Failed to ensure project memory in worker",
+    );
+  }
+
+  const canonicalResult = await ensureCanonicalSegments({
+    runId,
+    text: originTextForCanonical,
+    projectId: data.projectId,
+    sourceLanguage: data.originLanguage ?? null,
+    targetLanguage: data.targetLanguage ?? null,
+  });
+  await updateCanonicalCacheState({
     projectId: data.projectId,
     runId,
-    total: Array.isArray(data.originSegments)
-      ? data.originSegments.length
-      : 0,
-    processed: 0,
-    microcheckCompleted: false,
+    state: "ready",
   });
+  const canonicalSegments = canonicalResult.segments;
+  const canonicalMap: CanonicalMap = new Map(
+    canonicalSegments.map((segment) => [segment.id, segment]),
+  );
+  const canonicalSegmentsVersion = 1;
+  const canonicalSegmentsTotal = canonicalSegments.length;
+  let processedHashCount = 0;
+  let microcheckCompletedFlag = false;
+  data.sourceHash = data.sourceHash ?? canonicalResult.sourceHash;
+  const sourceHash = data.sourceHash ?? canonicalResult.sourceHash;
+  const direction = buildTranslationDirection(
+    data.originLanguage ?? null,
+    data.targetLanguage ?? null,
+  );
+
+  const recordLengthFailure = (
+    stage: "draft" | "revise",
+    event: { segmentIds: string[]; maxOutputTokens: number; intendedTokens: number },
+  ) => {
+    const segmentHashes = mapSegmentIdsToHashes(canonicalMap, event.segmentIds);
+    lengthStats[stage].failures += 1;
+    lastLengthFailure = {
+      stage,
+      segmentHashes,
+      maxOutputTokens: event.maxOutputTokens,
+      intendedTokens: event.intendedTokens,
+      timestamp: new Date().toISOString(),
+    };
+    app.log.warn(
+      {
+        runId,
+        jobId: data.jobId,
+        stage,
+        reason: "length",
+        segmentHashes,
+        maxOutputTokens: event.maxOutputTokens,
+        intendedTokens: event.intendedTokens,
+      },
+      "[TRANSLATION_V2] Length failure detected",
+    );
+  };
+
+  const buildMetricsExtras = () => {
+    const totalsFailures = lengthStats.draft.failures + lengthStats.revise.failures;
+    const totalsAttempts = lengthStats.draft.attempts + lengthStats.revise.attempts;
+    const segmentExtras = {
+      version: canonicalSegmentsVersion,
+      totalHashes: canonicalSegmentsTotal,
+      processedHashes: Math.min(canonicalSegmentsTotal, processedHashCount),
+      microcheckCompleted: microcheckCompletedFlag,
+      updatedAt: new Date().toISOString(),
+    } satisfies Record<string, unknown>;
+    return {
+      tokens: {
+        intended: totalTokensIntended,
+        actual: totalTokensOut,
+        stages: {
+          draft: { ...tokenStats.draft },
+          revise: { ...tokenStats.revise },
+          microCheck: { ...tokenStats.microCheck },
+        },
+      },
+      length: {
+        draft: { ...lengthStats.draft },
+        revise: { ...lengthStats.revise },
+        totals: {
+          failures: totalsFailures,
+          attempts: totalsAttempts,
+        },
+        lastFailure: lastLengthFailure,
+      },
+      segments: segmentExtras,
+    };
+  };
+  const draftStageBudget = calculateBudgetForOriginSegments({
+    segments: originSegments,
+    canonicalById: canonicalMap,
+    direction,
+    mode: "draft",
+  });
+
+  const persistSegmentsMetrics = async (): Promise<void> => {
+    await updateSegmentsMetrics({
+      projectId: data.projectId,
+      runId,
+      segmentsVersion: canonicalSegmentsVersion,
+      totalHashes: canonicalSegmentsTotal,
+      processedHashes: processedHashCount,
+      microcheckCompleted: microcheckCompletedFlag,
+    });
+  };
+  await persistSegmentsMetrics();
 
   try {
     activeStage = "draft";
@@ -3966,7 +4360,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         projectId: data.projectId,
         jobId: data.jobId,
         runOrder: 1,
-        sourceHash: data.sourceHash,
+        sourceHash,
         originLanguage: data.originLanguage ?? null,
         targetLanguage: data.targetLanguage ?? null,
         translationNotes: data.translationNotes ?? null,
@@ -3979,17 +4373,29 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         deliberationModel:
           process.env.TRANSLATION_DRAFT_JUDGE_MODEL_V2 ?? "gpt-5-mini",
       },
-      data.originSegments,
+      originSegments,
+      {
+        canonicalById: canonicalMap,
+        direction,
+      },
     );
     const draftDuration = Date.now() - draftStageStartedAt;
     const draftSegmentTexts = extractDraftSegmentTexts(draftResult.segments);
+    const draftValidatorFlags =
+      (draftResult.meta as { validatorFlags?: Record<string, string[]> })
+        .validatorFlags ?? null;
+    const draftAutoFixesApplied =
+      (draftResult.meta as { autoFixesApplied?: string[] }).autoFixesApplied ??
+      null;
+
     const draftPagesResult = buildTranslationPages({
       runId,
       stage: "draft",
       jobId: data.jobId,
       model: draftResult.model,
       mergedText: draftResult.mergedText,
-      originSegments: data.originSegments,
+      originSegments,
+      canonicalSegments,
       segmentTexts: draftSegmentTexts,
       usage: draftResult.usage,
       meta: {
@@ -4002,6 +4408,8 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         cursorRetryCount: draftResult.meta.cursorRetryCount ?? 0,
       },
       latencyMs: draftDuration,
+      validatorFlags: draftValidatorFlags,
+      autoFixesApplied: draftAutoFixesApplied,
     });
     app.log.info(
       {
@@ -4039,7 +4447,22 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
           stageParameters: data.stageParameters,
         }
       : baseConfig;
-    const segmentBatch: SequentialStageJobSegment[] = data.originSegments.map(
+    const reviseStageParams = sequentialConfig.stageParameters.revise;
+    const isDeepRevise =
+      (reviseStageParams.reasoningEffort ?? "low") === "high";
+    const reviseBudgetContext: TokenBudgetContext = {
+      canonicalById: canonicalMap,
+      direction,
+      isDeepRevise,
+    };
+    const reviseBudget = calculateBudgetForOriginSegments({
+      segments: originSegments,
+      canonicalById: canonicalMap,
+      direction,
+      mode: "revise",
+      isDeepRevise,
+    });
+    const segmentBatch: SequentialStageJobSegment[] = originSegments.map(
       (segment, index, arr) => ({
         segmentId: segment.id,
         segmentIndex: index,
@@ -4079,6 +4502,13 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     aggregateCursorRetryCount += draftResult.meta.cursorRetryCount ?? 0;
     primaryModel = primaryModel ?? draftResult.model;
 
+    tokenStats.draft.intended = draftStageBudget.intendedTokensOut;
+    tokenStats.draft.actual = draftResult.usage.outputTokens;
+    lengthStats.draft.attempts += draftResult.meta.attempts ?? 0;
+    (draftResult.meta.lengthFailures ?? []).forEach((event) =>
+      recordLengthFailure("draft", event),
+    );
+    totalTokensIntended += draftStageBudget.intendedTokensOut;
     await recordTranslationMetricsSnapshot({
       runId,
       projectId: data.projectId,
@@ -4090,6 +4520,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       maxOutputTokens: draftResult.meta.maxOutputTokens,
       tokensIn: totalTokensIn,
       tokensOut: totalTokensOut,
+      extras: buildMetricsExtras(),
     });
 
     if (draftResult.meta.truncated) {
@@ -4109,7 +4540,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       jobId: data.jobId,
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
-      sourceHash: data.sourceHash,
+      sourceHash,
       stage: "draft",
       memoryVersion: 1,
       config: sequentialConfig,
@@ -4145,6 +4576,12 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     );
 
     await persistStageResults(stageJob, stageResults);
+    processedHashCount = Math.max(
+      processedHashCount,
+      Array.isArray(draftResult.segments) ? draftResult.segments.length : 0,
+    );
+    microcheckCompletedFlag = false;
+    await persistSegmentsMetrics();
 
     app.log.info(
       `[TRANSLATION_V2] Draft stage completed for job ${data.jobId}`,
@@ -4176,18 +4613,13 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     let revisionResult = await generateTranslationRevision({
       projectId: data.projectId,
       jobId: data.jobId,
-      sourceHash: data.sourceHash,
-      originSegments: data.originSegments,
+      sourceHash,
+      originSegments,
       draftSegments: draftResult.segments,
       translationNotes: data.translationNotes ?? null,
-      maxOutputTokens: computeMaxOutputTokensForTexts(
-        draftResult.segments.map(
-          (segment) => segment.translation_segment ?? "",
-        ),
-        REVISE_TOKEN_BUDGET_FACTOR,
-        DEFAULT_REVISE_MAX_OUTPUT_TOKENS,
-        REVISE_MAX_OUTPUT_TOKENS_CAP,
-      ),
+      maxOutputTokens: reviseBudget.tokensInCap,
+      originLanguage: data.originLanguage ?? null,
+      targetLanguage: data.targetLanguage ?? null,
     });
 
     if (await isJobCancelled(data.jobId)) {
@@ -4197,11 +4629,14 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     const lengthGuardOutcome = await applyRevisionLengthGuardRetry({
       revisionResult,
       draftSegments: draftResult.segments,
-      originSegments: data.originSegments,
+      originSegments,
       translationNotes: data.translationNotes ?? null,
       projectId: data.projectId,
       jobId: data.jobId,
-      sourceHash: data.sourceHash,
+      sourceHash,
+      budgetContext: reviseBudgetContext,
+      originLanguage: data.originLanguage ?? null,
+      targetLanguage: data.targetLanguage ?? null,
     });
     revisionResult = lengthGuardOutcome.revisionResult;
     cachedMicroCheckResult = lengthGuardOutcome.microCheckResult;
@@ -4235,7 +4670,13 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     aggregateForcedPaginationCount += revisionResult.meta.forcedPaginationCount ?? 0;
     aggregateCursorRetryCount += revisionResult.meta.cursorRetryCount ?? 0;
     primaryModel = primaryModel ?? revisionResult.model;
-
+    tokenStats.revise.intended = reviseBudget.intendedTokensOut;
+    tokenStats.revise.actual = revisionResult.usage.outputTokens;
+    lengthStats.revise.attempts += revisionResult.meta.attempts ?? 0;
+    (revisionResult.meta.lengthFailures ?? []).forEach((event) =>
+      recordLengthFailure("revise", event),
+    );
+    totalTokensIntended += reviseBudget.intendedTokensOut;
     await recordTranslationMetricsSnapshot({
       runId,
       projectId: data.projectId,
@@ -4247,19 +4688,28 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       maxOutputTokens: revisionResult.meta.maxOutputTokens,
       tokensIn: totalTokensIn,
       tokensOut: totalTokensOut,
+      extras: buildMetricsExtras(),
     });
 
     const reviseDuration = Date.now() - reviseStartedAt;
     const reviseSegmentTexts = extractReviseSegmentTexts(
       revisionResult.segments,
     );
+    const reviseValidatorFlags =
+      (revisionResult.meta as { validatorFlags?: Record<string, string[]> })
+        .validatorFlags ?? null;
+    const reviseAutoFixesApplied =
+      (revisionResult.meta as { autoFixesApplied?: string[] })
+        .autoFixesApplied ?? null;
+
     const revisePagesResult = buildTranslationPages({
       runId,
       stage: "revise",
       jobId: data.jobId,
       model: revisionResult.model,
       mergedText: revisionResult.mergedText,
-      originSegments: data.originSegments,
+      originSegments,
+      canonicalSegments,
       segmentTexts: reviseSegmentTexts,
       usage: revisionResult.usage,
       meta: {
@@ -4272,6 +4722,8 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         cursorRetryCount: revisionResult.meta.cursorRetryCount ?? 0,
       },
       latencyMs: reviseDuration,
+      validatorFlags: reviseValidatorFlags,
+      autoFixesApplied: reviseAutoFixesApplied,
     });
     app.log.info(
       {
@@ -4315,7 +4767,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       jobId: data.jobId,
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
-      sourceHash: data.sourceHash,
+      sourceHash,
       stage: "revise",
       memoryVersion: 1,
       config: sequentialConfig,
@@ -4343,6 +4795,12 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       }));
 
     await persistStageResults(reviseStageJob, reviseStageResults);
+    processedHashCount = Math.max(
+      processedHashCount,
+      Array.isArray(revisionResult.segments) ? revisionResult.segments.length : 0,
+    );
+    microcheckCompletedFlag = false;
+    await persistSegmentsMetrics();
 
     app.log.info(
       `[TRANSLATION_V2] Revise stage completed for job ${data.jobId}`,
@@ -4375,11 +4833,22 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       chunkId: `micro-check:${data.jobId}`,
     });
 
+    const microCheckBudget = calculateBudgetForOriginSegments({
+      segments: originSegments,
+      canonicalById: canonicalMap,
+      direction,
+      mode: "micro-check",
+    });
+    tokenStats.microCheck.intended = microCheckBudget.intendedTokensOut;
+    tokenStats.microCheck.actual = 0;
+    totalTokensIntended += microCheckBudget.intendedTokensOut;
+
     const microCheckResult = cachedMicroCheckResult ??
       runMicroChecks({
-        originSegments: data.originSegments,
+        originSegments,
         revisedSegments: revisionResult.segments,
       });
+    microCheckResult.tokenBudget = microCheckBudget.tokensInCap;
 
     if (microCheckRetried) {
       app.log.info(
@@ -4398,7 +4867,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       jobId: data.jobId,
       projectId: data.projectId,
       workflowRunId: data.workflowRunId ?? undefined,
-      sourceHash: data.sourceHash,
+      sourceHash,
       stage: "micro-check",
       memoryVersion: 1,
       config: sequentialConfig,
@@ -4461,12 +4930,14 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       }
     });
 
-    await updateSegmentsMetrics({
-      projectId: data.projectId,
-      runId,
-      processed: microCheckResult.segments.length,
-      microcheckCompleted: true,
-    });
+    processedHashCount = Math.max(
+      processedHashCount,
+      Array.isArray(microCheckResult.segments)
+        ? microCheckResult.segments.length
+        : 0,
+    );
+    microcheckCompletedFlag = true;
+    await persistSegmentsMetrics();
 
     await updateFollowupMetrics({
       projectId: data.projectId,
@@ -4476,7 +4947,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
     });
 
     const finalText = revisionResult.mergedText;
-    const originText = reconstructOriginText(data.originSegments);
+    const originText = originTextForCanonical;
 
     const originFilename = `origin-${data.jobId}.txt`;
 
@@ -4487,7 +4958,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         job_id: data.jobId,
         variant: "final",
         is_final: true,
-        source_hash: data.sourceHash ?? null,
+        source_hash: sourceHash,
         synthesis_draft_ids: [],
         origin_filename: originFilename,
         origin_file_size: Buffer.byteLength(originText, "utf8"),
@@ -4521,7 +4992,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
           variant: "final",
           segment_id: segment.segment_id,
           segment_index: index,
-          origin_segment: data.originSegments[index]?.text ?? "",
+          origin_segment: originSegments[index]?.text ?? "",
           translation_segment: segment.revised_segment,
           source_draft_ids: [],
           synthesis_notes: {
@@ -4546,6 +5017,7 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       maxOutputTokens: revisionResult.meta.maxOutputTokens,
       tokensIn: totalTokensIn,
       tokensOut: totalTokensOut,
+      extras: buildMetricsExtras(),
     });
 
     await markJobSucceeded(data.jobId);
@@ -4570,6 +5042,9 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
         ? translationFile._id.toString()
         : null,
       completedAt: new Date().toISOString(),
+      tokensIn: totalTokensIn,
+      tokensOut: totalTokensOut,
+      extras: buildMetricsExtras(),
     });
   } catch (error) {
     const message =
@@ -4613,12 +5088,65 @@ async function handleTranslationV2Job(job: TranslationV2Job) {
       model: primaryModel,
       tokensIn: totalTokensIn,
       tokensOut: totalTokensOut,
+      extras: buildMetricsExtras(),
     });
   }
 
   if (failureReason) {
     await markJobFailed(data.jobId, failureReason);
     await failWorkflowRunSafe(data.workflowRunId, failureReason);
+  }
+}
+
+async function handleCanonicalWarmupJob(job: CanonicalWarmupJob) {
+  const { data } = job;
+  const runId = data.runId ?? translationRunId(data.jobId);
+  try {
+    const streamRow = await getStreamRunMetrics(runId);
+    const snapshot = await getCanonicalCacheState({
+      runId,
+      extras: streamRow?.extras ?? null,
+    });
+    if (snapshot.state === "ready") {
+      await updateCanonicalCacheState({
+        projectId: data.projectId,
+        runId,
+        state: "ready",
+      });
+      return;
+    }
+
+    const jobPayload: TranslationV2JobData = {
+      projectId: data.projectId,
+      jobId: data.jobId,
+      workflowRunId: null,
+      originSegments: data.originSegments,
+      originDocumentId: data.originDocumentId ?? null,
+      originLanguage: data.originLanguage ?? null,
+      targetLanguage: data.targetLanguage ?? null,
+    };
+
+    const prepared = await prepareOriginSegmentsForJob(jobPayload, runId);
+
+    await ensureCanonicalSegments({
+      runId,
+      text: prepared.text,
+      projectId: data.projectId,
+      sourceLanguage: data.originLanguage ?? null,
+      targetLanguage: data.targetLanguage ?? null,
+    });
+
+    await updateCanonicalCacheState({
+      projectId: data.projectId,
+      runId,
+      state: "ready",
+    });
+  } catch (error) {
+    app.log.error(
+      { err: error, jobId: data.jobId, projectId: data.projectId },
+      "[CANONICAL_WARMUP] job failed",
+    );
+    throw error;
   }
 }
 
@@ -4679,8 +5207,11 @@ function reconstructOriginText(segments: OriginSegment[]): string {
 }
 
 function initializeTranslationWorkers() {
-  registerTranslationV2Processor(handleTranslationV2Job);
-  app.log.info("[STARTUP] Translation queue workers registered");
+  registerTranslationWorkers(() => {
+    registerTranslationV2Processor(handleTranslationV2Job);
+    registerCanonicalWarmupProcessor(handleCanonicalWarmupJob);
+    app.log.info("[STARTUP] Translation queue workers registered");
+  });
 }
 
 async function cancelTranslationDeletes(
@@ -5244,6 +5775,7 @@ async function registerPluginsAndRoutes() {
 
 async function bootstrap() {
   try {
+    console.log('[BOOT] REDIS_URL =', process.env.REDIS_URL ?? '(empty)');
     app.log.info("[STARTUP] Connecting to MongoDB...");
     await mongoose.connect(process.env.MONGO_URI!);
     app.log.info("[STARTUP] MongoDB connected");

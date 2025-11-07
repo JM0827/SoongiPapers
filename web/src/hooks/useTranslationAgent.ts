@@ -20,6 +20,7 @@ import {
 } from "../lib/originPrep";
 import { dedupeAgentPages, normalizeAgentPageEvent } from "../lib/agentPage";
 import type { TranslationStreamEvent } from "../services/api";
+import { useCanonicalWarmup } from "./useCanonicalWarmup";
 
 const V2_STAGE_ORDER = ["draft", "revise", "micro-check"] as const;
 
@@ -91,10 +92,23 @@ const normalizeStageStatus = (
 const deriveCursorForEnvelope = (
   envelope: TranslationAgentPageV2,
 ): string | null => {
+  const stage =
+    typeof envelope.tier === "string" && envelope.tier.trim().length
+      ? envelope.tier.trim()
+      : envelope.chunk_id.split(":")[0]?.trim() ?? null;
+  if (!stage) return null;
+  if (Array.isArray(envelope.segment_hashes)) {
+    const hash = envelope.segment_hashes.find(
+      (entry) => typeof entry === "string" && entry.trim().length > 0,
+    );
+    if (hash) {
+      return `${stage}:${hash}`;
+    }
+  }
+
+  // Legacy fallback: derive from chunk_id index
   const chunkParts = envelope.chunk_id.split(":");
   if (!chunkParts.length) return null;
-  const stage = chunkParts[0]?.trim();
-  if (!stage) return null;
   if (chunkParts.length <= 2) {
     return `${stage}:0`;
   }
@@ -213,6 +227,12 @@ export const useTranslationAgent = ({
   const translation = useWorkflowStore((state) => state.translation);
   const setTranslation = useWorkflowStore((state) => state.setTranslation);
   const resetTranslation = useWorkflowStore((state) => state.resetTranslation);
+  useCanonicalWarmup({
+    token,
+    projectId,
+    jobId: translation.jobId,
+    cacheState: translation.canonicalCacheState ?? null,
+  });
   const onCompletedRef = useRef(onCompleted ?? null);
   const completedNotifiedRef = useRef(false);
   const setTranslationForProject = useCallback(
@@ -409,6 +429,8 @@ export const useTranslationAgent = ({
           return acc;
         }, {});
 
+      const canonicalCacheState = summary.canonicalCacheState;
+
       setTranslationForProject((current) => ({
         status:
           reconnectLimitReached && runStatus === "running"
@@ -457,6 +479,7 @@ export const useTranslationAgent = ({
           ),
           byReason: followupByReason,
         },
+        canonicalCacheState,
       }));
     },
     [
@@ -892,6 +915,8 @@ export const useTranslationAgent = ({
                 heartbeatAt: Date.now(),
                 nextRetryDelayMs: current.run.nextRetryDelayMs ?? null,
               }),
+              canonicalCacheState:
+                response.canonicalCacheState ?? current.canonicalCacheState,
             };
           });
 
@@ -1341,7 +1366,27 @@ export const useTranslationAgent = ({
       if (!projectId) {
         return;
       }
-      if (!originText.trim()) {
+
+      const resolvedOriginDocId =
+        options?.originPrep?.upload.originFileId ??
+        originPrepRef.current?.upload.originFileId ??
+        null;
+      const trimmedOriginDocId =
+        typeof resolvedOriginDocId === "string" && resolvedOriginDocId.trim().length
+          ? resolvedOriginDocId.trim()
+          : null;
+      const hasOriginText = originText.trim().length > 0;
+      if (!trimmedOriginDocId && !hasOriginText) {
+        pushAssistant(
+          localize(
+            "translation_origin_missing",
+            "원문을 먼저 저장한 뒤 번역을 시작해 주세요.",
+          ),
+          {
+            label: localize("origin_prep_guard_label", "Prep needed"),
+            tone: "default",
+          },
+        );
         return;
       }
 
@@ -1385,14 +1430,22 @@ export const useTranslationAgent = ({
         lastEnvelope: null,
       });
       try {
-        const response = await api.startTranslation(token, {
+        const translationPayload: Parameters<
+          typeof api.startTranslation
+        >[1] = {
           documentId: projectId,
-          originalText: originText,
-          targetLang: targetLang ?? undefined,
           project_id: projectId,
+          targetLang: targetLang ?? undefined,
           workflowLabel: options?.label ?? null,
           workflowAllowParallel: options?.allowParallel ?? false,
-        });
+        };
+        if (trimmedOriginDocId) {
+          translationPayload.originDocumentId = trimmedOriginDocId;
+        } else {
+          translationPayload.originalText = originText;
+        }
+
+        const response = await api.startTranslation(token, translationPayload);
         const totalPassesRaw =
           typeof response.totalPasses === "number" && response.totalPasses > 0
             ? response.totalPasses

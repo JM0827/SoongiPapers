@@ -5,8 +5,12 @@ import TranslationSegment, {
 } from "../models/TranslationSegment";
 import Proofreading from "../models/Proofreading";
 import OriginFile from "../models/OriginFile";
-import { segmentOriginText } from "../agents/translation/segmentationAgent";
 import { emitProofreadEditorUpdate } from "./proofreadEditorEvents";
+import { translationRunId } from "./translationEvents";
+import {
+  getCanonicalCacheState,
+  type CanonicalCacheState,
+} from "./translation/canonicalCache";
 
 export interface ProofreadEditorDatasetSummary {
   id: string;
@@ -50,6 +54,7 @@ export interface ProofreadEditorResponse {
     translationVersion: string;
   };
   featureToggles: Record<string, boolean>;
+  canonicalCacheState: CanonicalCacheState;
 }
 
 export interface BuildProofreadEditorDatasetParams {
@@ -63,6 +68,25 @@ const toIsoString = (value: Date | null | undefined): string | null =>
 
 const ensureObjectId = (value: string | Types.ObjectId): Types.ObjectId =>
   value instanceof Types.ObjectId ? value : new Types.ObjectId(value);
+
+const normalizeJobId = (value: unknown): string | null => {
+  if (typeof value === "string" && value.trim().length) {
+    return value.trim();
+  }
+  return null;
+};
+
+const resolveCanonicalCacheStateForJob = async (
+  jobId?: string | null,
+): Promise<CanonicalCacheState> => {
+  const normalized = normalizeJobId(jobId);
+  if (!normalized) {
+    return "missing";
+  }
+  const runId = translationRunId(normalized);
+  const snapshot = await getCanonicalCacheState({ runId });
+  return snapshot.state;
+};
 
 export interface ProofreadEditorPatchSegmentInput {
   segmentId: string;
@@ -128,29 +152,7 @@ export async function buildProofreadEditorDataset(
     }
 
     const originText = originDoc.text_content ?? "";
-    let originSegments: { id: string; index: number; text: string }[] = [];
-
-    if (originText.trim()) {
-      try {
-        const segmentation = segmentOriginText({
-          text: originText,
-          projectId,
-        });
-        originSegments = segmentation.segments.map((segment) => ({
-          id: segment.id,
-          index: segment.index,
-          text: segment.text,
-        }));
-      } catch (error) {
-        originSegments = [
-          {
-            id: "seg-0001",
-            index: 0,
-            text: originText.trim(),
-          },
-        ];
-      }
-    }
+    const originSegments = buildLightweightOriginSegments(originText);
 
     const documentVersion =
       toIsoString(originDoc.updated_at) ?? `${Date.now()}`;
@@ -198,6 +200,8 @@ export async function buildProofreadEditorDataset(
       proofreadUpdatedAt: null,
     };
 
+    const canonicalCacheState = await resolveCanonicalCacheStateForJob(jobId);
+
     return {
       dataset,
       segments: segmentPayloads,
@@ -211,6 +215,7 @@ export async function buildProofreadEditorDataset(
         originOnly: true,
         readOnly: true,
       },
+      canonicalCacheState,
     };
   }
 
@@ -276,6 +281,13 @@ export async function buildProofreadEditorDataset(
     proofreadUpdatedAt: toIsoString(proofreadDoc?.updated_at ?? null),
   };
 
+  const translationJobId =
+    normalizeJobId((translationFile.job_id as unknown as string | undefined) ?? jobId) ??
+    null;
+  const canonicalCacheState = await resolveCanonicalCacheStateForJob(
+    translationJobId,
+  );
+
   return {
     dataset,
     segments: segmentPayloads,
@@ -286,6 +298,7 @@ export async function buildProofreadEditorDataset(
       translationVersion: documentVersion,
     },
     featureToggles: {},
+    canonicalCacheState,
   };
 }
 
@@ -446,4 +459,27 @@ export async function saveProofreadEditorSegments(
     ...response,
     clientMutationId,
   };
+}
+
+function buildLightweightOriginSegments(
+  originText: string,
+): Array<{ id: string; index: number; text: string }> {
+  const normalized = typeof originText === "string" ? originText : "";
+  const trimmed = normalized.trim();
+  if (!trimmed.length) {
+    return [];
+  }
+
+  const blocks = trimmed
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter((block) => block.length);
+
+  const segments = (blocks.length ? blocks : [trimmed]).map((block, index) => ({
+    id: `seg-${String(index + 1).padStart(4, "0")}`,
+    index,
+    text: block,
+  }));
+
+  return segments;
 }

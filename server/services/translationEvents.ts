@@ -4,6 +4,7 @@ import {
   updatePaginationMetrics,
   updateStageTimeline,
 } from "./translationSummaryState";
+import { recordTranslationMetricsSnapshot } from "./translationStreamMeta";
 
 export type TranslationStageStatus =
   | "queued"
@@ -40,6 +41,10 @@ export interface TranslationCompleteEvent {
   runId: string;
   translationFileId: string | null;
   completedAt: string;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+  costUsd?: number | null;
+  extras?: Record<string, unknown> | null;
 }
 
 export interface TranslationErrorEvent {
@@ -109,6 +114,35 @@ export function emitTranslationPage(event: TranslationPageEvent): void {
 }
 
 export function emitTranslationComplete(event: TranslationCompleteEvent): void {
+  if (event.runId) {
+    void recordTranslationMetricsSnapshot(
+      {
+        runId: event.runId,
+        projectId: event.projectId,
+        status: "done",
+        tokensIn:
+          event.tokensIn !== undefined && event.tokensIn !== null
+            ? event.tokensIn
+            : undefined,
+        tokensOut:
+          event.tokensOut !== undefined && event.tokensOut !== null
+            ? event.tokensOut
+            : undefined,
+        costUsd:
+          event.costUsd !== undefined && event.costUsd !== null
+            ? event.costUsd
+            : undefined,
+        extras: event.extras ?? undefined,
+      },
+      { mergeExtras: true },
+    ).catch((error) => {
+      // eslint-disable-next-line no-console -- surfaced during translation refactor rollout
+      console.warn("[TranslationSummary] failed to persist completion snapshot", {
+        runId: event.runId,
+        error,
+      });
+    });
+  }
   emitter.emit(channelFor(event.jobId, "complete"), event);
 }
 

@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS proofread_runs CASCADE;
 DROP TABLE IF EXISTS translation_memory_versions CASCADE;
 DROP TABLE IF EXISTS translation_memory CASCADE;
 DROP TABLE IF EXISTS translation_drafts CASCADE;
+DROP TABLE IF EXISTS translation_segment_meta CASCADE;
 DROP TABLE IF EXISTS proofreading_history CASCADE;
 DROP TABLE IF EXISTS proofreading_logs CASCADE;
 DROP TABLE IF EXISTS ebook_cover_sets CASCADE;
@@ -175,6 +176,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_drafts_job_stage
 
 CREATE INDEX IF NOT EXISTS idx_translation_drafts_project
   ON translation_drafts (project_id, stage);
+
+CREATE TABLE IF NOT EXISTS translation_segment_meta (
+  run_id TEXT NOT NULL,
+  segment_id TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  segment_order INT NOT NULL,
+  paragraph_index INT NOT NULL,
+  sentence_index INT,
+  start_offset INT NOT NULL,
+  end_offset INT NOT NULL,
+  overlap_prev BOOLEAN NOT NULL DEFAULT false,
+  overlap_next BOOLEAN NOT NULL DEFAULT false,
+  overlap_tokens INT NOT NULL DEFAULT 0,
+  token_estimate INT NOT NULL,
+  token_budget INT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, segment_id),
+  UNIQUE (run_id, hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tsm_run_hash
+  ON translation_segment_meta (run_id, hash);
 
 CREATE TABLE IF NOT EXISTS proofreading_history (
   id SERIAL PRIMARY KEY,

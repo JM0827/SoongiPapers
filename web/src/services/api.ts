@@ -39,6 +39,7 @@ import type {
   ProofreadingLogEntry,
   ProofreadRunSummary,
   TranslationRunSummary,
+  CanonicalCacheState,
 } from "../types/domain";
 import type { ModelListResponse } from "../types/model";
 import { streamNdjson } from "./sse";
@@ -75,6 +76,7 @@ export interface TranslationItemsFetchResponse {
   nextCursor: string | null;
   hasMore: boolean;
   total: number;
+  canonicalCacheState?: CanonicalCacheState;
 }
 
 export type QualityStreamStartEvent = {
@@ -1464,7 +1466,8 @@ export const api = {
     token: string,
     payload: {
       documentId: string;
-      originalText: string;
+      originDocumentId?: string | null;
+      originalText?: string;
       targetLang?: string;
       project_id: string;
       created_by?: string;
@@ -2119,6 +2122,22 @@ export const api = {
       headers: defaultHeaders(token),
     });
     return handle<TranslationItemsFetchResponse>(res);
+  },
+
+  async warmupCanonicalCache(config: {
+    token: string;
+    projectId: string;
+    jobId: string;
+  }): Promise<{ state: CanonicalCacheState | "warming" | "ready"; runId?: string | null }> {
+    const { token, projectId, jobId } = config;
+    const res = await fetch(
+      `${API_BASE}/api/projects/${projectId}/translations/${jobId}/canonical/warmup`,
+      {
+        method: "POST",
+        headers: defaultHeaders(token),
+      },
+    );
+    return handle(res);
   },
 
   async fetchProofreadSummary(

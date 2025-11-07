@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { requireAuthAndPlanCheck } from "../middleware/auth";
 import { NdjsonStreamWriter } from "../lib/ndjsonStream";
+import { query } from "../db";
+import { getStreamRunMetrics } from "../db/streamRunMetrics";
 import {
   subscribeTranslationEvents,
   type TranslationStageEvent,
@@ -21,6 +23,9 @@ import {
 } from "../services/translationStreamMeta";
 import { getTranslationItemsSlice } from "../services/translation/translationItemsSlice";
 import { getTranslationRunSummary } from "../services/translationSummary";
+import { enqueueCanonicalWarmupJob } from "../services/translation/canonicalWarmupQueue";
+import { getCanonicalCacheState } from "../services/translation/canonicalCache";
+import { updateCanonicalCacheState } from "../services/translationSummaryState";
 
 const HEARTBEAT_INTERVAL_MS = Math.max(
   10_000,
@@ -87,6 +92,89 @@ const translationStreamRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  fastify.post(
+    "/api/projects/:projectId/translations/:jobId/canonical/warmup",
+    {
+      preHandler: requireAuthAndPlanCheck,
+    },
+    async (request, reply) => {
+      const { projectId, jobId } = request.params as {
+        projectId: string;
+        jobId: string;
+      };
+
+      const normalizedProjectId = projectId?.trim();
+      const normalizedJobId = jobId?.trim();
+      if (!normalizedProjectId || !normalizedJobId) {
+        reply.status(400).send({ error: "invalid_params" });
+        return;
+      }
+
+      const runId = translationRunId(normalizedJobId);
+
+      try {
+        const { rows } = await query(
+          `SELECT id,
+                  project_id,
+                  origin_file,
+                  origin_lang,
+                  target_lang
+             FROM jobs
+            WHERE id = $1 AND project_id = $2 AND type = 'translate'
+            LIMIT 1`,
+          [normalizedJobId, normalizedProjectId],
+        );
+
+        if (!rows.length) {
+          reply.status(404).send({ error: "translation_job_not_found" });
+          return;
+        }
+
+        const streamRow = await getStreamRunMetrics(runId);
+        const cacheSnapshot = await getCanonicalCacheState({
+          runId,
+          extras: streamRow?.extras ?? null,
+        });
+
+        if (cacheSnapshot.state === "ready") {
+          reply.send({ state: "ready", runId });
+          return;
+        }
+
+        if (cacheSnapshot.state === "warming") {
+          reply.send({ state: "warming", runId });
+          return;
+        }
+
+        await updateCanonicalCacheState({
+          projectId: normalizedProjectId,
+          runId,
+          state: "warming",
+        });
+
+        await enqueueCanonicalWarmupJob({
+          projectId: normalizedProjectId,
+          jobId: normalizedJobId,
+          runId,
+          originDocumentId: rows[0].origin_file ?? null,
+          originLanguage: rows[0].origin_lang ?? null,
+          targetLanguage: rows[0].target_lang ?? null,
+        });
+
+        reply.code(202).send({ state: "warming", runId });
+      } catch (error) {
+        request.log.error(
+          { err: error, projectId: normalizedProjectId, jobId: normalizedJobId },
+          "[TranslationCanonical] warmup enqueue failed",
+        );
+        reply.status(500).send({
+          error: "canonical_warmup_failed",
+          message: "canonical 세그먼트를 준비하지 못했습니다.",
+        });
+      }
+    },
+  );
+
   fastify.get(
     "/api/projects/:projectId/translations/:runId/items",
     {
@@ -137,6 +225,7 @@ const translationStreamRoutes: FastifyPluginAsync = async (fastify) => {
           hasMore: slice.hasMore,
           total: slice.total,
           events: slice.events,
+          canonicalCacheState: summary.canonicalCacheState,
         });
         request.log.info(
           {

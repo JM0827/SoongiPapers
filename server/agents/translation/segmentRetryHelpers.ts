@@ -125,7 +125,7 @@ type AgentMetaBase = {
 };
 
 export function mergeAgentMeta<T extends AgentMetaBase>(left: T, right: T): T {
-  return {
+  const merged = {
     verbosity: left.verbosity,
     reasoningEffort: left.reasoningEffort,
     maxOutputTokens: Math.max(left.maxOutputTokens, right.maxOutputTokens),
@@ -138,5 +138,16 @@ export function mergeAgentMeta<T extends AgentMetaBase>(left: T, right: T): T {
       ...(left.attemptHistory ?? []),
       ...(right.attemptHistory ?? []),
     ],
-  } as T;
+  } as T & { lengthFailures?: unknown };
+
+  const leftLength = (left as { lengthFailures?: unknown[] }).lengthFailures ?? [];
+  const rightLength = (right as { lengthFailures?: unknown[] }).lengthFailures ?? [];
+  if (leftLength.length || rightLength.length) {
+    (merged as { lengthFailures: unknown[] }).lengthFailures = [
+      ...leftLength,
+      ...rightLength,
+    ];
+  }
+
+  return merged as T;
 }

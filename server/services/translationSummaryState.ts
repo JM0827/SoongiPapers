@@ -3,6 +3,8 @@ import {
   recordTranslationMetricsSnapshot,
   type TranslationMetricsSnapshot,
 } from "./translationStreamMeta";
+import { parseTranslationCursor } from "./translation/translationPages";
+import type { CanonicalCacheState } from "./translation/canonicalCache";
 
 export type TranslationStageKey = "draft" | "revise" | "microcheck";
 
@@ -17,10 +19,15 @@ export interface StageTimelineEntry {
 export interface TranslationSummaryExtras {
   stageTimeline?: Partial<Record<TranslationStageKey, StageTimelineEntry>>;
   segments?: {
-    total?: number | null;
-    processed?: number | null;
+    version?: number | null;
+    totalHashes?: number | null;
+    processedHashes?: number | null;
     microcheckCompleted?: boolean | null;
     updatedAt?: string;
+  };
+  canonicalCache?: {
+    state: CanonicalCacheState;
+    updatedAt?: string | null;
   };
   followups?: {
     total: number;
@@ -32,6 +39,7 @@ export interface TranslationSummaryExtras {
     hasMore: boolean;
     nextCursor: string | null;
     stage: string | null;
+    cursorHash?: string | null;
     updatedAt?: string;
   };
   retry?: {
@@ -111,9 +119,10 @@ export const updateStageTimeline = async (params: {
 export const updateSegmentsMetrics = async (params: {
   projectId: string | null;
   runId: string;
-  total?: number | null;
-  processed?: number | null;
+  totalHashes?: number | null;
+  processedHashes?: number | null;
   microcheckCompleted?: boolean;
+  segmentsVersion?: number | null;
 }): Promise<void> => {
   const existing = await getStreamRunMetrics(params.runId);
   const extras = cloneExtras(existing?.extras ?? {});
@@ -122,15 +131,21 @@ export const updateSegmentsMetrics = async (params: {
     ...(extras.segments ?? {}),
     updatedAt: nowIso,
   };
-  if (params.total !== undefined) {
-    extras.segments.total = params.total;
+  if (params.segmentsVersion !== undefined) {
+    extras.segments.version = params.segmentsVersion ?? null;
   }
-  if (params.processed !== undefined) {
-    extras.segments.processed = params.processed;
+  if (params.totalHashes !== undefined) {
+    extras.segments.totalHashes = params.totalHashes ?? null;
+  }
+  if (params.processedHashes !== undefined) {
+    extras.segments.processedHashes = params.processedHashes ?? null;
   }
   if (params.microcheckCompleted !== undefined) {
     extras.segments.microcheckCompleted = params.microcheckCompleted;
   }
+  const legacySegments = extras.segments as Record<string, unknown>;
+  delete legacySegments.total;
+  delete legacySegments.processed;
 
   const snapshot: TranslationMetricsSnapshot = {
     runId: params.runId,
@@ -186,10 +201,17 @@ export const updatePaginationMetrics = async (params: {
 }): Promise<void> => {
   const existing = await getStreamRunMetrics(params.runId);
   const extras = cloneExtras(existing?.extras ?? {});
+  const parsedCursor = parseTranslationCursor(params.nextCursor ?? null);
+  const sanitizedPagination = extras.pagination as Record<string, unknown> | undefined;
+  if (sanitizedPagination) {
+    delete sanitizedPagination.pages;
+    delete sanitizedPagination.items;
+  }
   extras.pagination = {
     hasMore: Boolean(params.hasMore),
     nextCursor: params.nextCursor ?? null,
-    stage: params.stage ?? null,
+    stage: params.stage ?? parsedCursor?.stage ?? null,
+    cursorHash: parsedCursor?.hash ?? null,
     updatedAt: new Date().toISOString(),
   };
 
@@ -198,6 +220,30 @@ export const updatePaginationMetrics = async (params: {
     projectId: params.projectId,
     extras: extras as Record<string, unknown>,
   };
+  await recordTranslationMetricsSnapshot(snapshot, {
+    existing,
+    mergeExtras: false,
+  });
+};
+
+export const updateCanonicalCacheState = async (params: {
+  projectId: string | null;
+  runId: string;
+  state: CanonicalCacheState;
+}): Promise<void> => {
+  const existing = await getStreamRunMetrics(params.runId);
+  const extras = cloneExtras(existing?.extras ?? {});
+  extras.canonicalCache = {
+    state: params.state,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const snapshot: TranslationMetricsSnapshot = {
+    runId: params.runId,
+    projectId: params.projectId,
+    extras: extras as Record<string, unknown>,
+  };
+
   await recordTranslationMetricsSnapshot(snapshot, {
     existing,
     mergeExtras: false,

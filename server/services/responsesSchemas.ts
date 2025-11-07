@@ -286,6 +286,9 @@ export const AgentItemsPayloadSchemaV2 = z
     index_base: z.union([z.literal(0), z.literal(1)]).optional(),
     offset_semantics: z.literal("[start,end)").optional(),
     partial: z.boolean().optional(),
+    segment_hashes: z.array(z.string()).optional(),
+    validator_flags: z.record(z.array(z.string())).optional(),
+    autoFixesApplied: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -380,6 +383,9 @@ export const AgentItemsResponseSchemaV2 = z
     offset_semantics: z.literal("[start,end)"),
     stats: AgentStatsSchemaV2,
     metrics: AgentMetricsSchemaV2,
+    segment_hashes: z.array(z.string()),
+    validator_flags: z.record(z.array(z.string())).optional(),
+    autoFixesApplied: z.array(z.string()).optional(),
     items: z.array(AgentItemSchemaV2),
     has_more: z.boolean(),
     next_cursor: z.string().nullable(),
@@ -442,6 +448,7 @@ export const agentItemsResponseJsonSchemaV2 = {
     "truncated",
     "index_base",
     "offset_semantics",
+    "segment_hashes",
     "items",
     "has_more",
     "next_cursor",
@@ -493,6 +500,21 @@ export const agentItemsResponseJsonSchemaV2 = {
     items: {
       type: "array",
       items: agentItemJsonSchemaV2,
+    },
+    segment_hashes: {
+      type: "array",
+      items: { type: "string" },
+    },
+    validator_flags: {
+      type: "object",
+      additionalProperties: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+    autoFixesApplied: {
+      type: "array",
+      items: { type: "string" },
     },
     has_more: { type: "boolean" },
     next_cursor: { type: ["string", "null"] },

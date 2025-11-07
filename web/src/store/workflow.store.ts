@@ -80,6 +80,9 @@ export interface AgentPageV2 {
     cursor_retry_count: number;
   };
   provider_response_id?: string | null;
+  segment_hashes: string[];
+  validator_flags?: Record<string, string[]>;
+  autoFixesApplied?: string[];
   items: AgentItemV2[];
   has_more: boolean;
   next_cursor: string | null;
@@ -141,6 +144,8 @@ export interface TranslationAgentState {
   subStates: AgentSubState[];
   pages: TranslationAgentPageV2[];
   lastEnvelope: TranslationAgentPageV2 | null;
+  originDocumentId?: string | null;
+  canonicalCacheState?: "ready" | "warming" | "missing";
   followupSummary?: {
     total: number;
     byStage: Record<string, number>;
@@ -284,6 +289,8 @@ const defaultTranslationState: TranslationAgentState = {
   subStates: [],
   pages: [],
   lastEnvelope: null,
+  originDocumentId: null,
+  canonicalCacheState: undefined,
   followupSummary: undefined,
   pendingCursors: [],
   processedCursors: [],

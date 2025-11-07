@@ -31,6 +31,7 @@ describe("runMicroChecks", () => {
     expect(result.segments).toHaveLength(1);
     expect(result.segments[0].guards.lengthOk).toBe(true);
     expect(result.segments[0].needsFollowup).toBe(false);
+    expect(result.tokenBudget).toBeUndefined();
   });
 
   it("flags segments outside ratio bounds without setting needsFollowup", () => {
@@ -48,5 +49,6 @@ describe("runMicroChecks", () => {
     expect(result.segments[0].guards.lengthOk).toBe(false);
     expect(result.segments[0].needsFollowup).toBe(false);
     expect(result.segments[0].notes.guardFindings).toHaveLength(1);
+    expect(result.tokenBudget).toBeUndefined();
   });
 });

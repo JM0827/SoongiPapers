@@ -369,6 +369,7 @@ export interface ProofreadEditorResponse {
   issueAssignments: Record<string, string[]>;
   versions: ProofreadEditorVersions;
   featureToggles: Record<string, boolean>;
+  canonicalCacheState: CanonicalCacheState;
 }
 
 export interface ProofreadStreamMeta {
@@ -433,6 +434,7 @@ export interface TranslationStreamMeta {
 }
 
 export type TranslationStageId = "draft" | "revise" | "microcheck";
+export type CanonicalCacheState = "ready" | "warming" | "missing";
 
 export interface TranslationRunSummary {
   projectId: string;
@@ -444,6 +446,7 @@ export interface TranslationRunSummary {
   jobId: string | null;
   sourceFileId: string | null;
   memoryVersion: number | null;
+  canonicalCacheState: CanonicalCacheState;
   translation: {
     id: string | null;
     status: "queued" | "running" | "done" | "error";
@@ -469,6 +472,13 @@ export interface TranslationRunSummary {
     segmentsTotal: number;
     segmentsCompleted: number;
     percent: number;
+    microcheckCompleted: boolean;
+    hashes: {
+      version: number | null;
+      total: number;
+      processed: number;
+      microcheckCompleted: boolean;
+    };
     byStage: Record<TranslationStageId, {
       segmentsDone: number;
       segmentsTotal: number;
@@ -501,6 +511,7 @@ export interface TranslationRunSummary {
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
+    cursorHash: string | null;
   };
   errors: {
     lastErrorCode: string | null;

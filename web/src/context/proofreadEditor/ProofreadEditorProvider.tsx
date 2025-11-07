@@ -13,6 +13,7 @@ import {
   proofreadEditorKeys,
   useProofreadEditorDataset,
 } from "../../hooks/useProofreadEditorDataset";
+import { useCanonicalWarmup } from "../../hooks/useCanonicalWarmup";
 import type {
   ProofreadEditorDatasetSummary,
   ProofreadEditorIssueEntry,
@@ -385,6 +386,14 @@ export const ProofreadEditorProvider = ({
     projectId,
     jobId,
     translationFileId,
+  });
+
+  const warmupJobId = datasetQuery.data?.dataset?.jobId ?? jobId ?? null;
+  useCanonicalWarmup({
+    token,
+    projectId,
+    jobId: warmupJobId,
+    cacheState: datasetQuery.data?.canonicalCacheState ?? null,
   });
 
   const { refetch: rawDatasetRefetch } = datasetQuery;

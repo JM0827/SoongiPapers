@@ -456,6 +456,7 @@ const buildBucketEntry = (
       cursor_retry_count: runMeta?.cursorRetryCount ?? 0,
     },
     items,
+    segment_hashes: [],
     has_more: false,
     next_cursor: null,
     provider_response_id: runMeta?.requestId ?? null,

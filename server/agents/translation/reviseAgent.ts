@@ -9,7 +9,8 @@ import {
   runResponsesWithRetry,
   type ResponsesRetryAttemptContext,
 } from "../../services/openaiResponses";
-import { mergeAgentMeta } from "./segmentRetryHelpers";
+import { mergeAgentMeta, splitOriginSegmentForRetry } from "./segmentRetryHelpers";
+import { calculateTokenBudget } from "../../services/translation/tokenBudget";
 
 import type {
   ResponseReasoningEffort,
@@ -28,6 +29,8 @@ export interface TranslationReviseAgentOptions {
   reasoningEffort?: ResponseReasoningEffort;
   maxOutputTokens?: number;
   allowSegmentRetry?: boolean;
+  originLanguage?: string | null;
+  targetLanguage?: string | null;
 }
 
 export interface TranslationReviseSegmentResult {
@@ -55,6 +58,11 @@ export interface TranslationReviseAgentResultMeta {
   downshiftCount?: number;
   forcedPaginationCount?: number;
   cursorRetryCount?: number;
+  lengthFailures?: Array<{
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }>;
 }
 
 export interface TranslationReviseAgentResult {
@@ -88,6 +96,51 @@ const DEFAULT_REVISE_MODEL =
   process.env.TRANSLATION_REVISE_MODEL_V2?.trim() ||
   process.env.CHAT_MODEL?.trim() ||
   "gpt-5-mini";
+
+const estimateTokens = (text: string): number => {
+  const trimmed = text.trim();
+  if (!trimmed.length) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+};
+
+const normalizeLang = (value?: string | null): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  const [primary] = trimmed.split(/[-_]/);
+  if (!primary) return null;
+  if (primary.startsWith("ko")) return "ko";
+  if (primary.startsWith("en")) return "en";
+  return primary.slice(0, 2);
+};
+
+const buildDirection = (
+  sourceLanguage?: string | null,
+  targetLanguage?: string | null,
+): string | null => {
+  const source = normalizeLang(sourceLanguage);
+  const target = normalizeLang(targetLanguage);
+  if (!source || !target) return null;
+  return `${source}-${target}`;
+};
+
+const buildBudgetSegments = (segments: OriginSegment[]) =>
+  segments.map((segment) => {
+    const text = segment.text ?? "";
+    return {
+      tokenEstimate: estimateTokens(text),
+      text,
+    };
+  });
+
+const resolveRetryMinTokens = (cap: number): number => {
+  if (!Number.isFinite(cap) || cap <= 0) {
+    return 1;
+  }
+  const half = Math.floor(cap * 0.5);
+  const baseline = Math.max(40, half);
+  return Math.max(1, Math.min(cap, baseline));
+};
 const FALLBACK_REVISE_MODEL =
   process.env.TRANSLATION_REVISE_VALIDATION_MODEL_V2?.trim() || "gpt-5-mini";
 const DEFAULT_REVISE_VERBOSITY = normalizeVerbosity(
@@ -201,6 +254,11 @@ export async function generateTranslationRevision(
   const baseEffort = options.reasoningEffort || DEFAULT_REVISE_REASONING_EFFORT;
   const baseMaxTokens =
     options.maxOutputTokens ?? DEFAULT_REVISE_MAX_OUTPUT_TOKENS;
+  const isDeepRevise = baseEffort === "high";
+  const direction = buildDirection(
+    options.originLanguage ?? null,
+    options.targetLanguage ?? null,
+  );
 
   const systemPrompt = buildRevisePrompt(options.translationNotes ?? null);
   const userPayload = buildRevisePayload(options);
@@ -250,8 +308,16 @@ export async function generateTranslationRevision(
     return primaryAttemptConfigs[boundedIndex];
   };
 
+  const singleSegmentSplits =
+    options.originSegments.length === 1
+      ? splitOriginSegmentForRetry(options.originSegments[0])
+      : null;
+  const hasSplittableSingleSegment = Boolean(
+    singleSegmentSplits && singleSegmentSplits.length > 1,
+  );
   const canSegmentRetry =
-    (options.allowSegmentRetry ?? true) && options.originSegments.length > 1;
+    (options.allowSegmentRetry ?? true) &&
+    (options.originSegments.length > 1 || hasSplittableSingleSegment);
 
   const draftSegmentMap = new Map(
     options.draftSegments.map((segment) => [segment.segment_id, segment]),
@@ -269,6 +335,11 @@ export async function generateTranslationRevision(
   let segmentRetryMeta: TranslationReviseAgentResultMeta | null = null;
   let segmentRetryModel: string | null = null;
   let segmentRetryRuns: TranslationReviseLLMRunMeta[] | null = null;
+  const lengthFailureEvents: Array<{
+    segmentIds: string[];
+    maxOutputTokens: number;
+    intendedTokens: number;
+  }> = [];
 
   const describeAttempt = (
     context: ResponsesRetryAttemptContext,
@@ -373,7 +444,77 @@ export async function generateTranslationRevision(
   ): Promise<TranslationReviseAgentResult | null> => {
     if (!segmentsToProcess.length) return null;
     if (segmentsToProcess.length <= 1) {
-      return null;
+      const original = segmentsToProcess[0];
+      if (!original) return null;
+      const subdivisions = splitOriginSegmentForRetry(original);
+      if (subdivisions.length <= 1) {
+        return null;
+      }
+
+      const draftOriginal = draftSegmentMap.get(original.id);
+      if (!draftOriginal) {
+        return null;
+      }
+      const draftPieces = splitDraftSegmentForRetry(draftOriginal, subdivisions);
+
+      const aggregateUsage = { inputTokens: 0, outputTokens: 0 };
+      let aggregateMeta: TranslationReviseAgentResultMeta | null = null;
+      const aggregateSegments: TranslationReviseSegmentResult[] = [];
+      const aggregateRuns: TranslationReviseLLMRunMeta[] = [];
+      let aggregateModel: string | null = null;
+
+      for (let index = 0; index < subdivisions.length; index += 1) {
+        const subdivision = subdivisions[index];
+        const draftPiece = draftPieces[index];
+        const budget = calculateTokenBudget({
+          originSegments: buildBudgetSegments([subdivision]),
+          mode: "revise",
+          direction: direction ?? undefined,
+          isDeepRevise,
+        });
+
+        const pieceResult = await generateTranslationRevision({
+          ...options,
+          originSegments: [subdivision],
+          draftSegments: [draftPiece],
+          allowSegmentRetry: false,
+          maxOutputTokens: budget.tokensInCap,
+        });
+
+        aggregateUsage.inputTokens += pieceResult.usage.inputTokens;
+        aggregateUsage.outputTokens += pieceResult.usage.outputTokens;
+        aggregateSegments.push(...pieceResult.segments);
+        aggregateModel = aggregateModel ?? pieceResult.model;
+
+        aggregateMeta = aggregateMeta
+          ? mergeAgentMeta(aggregateMeta, pieceResult.meta)
+          : pieceResult.meta;
+
+        if (pieceResult.llm?.runs?.length) {
+          aggregateRuns.push(...pieceResult.llm.runs);
+        }
+      }
+
+      if (!aggregateMeta) {
+        return null;
+      }
+
+      aggregateMeta.truncated = false;
+      aggregateMeta.attemptHistory = [
+        ...(aggregateMeta.attemptHistory ?? []),
+        context,
+      ];
+
+      const mergedText = mergeSegmentsToText(subdivisions, aggregateSegments);
+
+      return {
+        segments: aggregateSegments,
+        mergedText,
+        usage: aggregateUsage,
+        meta: aggregateMeta,
+        model: aggregateModel ?? options.model ?? DEFAULT_REVISE_MODEL,
+        llm: aggregateRuns.length ? { runs: aggregateRuns } : undefined,
+      } satisfies TranslationReviseAgentResult;
     }
 
     const midpoint = Math.max(1, Math.floor(segmentsToProcess.length / 2));
@@ -395,7 +536,12 @@ export async function generateTranslationRevision(
       originSegments: leftSegments,
       draftSegments: leftDraftSegments,
       allowSegmentRetry: false,
-      maxOutputTokens: context.maxOutputTokens,
+      maxOutputTokens: calculateTokenBudget({
+        originSegments: buildBudgetSegments(leftSegments),
+        mode: "revise",
+        direction: direction ?? undefined,
+        isDeepRevise,
+      }).tokensInCap,
     };
 
     const rightOptions: TranslationReviseAgentOptions = {
@@ -403,7 +549,12 @@ export async function generateTranslationRevision(
       originSegments: rightSegments,
       draftSegments: rightDraftSegments,
       allowSegmentRetry: false,
-      maxOutputTokens: context.maxOutputTokens,
+      maxOutputTokens: calculateTokenBudget({
+        originSegments: buildBudgetSegments(rightSegments),
+        mode: "revise",
+        direction: direction ?? undefined,
+        isDeepRevise,
+      }).tokensInCap,
     };
 
     const leftResult = await generateTranslationRevision(leftOptions);
@@ -452,12 +603,13 @@ export async function generateTranslationRevision(
   let downshiftCount = 0;
   let forcedPaginationCount = 0;
   let cursorRetryCount = 0;
+  const minOutputTokens = resolveRetryMinTokens(baseMaxTokens);
   const runResult = await runResponsesWithRetry<Response>({
     client: openai,
     initialMaxOutputTokens: baseMaxTokens,
     maxOutputTokensCap: REVISE_MAX_OUTPUT_TOKENS_CAP,
     maxAttempts: Math.max(attemptConfigs.length + 2, 3),
-    minOutputTokens: 200,
+    minOutputTokens,
     onAttempt: (context) => {
       if (context.stage === "downshift" || context.stage === "minimal") {
         downshiftCount += 1;
@@ -517,6 +669,14 @@ export async function generateTranslationRevision(
     finishReason === "length" ||
     responseStatus === "incomplete" ||
     incompleteReason === "max_output_tokens";
+
+  if (truncatedByLength) {
+    lengthFailureEvents.push({
+      segmentIds: options.originSegments.map((segment) => segment.id),
+      maxOutputTokens: runResult.maxOutputTokens,
+      intendedTokens: baseMaxTokens,
+    });
+  }
 
   if (truncatedByLength && !segmentRetrySegments) {
     const fallbackContext =
@@ -700,6 +860,11 @@ export async function generateTranslationRevision(
       } satisfies TranslationReviseSegmentResult;
     });
 
+  const combinedLengthFailures = [
+    ...lengthFailureEvents,
+    ...(segmentMeta?.lengthFailures ?? []),
+  ];
+
   const finalSegments = retrySegments ?? orderedSegments;
   const mergedText = mergeSegmentsToText(options.originSegments, finalSegments);
   return {
@@ -720,6 +885,7 @@ export async function generateTranslationRevision(
       downshiftCount,
       forcedPaginationCount,
       cursorRetryCount,
+      lengthFailures: combinedLengthFailures,
     },
     llm: { runs: retryRuns ? [...retryRuns, llmRun] : [llmRun] },
   };
@@ -799,6 +965,37 @@ function buildRevisePayload(options: TranslationReviseAgentOptions) {
       };
     }),
   };
+}
+
+function splitDraftSegmentForRetry(
+  draft: TranslationDraftAgentSegmentResult,
+  subdivisions: OriginSegment[],
+): TranslationDraftAgentSegmentResult[] {
+  const translation = draft.translation_segment ?? draft.origin_segment ?? "";
+  const originLengths = subdivisions.map((piece) => piece.text.length || 1);
+  const totalOriginLength = originLengths.reduce((acc, value) => acc + value, 0) || 1;
+  const totalTranslationLength = translation.length;
+  let cursor = 0;
+
+  return subdivisions.map((piece, index) => {
+    let shareLength = index === subdivisions.length - 1
+      ? totalTranslationLength - cursor
+      : Math.round((totalTranslationLength * originLengths[index]) / totalOriginLength);
+
+    shareLength = Math.max(0, Math.min(shareLength, totalTranslationLength - cursor));
+    const pieceTranslation = translation.slice(cursor, cursor + shareLength).trim();
+    cursor += shareLength;
+
+    return {
+      ...draft,
+      segment_id: piece.id,
+      origin_segment: piece.text,
+      translation_segment: pieceTranslation || draft.translation_segment || piece.text,
+      notes: draft.notes ? [...draft.notes] : [],
+      spanPairs: draft.spanPairs ? [...draft.spanPairs] : undefined,
+      candidates: draft.candidates ? [...draft.candidates] : undefined,
+    } satisfies TranslationDraftAgentSegmentResult;
+  });
 }
 
 function mergeSegmentsToText(

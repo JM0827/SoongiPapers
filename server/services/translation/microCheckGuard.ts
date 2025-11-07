@@ -23,6 +23,7 @@ export interface MicroCheckSegmentResult {
 export interface MicroCheckResult {
   segments: MicroCheckSegmentResult[];
   violationCount: number;
+  tokenBudget?: number;
 }
 
 const LENGTH_RATIO_MIN = 0.7;

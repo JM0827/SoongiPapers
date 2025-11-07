@@ -14,6 +14,10 @@ import type {
   TranslationSummaryExtras,
 } from "./translationSummaryState";
 import { translationRunId } from "./translationEvents";
+import {
+  getCanonicalCacheState,
+  type CanonicalCacheSnapshot,
+} from "./translation/canonicalCache";
 
 interface StageProgressRow {
   stage: string;
@@ -34,6 +38,7 @@ export interface TranslationRunSummaryResponse {
   jobId: string | null;
   sourceFileId: string | null;
   memoryVersion: number | null;
+  canonicalCacheState: CanonicalCacheSnapshot["state"];
   translation: {
     id: string | null;
     status: "queued" | "running" | "done" | "error";
@@ -59,6 +64,13 @@ export interface TranslationRunSummaryResponse {
     segmentsTotal: number;
     segmentsCompleted: number;
     percent: number;
+    microcheckCompleted: boolean;
+    hashes: {
+      version: number | null;
+      total: number;
+      processed: number;
+      microcheckCompleted: boolean;
+    };
     byStage: Record<TranslationStageId, {
       segmentsDone: number;
       segmentsTotal: number;
@@ -91,6 +103,7 @@ export interface TranslationRunSummaryResponse {
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
+    cursorHash: string | null;
   };
   errors: {
     lastErrorCode: string | null;
@@ -192,6 +205,78 @@ const toIso = (value: Date | string | null | undefined): string | null => {
     return date.toISOString();
   } catch (error) {
     return null;
+  }
+};
+
+const toSafeNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return null;
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (typeof value === "string" && value.trim().length) {
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const pickFirstPositive = (
+  ...values: Array<number | null | undefined>
+): number => {
+  for (const value of values) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    const normalized = Number(value);
+    if (Number.isFinite(normalized) && normalized > 0) {
+      return Math.floor(normalized);
+    }
+  }
+  return 0;
+};
+
+interface CanonicalSegmentStats {
+  total: number;
+  overlapCount: number;
+}
+
+const loadCanonicalSegmentStats = async (
+  runId: string | null,
+): Promise<CanonicalSegmentStats> => {
+  if (!runId) {
+    return { total: 0, overlapCount: 0 };
+  }
+  try {
+    const { rows } = await query(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN overlap_prev OR overlap_next THEN 1 ELSE 0 END), 0) AS overlap_count
+         FROM translation_segment_meta
+        WHERE run_id = $1`,
+      [runId],
+    );
+    if (!rows.length) {
+      return { total: 0, overlapCount: 0 };
+    }
+    const row = rows[0] as { total?: number | string; overlap_count?: number | string | null };
+    return {
+      total: Number(row.total ?? 0) || 0,
+      overlapCount: Number(row.overlap_count ?? 0) || 0,
+    };
+  } catch (error) {
+    // eslint-disable-next-line no-console -- surface only during summary rebuild rollout
+    console.warn("[TranslationSummary] failed to load canonical segment stats", {
+      runId,
+      error,
+    });
+    return { total: 0, overlapCount: 0 };
   }
 };
 
@@ -366,8 +451,15 @@ export async function getTranslationRunSummary(
   const resolvedRunId = runId ?? translationRunId(resolvedJobId);
   runId = resolvedRunId;
 
-  const [draftDoc, stageProgressMap, streamMeta, streamRow, workflowRun, fileRecord] =
-    await Promise.all([
+  const [
+    draftDoc,
+    stageProgressMap,
+    streamMeta,
+    streamRow,
+    workflowRun,
+    fileRecord,
+    canonicalStats,
+  ] = await Promise.all([
       TranslationDraft.findOne({
         project_id: projectId,
         job_id: resolvedJobId,
@@ -391,6 +483,7 @@ export async function getTranslationRunSummary(
       getStreamRunMetrics(runId),
       loadWorkflowRun(projectId, resolvedJobId),
       loadTranslationFile(projectId, resolvedJobId),
+      loadCanonicalSegmentStats(resolvedRunId),
     ]);
 
   const stageProgress = DEFAULT_STAGE_KEYS.map((stage) => ({
@@ -398,7 +491,18 @@ export async function getTranslationRunSummary(
     progress: stageProgressMap.get(stage),
   }));
 
+  const canonicalSegmentsTotal = canonicalStats.total ?? 0;
+  if (canonicalSegmentsTotal > 0) {
+    for (const entry of stageProgressMap.values()) {
+      entry.segments_total = canonicalSegmentsTotal;
+    }
+  }
+
   const extras = toSummaryExtras(streamRow?.extras ?? null);
+  const canonicalCache = await getCanonicalCacheState({
+    runId: resolvedRunId,
+    extras,
+  });
   const stageTimeline: Partial<Record<TranslationStageId, StageTimelineEntry>> =
     extras.stageTimeline ?? {};
 
@@ -428,14 +532,27 @@ export async function getTranslationRunSummary(
     ? (((draftDoc?.metadata as { originSegments?: unknown[] }).originSegments ?? []) as Array<{ id: string }>)
     : [];
 
-  const segmentsTotalFallback = Math.max(
+  const extrasSegments = extras.segments ?? {};
+  const legacySegments = extrasSegments as {
+    total?: unknown;
+    processed?: unknown;
+  };
+  const extrasSegmentsVersion = toSafeNumber(
+    (extrasSegments as { version?: unknown }).version,
+  );
+  const extrasTotalHashes = toSafeNumber(
+    (extrasSegments as { totalHashes?: unknown }).totalHashes ?? legacySegments.total,
+  );
+  const extrasProcessedHashes = toSafeNumber(
+    (extrasSegments as { processedHashes?: unknown }).processedHashes ?? legacySegments.processed,
+  );
+
+  const segmentsTotal = pickFirstPositive(
+    canonicalSegmentsTotal,
+    extrasTotalHashes,
     segmentsTotalFromProgress,
     originSegments.length,
   );
-  const segmentsTotal =
-    extras.segments?.total !== undefined && extras.segments.total !== null
-      ? Number(extras.segments.total) || 0
-      : segmentsTotalFallback;
 
   const lastStageWithProgress = stageProgress
     .slice()
@@ -446,18 +563,20 @@ export async function getTranslationRunSummary(
     ? lastStageWithProgress.progress?.segments_done ?? 0
     : 0;
 
-  const segmentsCompleted =
-    extras.segments?.processed !== undefined &&
-    extras.segments?.processed !== null
-      ? Number(extras.segments.processed) || 0
-      : segmentsCompletedFallback;
+  const segmentsCompletedCandidate =
+    extrasProcessedHashes ?? segmentsCompletedFallback ?? 0;
+  const segmentsCompleted = segmentsTotal > 0
+    ? Math.min(segmentsTotal, Math.max(0, Math.floor(segmentsCompletedCandidate)))
+    : Math.max(0, Math.floor(segmentsCompletedCandidate));
 
   const microcheckStatus = stageStatusList.find(
     (entry) => entry.stage === "microcheck",
   );
-  const microcheckCompleted =
-    extras.segments?.microcheckCompleted ??
-    (microcheckStatus?.status === "done" ? true : false);
+  const microcheckCompleted = Boolean(
+    extrasSegments.microcheckCompleted ??
+      (microcheckStatus?.status === "done" ? true : undefined) ??
+      (fileRecord ? true : false),
+  );
 
   const percent = calculatePercentComplete(
     segmentsTotal,
@@ -506,6 +625,7 @@ export async function getTranslationRunSummary(
     ? {
         hasMore: Boolean(extras.pagination.hasMore),
         nextCursor: extras.pagination.nextCursor ?? null,
+        cursorHash: extras.pagination.cursorHash ?? null,
       }
     : {
         hasMore:
@@ -516,6 +636,7 @@ export async function getTranslationRunSummary(
         nextCursor:
           (streamRow?.extras &&
             (streamRow.extras as { nextCursor?: string }).nextCursor) ?? null,
+        cursorHash: null,
       };
 
   const reconnectAttemptsFromStream =
@@ -585,6 +706,13 @@ export async function getTranslationRunSummary(
     runCompletedAt,
   );
 
+  const progressHashes = {
+    version: extrasSegmentsVersion ?? null,
+    total: segmentsTotal,
+    processed: segmentsCompleted,
+    microcheckCompleted,
+  };
+
   const summary: TranslationRunSummaryResponse = {
     projectId,
     runId,
@@ -596,6 +724,7 @@ export async function getTranslationRunSummary(
     jobId,
     sourceFileId: null,
     memoryVersion: null,
+    canonicalCacheState: canonicalCache.state,
     translation: {
       id: fileRecord?.id ?? null,
       status: translationStatus,
@@ -609,6 +738,8 @@ export async function getTranslationRunSummary(
       segmentsTotal,
       segmentsCompleted,
       percent,
+      microcheckCompleted,
+      hashes: progressHashes,
       byStage: progressByStage,
     },
     resilience: {
@@ -634,6 +765,7 @@ export async function getTranslationRunSummary(
     pagination: {
       hasMore: pagination.hasMore,
       nextCursor: pagination.nextCursor,
+      cursorHash: pagination.cursorHash,
     },
     errors: {
       lastErrorCode: streamRow?.error_code ?? null,

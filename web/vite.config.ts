@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
+import type { UserConfigExport } from "vite";
 import { configDefaults } from "vitest/config";
-import type { UserConfigExport as VitestConfigExport } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -18,7 +18,7 @@ const httpsConfig = httpsEnabled
     }
   : undefined;
 
-const config = {
+const config: UserConfigExport = {
   plugins: [react()],
   resolve: {
     alias: {
@@ -50,11 +50,29 @@ const config = {
           : "http://localhost:8080",
         changeOrigin: true,
         secure: httpsEnabled ? false : true,
-        configure: (proxy: { on: (event: string, handler: (req: { setHeader: (key: string, value: string) => void }) => void) => void }) => {
-          proxy.on("proxyReq", (proxyReq) => {
+        // configure: (proxy: { on: (event: string, handler: (req: { setHeader: (key: string, value: string) => void }) => void) => void }) => {
+        //   proxy.on("proxyReq", (proxyReq) => {
+        //     proxyReq.setHeader("accept-encoding", "identity");
+        //   });
+        // },
+        configure: (proxy: any) => {
+          // 요청 전: 압축 비활성화(스트림 버퍼링 방지) + 요청 로깅
+          proxy.on("proxyReq", (proxyReq: any, req: any) => {
             proxyReq.setHeader("accept-encoding", "identity");
+            console.log("[VITE PROXY][req]", req.method, req.url);
+          });
+          // 응답 수신 시: 상태 코드 로깅(8080에 붙는지 확인)
+          proxy.on("proxyRes", (proxyRes: any, req: any) => {
+            console.log("[VITE PROXY][res]", req.method, req.url, proxyRes.statusCode);
+          });
+          // 에러 시: 원인 노출(타겟 불가/타임아웃 등)
+          proxy.on("error", (err: any, req: any) => {
+            console.error("[VITE PROXY][error]", req?.method, req?.url, err?.message || err);
           });
         },
+        // 응답이 정말 없을 때 프록시가 끊고 에러를 노출(디버그 가시성)
+        timeout: 10000,
+        proxyTimeout: 10000,
       },
     },
   },
@@ -74,6 +92,4 @@ const config = {
   },
 };
 
-export default defineConfig(
-  config as unknown as VitestConfigExport as unknown as import("vite").UserConfigExport,
-);
+export default defineConfig(config);

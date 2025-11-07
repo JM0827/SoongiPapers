@@ -55,7 +55,7 @@ export type ResponsesRetryResult<TResponse> = {
 export const RESPONSES_INCOMPLETE_ERROR_CODE = "openai_response_incomplete";
 
 const DEFAULT_ATTEMPTS = 3;
-const MIN_TOKENS_FALLBACK = 200;
+const MIN_TOKENS_FALLBACK = 0;
 
 const RESPONSES_INCOMPLETE_REASON = "max_output_tokens";
 
@@ -67,7 +67,6 @@ const BASE_STAGE_SEQUENCE: Array<{
 }> = [
   { stage: "primary", multiplier: 1, usingFallback: false, usingSegmentRetry: false },
   { stage: "downshift", multiplier: 0.7, usingFallback: false, usingSegmentRetry: false },
-  { stage: "minimal", multiplier: 0.49, usingFallback: false, usingSegmentRetry: false },
 ];
 
 const isResponseIncomplete = (response: unknown): boolean => {
@@ -169,11 +168,13 @@ export async function runResponsesWithRetry<TResponse>(
   let lastReason: ResponsesRetryReason = "initial";
   let lastTokensUsed = Math.min(baseTokens, maxOutputTokensCap);
   let truncatedEncountered = false;
+  let lastResponse: TResponse | null = null;
 
   while (
     attempts < Math.max(1, maxAttempts) &&
     stageIndex < stages.length
   ) {
+    let advanceStage = true;
     const stage = stages[stageIndex];
     const shouldDownshift =
       stage.multiplier < 1 && (lastReason === "incomplete" || truncatedEncountered);
@@ -181,7 +182,10 @@ export async function runResponsesWithRetry<TResponse>(
       stage.multiplier >= 1 || shouldDownshift ? stage.multiplier : 1;
     const computedTokens = Math.min(
       maxOutputTokensCap,
-      Math.max(minOutputTokens, Math.ceil(baseTokens * effectiveMultiplier)),
+      Math.max(
+        minOutputTokens,
+        Math.max(1, Math.ceil(baseTokens * effectiveMultiplier)),
+      ),
     );
 
     const context: ResponsesRetryAttemptContext = {
@@ -206,6 +210,7 @@ export async function runResponsesWithRetry<TResponse>(
           lastError = new Error("Segment retry handler returned no response");
           attempts += 1;
           stageIndex += 1;
+          advanceStage = false;
           continue;
         }
       } else if (stage.usingFallback) {
@@ -220,6 +225,16 @@ export async function runResponsesWithRetry<TResponse>(
       if (isResponseIncomplete(response)) {
         lastReason = "incomplete";
         truncatedEncountered = true;
+        lastResponse = response;
+        lastError = createIncompleteError(response as unknown as {
+          incomplete_details?: { reason?: string };
+          id?: string | null;
+        });
+        if (stageIndex < stages.length - 1) {
+          stageIndex += 1;
+          advanceStage = false;
+          continue;
+        }
         return {
           response,
           attempts,
@@ -241,8 +256,8 @@ export async function runResponsesWithRetry<TResponse>(
 
       if (error && typeof error === "object" && "error" in error) {
         const inner = (error as { error?: unknown }).error;
-      if (
-        inner &&
+        if (
+          inner &&
         typeof inner === "object" &&
         (inner as { type?: string }).type === "invalid_request_error"
       ) {
@@ -256,6 +271,7 @@ export async function runResponsesWithRetry<TResponse>(
         truncatedEncountered = true;
         if (stageIndex < stages.length - 1) {
           stageIndex += 1;
+          advanceStage = false;
           continue;
         }
         throw error;
@@ -266,6 +282,7 @@ export async function runResponsesWithRetry<TResponse>(
         lastError = error;
         if (stageIndex < stages.length - 1) {
           stageIndex += 1;
+          advanceStage = false;
           continue;
         }
         throw error;
@@ -275,6 +292,7 @@ export async function runResponsesWithRetry<TResponse>(
         lastReason = "rate_limit";
         lastError = error;
         if (attempts < Math.max(1, maxAttempts)) {
+          advanceStage = false;
           continue;
         }
         throw error;
@@ -283,6 +301,21 @@ export async function runResponsesWithRetry<TResponse>(
       lastError = error;
       throw error;
     }
+
+    if (advanceStage) {
+      stageIndex += 1;
+    }
+
+  }
+
+  if (lastResponse) {
+    return {
+      response: lastResponse,
+      attempts,
+      maxOutputTokens: lastTokensUsed,
+      truncated: true,
+      attemptHistory,
+    } satisfies ResponsesRetryResult<TResponse>;
   }
 
   if (lastError) throw lastError;

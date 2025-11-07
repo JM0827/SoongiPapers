@@ -7,6 +7,8 @@ import {
   serializeTranslationCursor,
   type TranslationSegmentText,
 } from "./translationPages";
+import { loadCanonicalSegments } from "./segmentationEngine";
+import { calculateTokenBudget } from "./tokenBudget";
 import { getTranslationRunSummary } from "../translationSummary";
 import type { TranslationRunSummaryResponse } from "../translationSummary";
 
@@ -25,6 +27,7 @@ const deriveJobIdFromRunId = (runId: string): string => {
 interface TranslationStagePageEntry {
   stage: "draft" | "revise";
   pageIndex: number;
+  cursorHash: string | null;
   page: AgentItemsResponseV2;
 }
 
@@ -104,6 +107,30 @@ const toSegmentTexts = (
 const buildMergedText = (segments: TranslationSegmentText[]): string =>
   segments.map((segment) => segment.text).join("\n\n");
 
+const buildApproximateOriginText = (segments: OriginSegment[]): string => {
+  let result = "";
+  let previousParagraph: number | null = null;
+  segments.forEach((segment) => {
+    const text = segment.text?.trim();
+    if (!text) {
+      return;
+    }
+    const currentParagraph = Number.isFinite(segment.paragraphIndex)
+      ? Number(segment.paragraphIndex)
+      : null;
+    const separator = result.length === 0
+      ? ""
+      : previousParagraph !== null && currentParagraph !== null
+        ? currentParagraph !== previousParagraph
+          ? "\n\n"
+          : "\n"
+        : "\n";
+    result += `${separator}${text}`;
+    previousParagraph = currentParagraph;
+  });
+  return result;
+};
+
 const collectStagePages = async (params: {
   projectId: string;
   runId: string;
@@ -129,6 +156,37 @@ const collectStagePages = async (params: {
 
   const mergedText = buildMergedText(segmentTexts);
 
+  const approximateOriginText = buildApproximateOriginText(originSegments);
+
+  const canonicalResult = await loadCanonicalSegments({
+    runId: params.runId,
+    originText: approximateOriginText,
+  });
+  const canonicalSegments = canonicalResult?.segments?.length
+    ? canonicalResult.segments
+    : originSegments.map((segment, index) => {
+        const text = segment.text ?? "";
+        const budget = calculateTokenBudget({
+          originSegments: [{ tokenEstimate: Math.ceil(text.length / 4), text }],
+          mode: params.stage,
+        });
+        return {
+          id: segment.id,
+          hash: `legacy-${segment.id}`,
+          segmentOrder: index,
+          paragraphIndex: segment.paragraphIndex,
+          sentenceIndex: segment.sentenceIndex,
+          startOffset: 0,
+          endOffset: 0,
+          overlapPrev: false,
+          overlapNext: false,
+          overlapTokens: 0,
+          tokenEstimate: Math.max(1, Math.ceil(text.length / 4)),
+          tokenBudget: budget.tokensInCap,
+          text,
+        };
+      });
+
   const { pages } = buildTranslationPages({
     runId: params.runId,
     stage: params.stage,
@@ -136,6 +194,7 @@ const collectStagePages = async (params: {
     model: params.model,
     mergedText,
     originSegments,
+    canonicalSegments,
     segmentTexts,
     usage: { inputTokens: null, outputTokens: null },
     meta: {
@@ -150,6 +209,7 @@ const collectStagePages = async (params: {
   return pages.map((page, index) => ({
     stage: params.stage,
     pageIndex: index,
+    cursorHash: page.segment_hashes?.[0] ?? null,
     page,
   }));
 };
@@ -184,12 +244,23 @@ const resolveStartIndex = (
     }
     return 0;
   }
-  const foundIndex = entries.findIndex(
-    (entry) =>
-      entry.stage === parsed.stage && entry.pageIndex === parsed.pageIndex,
-  );
-  if (foundIndex >= 0) {
-    return foundIndex;
+  if (parsed.hash) {
+    const byHash = entries.findIndex(
+      (entry) => entry.stage === parsed.stage && entry.cursorHash === parsed.hash,
+    );
+    if (byHash >= 0) {
+      return byHash;
+    }
+  }
+
+  if (parsed.pageIndex !== null) {
+    const byIndex = entries.findIndex(
+      (entry) =>
+        entry.stage === parsed.stage && entry.pageIndex === parsed.pageIndex,
+    );
+    if (byIndex >= 0) {
+      return byIndex;
+    }
   }
 
   // If exact page not found, move to the first entry of the requested stage
@@ -262,10 +333,17 @@ export async function getTranslationItemsSlice(params: {
   const nextIndex = startIndex + sliceEntries.length;
   const hasMore = nextIndex < entries.length;
   const nextCursor = hasMore
-    ? serializeTranslationCursor(
-        entries[nextIndex].stage,
-        entries[nextIndex].pageIndex,
-      )
+    ? (() => {
+        const nextEntry = entries[nextIndex];
+        if (!nextEntry?.cursorHash) {
+          return null;
+        }
+        const serialized = serializeTranslationCursor(
+          nextEntry.stage,
+          nextEntry.cursorHash,
+        );
+        return serialized || null;
+      })()
     : null;
 
   return {

@@ -1,12 +1,4 @@
-import { Pool } from "pg";
-
-const pool = new Pool({
-  host: process.env.PG_HOST,
-  port: Number(process.env.PG_PORT || 5432),
-  user: process.env.PG_USER,
-  password: process.env.PG_PASSWORD,
-  database: process.env.PG_DATABASE,
-});
+import { pool, query as dbQuery } from "../db";
 
 const TABLE_MISSING_CODE = "42P01";
 
@@ -20,7 +12,7 @@ const isPgError = (error: unknown): error is PgError =>
 
 async function safeQuery(sql: string, params: any[], context: string) {
   try {
-    await pool.query(sql, params);
+    await dbQuery(sql, params);
     return true;
   } catch (error) {
     if (isPgError(error) && error.code === TABLE_MISSING_CODE) {
@@ -85,7 +77,7 @@ export async function findProofreadRun(params: {
   finalTextHash: string;
 }) {
   const { projectId, translationFileId, memoryVersion, finalTextHash } = params;
-  const { rows } = await pool.query(
+  const { rows } = await dbQuery(
     `SELECT id, status
        FROM proofread_runs
       WHERE project_id = $1
@@ -107,7 +99,7 @@ export async function upsertProofreadRun(params: {
 }) {
   const { projectId, translationFileId, memoryVersion, finalTextHash, status } =
     params;
-  const { rows } = await pool.query(
+  const { rows } = await dbQuery(
     `INSERT INTO proofread_runs (
         project_id,
         translation_file_id,
@@ -130,7 +122,7 @@ export async function updateProofreadRunStatus(
   proofreadRunId: string,
   status: string,
 ) {
-  await pool.query(
+  await dbQuery(
     `UPDATE proofread_runs
         SET status = $2
       WHERE id = $1`,
@@ -143,7 +135,7 @@ export async function findProofreadRunById(params: {
   proofreadRunId: string;
 }) {
   const { projectId, proofreadRunId } = params;
-  const { rows } = await pool.query(
+  const { rows } = await dbQuery(
     `SELECT id, status
        FROM proofread_runs
       WHERE id = $1 AND project_id = $2

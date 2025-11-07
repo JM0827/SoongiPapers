@@ -129,6 +129,7 @@ const convertLightPayloadToRich = (
       item_count: items.length,
       avg_item_bytes: computeAverageItemBytes(items),
     },
+    segment_hashes: [],
     index_base: 0,
     offset_semantics: "[start,end)",
   } satisfies AgentItemsPayloadV2;
@@ -208,6 +209,7 @@ export const buildAgentItemsPage = (
     items: sanitizedItems,
     has_more: options.hasMore,
     next_cursor: nextCursor,
+    segment_hashes: [],
     provider_response_id: options.providerResponseId ?? null,
   };
 
@@ -880,6 +882,7 @@ async function callWithRetries(
             item_count: agentItems.length,
             avg_item_bytes: computeAverageItemBytes(agentItems),
           },
+          segment_hashes: [],
         } satisfies AgentItemsPayloadV2;
       }
 
@@ -887,6 +890,7 @@ async function callWithRetries(
         agentPayload = {
           ...agentPayload,
           warnings: [],
+          segment_hashes: agentPayload.segment_hashes ?? [],
         } satisfies AgentItemsPayloadV2;
       }
       if (!agentPayload.stats) {
@@ -896,6 +900,7 @@ async function callWithRetries(
             item_count: agentItems.length,
             avg_item_bytes: computeAverageItemBytes(agentItems),
           },
+          segment_hashes: agentPayload.segment_hashes ?? [],
         } satisfies AgentItemsPayloadV2;
       }
       const usageSnapshot: LLMUsageSnapshot = {

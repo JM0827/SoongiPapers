@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import type { AgentItemsResponseV2 } from "../responsesSchemas";
 import type { OriginSegment } from "../../agents/translation";
+import type { CanonicalSegment } from "./segmentationEngine";
 
 export interface TranslationSegmentText {
   segmentId: string;
@@ -55,22 +56,34 @@ const distributeTokens = (total: number, counts: number[]): number[] => {
 
 export const serializeTranslationCursor = (
   stage: string,
-  pageIndex: number,
-): string => `${stage}:${pageIndex}`;
+  hash: string,
+): string | null => {
+  if (!stage || !hash) {
+    return null;
+  }
+  return `${stage}:${hash}`;
+};
 
 export const parseTranslationCursor = (
   cursor: string | null | undefined,
-): { stage: string; pageIndex: number } | null => {
+): { stage: string; hash: string | null; pageIndex: number | null } | null => {
   if (!cursor) return null;
   const parts = cursor.split(":");
-  if (parts.length !== 2) return null;
-  const [stage, indexRaw] = parts;
+  if (parts.length < 2) return null;
+  const [stage, rawToken] = [parts[0], parts.slice(1).join(":")];
   if (!stage) return null;
-  const pageIndex = Number(indexRaw);
-  if (!Number.isFinite(pageIndex) || pageIndex < 0) {
-    return null;
+  const token = rawToken ?? "";
+  if (!token) {
+    return { stage, hash: null, pageIndex: null };
   }
-  return { stage, pageIndex: Math.floor(pageIndex) };
+  if (/^\d+$/.test(token)) {
+    const pageIndex = Number(token);
+    if (!Number.isFinite(pageIndex) || pageIndex < 0) {
+      return { stage, hash: null, pageIndex: null };
+    }
+    return { stage, hash: null, pageIndex: Math.floor(pageIndex) };
+  }
+  return { stage, hash: token, pageIndex: null };
 };
 
 export function buildTranslationPages(params: {
@@ -80,6 +93,7 @@ export function buildTranslationPages(params: {
   model: string;
   mergedText: string;
   originSegments: OriginSegment[];
+  canonicalSegments: CanonicalSegment[];
   segmentTexts: TranslationSegmentText[];
   usage: { inputTokens: number | null; outputTokens: number | null };
   meta: {
@@ -92,6 +106,8 @@ export function buildTranslationPages(params: {
     cursorRetryCount?: number;
   };
   latencyMs: number;
+  validatorFlags?: Record<string, string[]> | null;
+  autoFixesApplied?: string[] | null;
 }): { pages: AgentItemsResponseV2[]; itemCount: number } {
   const {
     runId,
@@ -100,19 +116,28 @@ export function buildTranslationPages(params: {
     model,
     mergedText,
     originSegments,
+    canonicalSegments,
     segmentTexts,
     usage,
     meta,
     latencyMs,
+    validatorFlags,
+    autoFixesApplied,
   } = params;
 
   const textLength = mergedText.length;
   const map = new Map(segmentTexts.map((entry) => [entry.segmentId, entry.text]));
-  const items: AgentItemsResponseV2["items"] = [];
+  const originMap = new Map(
+    originSegments.map((segment, index) => [segment.id, { segment, fallbackIndex: index }]),
+  );
+  const itemsWithHash: Array<{
+    hash: string;
+    item: AgentItemsResponseV2["items"][number];
+  }> = [];
   let searchCursor = 0;
 
-  originSegments.forEach((origin, index) => {
-    const translated = map.get(origin.id)?.trim();
+  canonicalSegments.forEach((canonical, canonicalIndex) => {
+    const translated = map.get(canonical.id)?.trim();
     if (!translated) return;
     const bounded = translated.slice(0, textLength);
     let start = mergedText.indexOf(bounded, searchCursor);
@@ -129,17 +154,29 @@ export function buildTranslationPages(params: {
     const snippet =
       bounded.length > 160 ? `${bounded.slice(0, 157)}…` : bounded;
 
-    items.push({
-      uid: `${origin.id}:${stage}`,
-      k: `${stage}_segment`,
-      s: severity as AgentItemsResponseV2["items"][number]["s"],
-      r: snippet,
-      t: "replace",
-      i: [origin.index ?? index, origin.index ?? index],
-      o: [start, end],
-      fix: { text: bounded },
-      cid: origin.id,
-      side: "tgt",
+    const originEntry = originMap.get(canonical.id);
+    const originIndex = originEntry?.segment.index;
+    const fallbackIndex = originEntry?.fallbackIndex ?? canonicalIndex;
+    const resolvedIndex = Number.isFinite(originIndex)
+      ? (originIndex as number)
+      : fallbackIndex;
+    const normalizedIndex = Math.max(0, Math.floor(resolvedIndex));
+    const resolvedId = originEntry?.segment.id ?? canonical.id;
+
+    itemsWithHash.push({
+      hash: canonical.hash,
+      item: {
+        uid: `${resolvedId}:${stage}`,
+        k: `${stage}_segment`,
+        s: severity as AgentItemsResponseV2["items"][number]["s"],
+        r: snippet,
+        t: "replace",
+        i: [normalizedIndex, normalizedIndex],
+        o: [start, end],
+        fix: { text: bounded },
+        cid: resolvedId,
+        side: "tgt",
+      },
     });
   });
 
@@ -151,7 +188,7 @@ export function buildTranslationPages(params: {
   );
 
   const chunkSize = Math.max(1, TRANSLATION_STREAM_PAGE_SIZE);
-  const chunks = chunkArray(items, chunkSize);
+  const chunks = chunkArray(itemsWithHash, chunkSize);
   const counts = chunks.map((chunk) => chunk.length);
   const promptDistribution = distributeTokens(usage.inputTokens ?? 0, counts);
   const completionDistribution = distributeTokens(
@@ -159,19 +196,42 @@ export function buildTranslationPages(params: {
     counts,
   );
 
-  const totalItems = items.length;
+  const totalItems = itemsWithHash.length;
   const baseChunkId = `${stage}:${jobId}`;
-  const pages: AgentItemsResponseV2[] = chunks.map((chunk, index) => {
+  const pages: AgentItemsResponseV2[] = chunks.map((chunk, index, array) => {
+    const chunkItems = chunk.map((entry) => entry.item);
+    const chunkHashes = chunk.map((entry) => entry.hash);
     const chunkId = index === 0 ? baseChunkId : `${baseChunkId}:${index}`;
     const isLast = index === chunks.length - 1;
-    const itemBytes = chunk.length
+    const itemBytes = chunkItems.length
       ? Math.floor(
-          chunk.reduce(
+          chunkItems.reduce(
             (totalBytes, item) => totalBytes + Buffer.byteLength(item.r, "utf8"),
             0,
           ) / chunk.length,
         )
       : 0;
+
+    const findFirstHash = (input: typeof chunk): string | null => {
+      for (const entry of input) {
+        if (entry.hash) {
+          return entry.hash;
+        }
+      }
+      return null;
+    };
+
+    const nextChunkFirstHash = !isLast
+      ? findFirstHash(array[index + 1] ?? [])
+      : null;
+    const nextCursor = !isLast && nextChunkFirstHash
+      ? serializeTranslationCursor(stage, nextChunkFirstHash)
+      : null;
+
+    const hasValidatorFlags = validatorFlags && Object.keys(validatorFlags).length > 0;
+    const autoFixes = Array.isArray(autoFixesApplied) && autoFixesApplied.length > 0
+      ? autoFixesApplied
+      : undefined;
 
     return {
       version: "v2",
@@ -197,9 +257,12 @@ export function buildTranslationPages(params: {
         forced_pagination: Boolean(meta.forcedPaginationCount && meta.forcedPaginationCount > 0),
         cursor_retry_count: Math.max(0, meta.cursorRetryCount ?? 0),
       },
-      items: chunk,
+      items: chunkItems,
       has_more: !isLast,
-      next_cursor: !isLast ? serializeTranslationCursor(stage, index + 1) : "",
+      next_cursor: nextCursor,
+      segment_hashes: chunkHashes,
+      validator_flags: hasValidatorFlags ? validatorFlags ?? undefined : undefined,
+      autoFixesApplied: autoFixes,
       provider_response_id: null,
     } satisfies AgentItemsResponseV2;
   });
@@ -231,7 +294,16 @@ export function buildTranslationPages(params: {
       },
       items: [],
       has_more: false,
-      next_cursor: "",
+      next_cursor: null,
+      segment_hashes: [],
+      validator_flags:
+        validatorFlags && Object.keys(validatorFlags).length > 0
+          ? validatorFlags
+          : undefined,
+      autoFixesApplied:
+        Array.isArray(autoFixesApplied) && autoFixesApplied.length > 0
+          ? autoFixesApplied
+          : undefined,
       provider_response_id: null,
     });
   }
