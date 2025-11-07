@@ -31,7 +31,7 @@ interface UserConsentRecord {
   [key: string]: unknown;
 }
 
-interface ProfileStatusSnapshot {
+export interface ProfileStatusSnapshot {
   consent: boolean;
   requiredFilled: boolean;
   complete: boolean;
@@ -46,6 +46,7 @@ interface ProjectProfileCardProps {
   ) => void;
   onStatusChange?: (status: ProfileStatusSnapshot) => void;
   requireAuthor?: boolean;
+  onDraftChange?: (draft: ProfileDraft) => void;
 }
 
 interface ProfileDraft {
@@ -58,6 +59,9 @@ interface ProfileDraft {
   copyrightConsent: boolean;
   consentRecord: UserConsentRecord;
 }
+
+export type ProjectProfileDraft = ProfileDraft;
+export type ProjectProfileStatusSnapshot = ProfileStatusSnapshot;
 
 const AUTO_SAVE_DELAY_MS = 1200;
 
@@ -334,6 +338,7 @@ export const ProjectProfileCard = ({
   onUpdated,
   onActionReady,
   onStatusChange,
+  onDraftChange,
   requireAuthor = true,
 }: ProjectProfileCardProps) => {
   const { locale } = useUILocale();
@@ -377,6 +382,10 @@ export const ProjectProfileCard = ({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    onDraftChange?.(draft);
+  }, [draft, onDraftChange]);
 
   useEffect(() => {
     onActionReady?.(null);

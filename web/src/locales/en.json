@@ -675,6 +675,7 @@
   "export.essentials.title": "Publishing essentials (required)",
   "export.essentials.description": "Review the required publishing metadata before generating the eBook.",
   "export.essentials.translation.label": "Translation",
+  "export.essentials.translation.pick": "Translation selection",
   "export.essentials.translation.detail": "Selected translation",
   "export.essentials.translation.ready": "{{code}} ready",
   "export.essentials.translation.missing": "{{code}} missing",

@@ -27,7 +27,12 @@ import { useUsage } from "../../hooks/useJobsBatches";
 import type { ProjectSummary } from "../../types/domain";
 import { Modal } from "../common/Modal";
 import { NewProjectIcon } from "../icons/ProjectIcons";
-import { useWorkflowStore } from "../../store/workflow.store";
+import {
+  scopeProofreadingState,
+  scopeQualityState,
+  scopeTranslationState,
+  useWorkflowStore,
+} from "../../store/workflow.store";
 import { useChatActionStore } from "../../store/chatAction.store";
 import { SidebarQuickActions } from "./sidebar/SidebarQuickActions";
 import type { QuickAction } from "./sidebar/SidebarQuickActions";
@@ -409,11 +414,24 @@ export const LeftSidebar = () => {
     ? consentStatusEnabled
     : consentStatusDisabled;
 
-  const translationAgentState = useWorkflowStore((state) => state.translation);
-  const proofreadingAgentState = useWorkflowStore(
+  const { snapshot } = useProjectContext();
+  const translationAgentStateRaw = useWorkflowStore((state) => state.translation);
+  const proofreadingAgentStateRaw = useWorkflowStore(
     (state) => state.proofreading,
   );
-  const qualityAgentState = useWorkflowStore((state) => state.quality);
+  const qualityAgentStateRaw = useWorkflowStore((state) => state.quality);
+  const translationAgentState = useMemo(
+    () => scopeTranslationState(translationAgentStateRaw, snapshot.projectId ?? null),
+    [snapshot.projectId, translationAgentStateRaw],
+  );
+  const proofreadingAgentState = useMemo(
+    () => scopeProofreadingState(proofreadingAgentStateRaw, snapshot.projectId ?? null),
+    [snapshot.projectId, proofreadingAgentStateRaw],
+  );
+  const qualityAgentState = useMemo(
+    () => scopeQualityState(qualityAgentStateRaw, snapshot.projectId ?? null),
+    [snapshot.projectId, qualityAgentStateRaw],
+  );
   const resetTranslation = useWorkflowStore((state) => state.resetTranslation);
   const resetProofreading = useWorkflowStore(
     (state) => state.resetProofreading,
@@ -423,7 +441,6 @@ export const LeftSidebar = () => {
   const chatExecutorReady = useChatActionStore((state) =>
     Boolean(state.executor),
   );
-  const { snapshot } = useProjectContext();
   const { data: modalUsageData, isLoading: isUsageLoading } = useUsage(
     modalState?.type === "rename" ? modalState.project.project_id : null,
   );

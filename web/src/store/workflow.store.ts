@@ -80,6 +80,9 @@ export interface AgentPageV2 {
     cursor_retry_count: number;
   };
   provider_response_id?: string | null;
+  segment_hashes?: string[];
+  validator_flags?: Record<string, string[]>;
+  autoFixesApplied?: string[];
   items: AgentItemV2[];
   has_more: boolean;
   next_cursor: string | null;
@@ -263,7 +266,9 @@ const buildRunState = (
     overrides?.nextRetryDelayMs ?? base.nextRetryDelayMs ?? null,
 });
 
-const defaultTranslationState: TranslationAgentState = {
+const createTranslationState = (
+  projectId: string | null = null,
+): TranslationAgentState => ({
   status: "idle",
   jobId: null,
   progressCompleted: 0,
@@ -279,7 +284,7 @@ const defaultTranslationState: TranslationAgentState = {
   lastError: null,
   lastMessage: null,
   updatedAt: null,
-  projectId: null,
+  projectId,
   run: { ...defaultRunState },
   subStates: [],
   pages: [],
@@ -287,16 +292,18 @@ const defaultTranslationState: TranslationAgentState = {
   followupSummary: undefined,
   pendingCursors: [],
   processedCursors: [],
-};
+});
 
-const defaultProofreadingState: ProofreadingAgentState = {
+const createProofreadingState = (
+  projectId: string | null = null,
+): ProofreadingAgentState => ({
   status: "idle",
   proofreadingId: null,
   lastMessage: null,
   lastError: null,
   updatedAt: null,
   stageStatuses: [],
-  projectId: null,
+  projectId,
   activityLog: [],
   tierSummaries: {},
   completionSummary: null,
@@ -308,14 +315,16 @@ const defaultProofreadingState: ProofreadingAgentState = {
   lastEnvelope: null,
   pendingCursors: [],
   processedCursors: [],
-};
+});
 
-const defaultQualityState: QualityAgentState = {
+const createQualityState = (
+  projectId: string | null = null,
+): QualityAgentState => ({
   status: "idle",
   score: null,
   lastError: null,
   updatedAt: null,
-  projectId: null,
+  projectId,
   chunksTotal: 0,
   chunksCompleted: 0,
   currentChunkIndex: null,
@@ -323,12 +332,63 @@ const defaultQualityState: QualityAgentState = {
   lastMessage: null,
   run: { ...defaultRunState },
   subStates: [],
+});
+
+export const getEmptyTranslationState = (
+  projectId: string | null,
+): TranslationAgentState => createTranslationState(projectId);
+
+export const getEmptyProofreadingState = (
+  projectId: string | null,
+): ProofreadingAgentState => createProofreadingState(projectId);
+
+export const getEmptyQualityState = (
+  projectId: string | null,
+): QualityAgentState => createQualityState(projectId);
+
+export const scopeTranslationState = (
+  state: TranslationAgentState,
+  projectId: string | null,
+): TranslationAgentState => {
+  if (projectId && state.projectId === projectId) {
+    return state;
+  }
+  if (!projectId && !state.projectId) {
+    return state;
+  }
+  return getEmptyTranslationState(projectId ?? null);
+};
+
+export const scopeProofreadingState = (
+  state: ProofreadingAgentState,
+  projectId: string | null,
+): ProofreadingAgentState => {
+  if (projectId && state.projectId === projectId) {
+    return state;
+  }
+  if (!projectId && !state.projectId) {
+    return state;
+  }
+  return getEmptyProofreadingState(projectId ?? null);
+};
+
+export const scopeQualityState = (
+  state: QualityAgentState,
+  projectId: string | null,
+): QualityAgentState => {
+  if (projectId && state.projectId === projectId) {
+    return state;
+  }
+  if (!projectId && !state.projectId) {
+    return state;
+  }
+  return getEmptyQualityState(projectId ?? null);
 };
 
 export const useWorkflowStore = create<WorkflowState>((set) => ({
-  translation: { ...defaultTranslationState },
-  proofreading: { ...defaultProofreadingState },
-  quality: { ...defaultQualityState },
+  translation: createTranslationState(),
+  proofreading: createProofreadingState(),
+  quality: createQualityState(),
   setTranslation: (projectId, update) =>
     set((state) => {
       if (!projectId) return {};
@@ -341,7 +401,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
       const base =
         state.translation.projectId === projectId
           ? state.translation
-          : { ...defaultTranslationState, projectId };
+          : createTranslationState(projectId);
       const patch = typeof update === "function" ? update(base) : update;
       const {
         run: runPatch,
@@ -381,8 +441,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
   resetTranslation: (projectId = null) =>
     set({
       translation: {
-        ...defaultTranslationState,
-        projectId,
+        ...createTranslationState(projectId),
         run: { ...defaultRunState, status: "idle" },
       },
     }),
@@ -398,7 +457,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
       const base =
         state.proofreading.projectId === projectId
           ? state.proofreading
-          : { ...defaultProofreadingState, projectId };
+          : createProofreadingState(projectId);
       const patch = typeof update === "function" ? update(base) : update;
       const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
       const desiredStatus = (runPatch?.status ??
@@ -425,8 +484,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
   resetProofreading: (projectId = null) =>
     set({
       proofreading: {
-        ...defaultProofreadingState,
-        projectId,
+        ...createProofreadingState(projectId),
         run: { ...defaultRunState, status: "idle" },
       },
     }),
@@ -439,7 +497,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
       const base =
         state.quality.projectId === projectId
           ? state.quality
-          : { ...defaultQualityState, projectId };
+          : createQualityState(projectId);
       const patch = typeof update === "function" ? update(base) : update;
       const { run: runPatch, subStates: subPatch, ...restPatch } = patch;
       const desiredStatus = (runPatch?.status ??
@@ -466,8 +524,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
   resetQuality: (projectId = null) =>
     set({
       quality: {
-        ...defaultQualityState,
-        projectId,
+        ...createQualityState(projectId),
         run: { ...defaultRunState, status: "idle" },
       },
     }),

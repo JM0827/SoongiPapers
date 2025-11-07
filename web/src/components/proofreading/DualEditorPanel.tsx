@@ -16,7 +16,7 @@ import {
   type EditingEditorAdapter,
   type EditorSelectionContext,
 } from '../../store/editingCommand.store';
-import { useWorkflowStore } from '../../store/workflow.store';
+import { scopeTranslationState, useWorkflowStore } from '../../store/workflow.store';
 import type {
   SelectionRange,
   ProofreadingIssue,
@@ -442,9 +442,12 @@ export const DualEditorPanel = ({
     },
     [locale],
   );
-  const translationFollowups = useWorkflowStore(
-    (state) => state.translation.followupSummary,
-  );
+  const translationStateRaw = useWorkflowStore((state) => state.translation);
+  const translationFollowups = useMemo(() => {
+    if (!projectId) return null;
+    const scoped = scopeTranslationState(translationStateRaw, projectId);
+    return scoped.projectId === projectId ? scoped.followupSummary ?? null : null;
+  }, [projectId, translationStateRaw]);
   const followupCount = translationFollowups?.total ?? 0;
   const [showFollowupPopover, setShowFollowupPopover] = useState(false);
   const followupIndicatorRef = useRef<HTMLDivElement | null>(null);

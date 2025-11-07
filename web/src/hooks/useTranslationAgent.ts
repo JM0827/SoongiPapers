@@ -242,6 +242,9 @@ export const useTranslationAgent = ({
   const finalizingRef = useRef(false);
   const finalizationTimeoutRef = useRef<number | null>(null);
   const originPrepRef = useRef<OriginPrepSnapshot | null>(originPrep ?? null);
+  const originAnalysisStatusRef = useRef<string | null>(
+    originPrep?.analysis.status ?? null,
+  );
   const streamJobIdRef = useRef<string | null>(null);
   const streamCompletedRef = useRef(false);
   const translationStatusRef = useRef<TranslationStatus>(translation.status);
@@ -262,6 +265,23 @@ export const useTranslationAgent = ({
   useEffect(() => {
     originPrepRef.current = originPrep ?? null;
   }, [originPrep]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const prevStatus = originAnalysisStatusRef.current;
+    const currentStatus = originPrep?.analysis.status ?? null;
+    originAnalysisStatusRef.current = currentStatus;
+    const translationActive =
+      translation.status === "running" || translation.status === "queued";
+
+    if (
+      !translationActive &&
+      currentStatus === "running" &&
+      prevStatus !== "running"
+    ) {
+      resetTranslation(projectId);
+    }
+  }, [originPrep?.analysis.status, projectId, resetTranslation, translation.status]);
 
   useEffect(() => {
     translationStatusRef.current = translation.status;

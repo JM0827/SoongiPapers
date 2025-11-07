@@ -675,6 +675,7 @@
   "export.essentials.title": "출간 준비(필수)",
   "export.essentials.description": "전자책 생성에 필요한 출간 정보를 확인하세요.",
   "export.essentials.translation.label": "번역본",
+  "export.essentials.translation.pick": "번역본 선택",
   "export.essentials.translation.detail": "선택된 번역",
   "export.essentials.translation.ready": "{{code}} 준비됨",
   "export.essentials.translation.missing": "{{code}} 누락",

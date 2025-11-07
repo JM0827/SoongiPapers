@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import type { QualityStreamEvent } from "../services/api";
 import type { ProjectSummary } from "../types/domain";
@@ -9,6 +10,7 @@ import type {
   QualityAgentState,
 } from "../store/workflow.store";
 import { useProjectStore } from "../store/project.store";
+import { projectKeys } from "./useProjectData";
 
 interface UseQualityAgentParams {
   token: string | null;
@@ -96,6 +98,7 @@ export const useQualityAgent = ({
   const setQuality = useWorkflowStore((state) => state.setQuality);
   const resetQuality = useWorkflowStore((state) => state.resetQuality);
   const projects = useProjectStore((state) => state.projects);
+  const queryClient = useQueryClient();
 
   const setQualityForProject = useCallback(
     (
@@ -114,39 +117,51 @@ export const useQualityAgent = ({
   }, [projectId, resetQuality]);
 
   useEffect(() => {
-    if (!lifecycle) return;
+    if (!lifecycle || !projectId) return;
     const stage = lifecycle.stage?.toLowerCase() ?? null;
     if (!stage) return;
-    if (!projectId) return;
-    if (stage.includes("run") && quality.status === "idle") {
-      setQualityForProject({
-        status: "running",
-        lastError: null,
-        run: createRunState("running"),
-      });
-    } else if (
-      (stage.includes("done") || stage.includes("complete")) &&
-      quality.status === "idle"
-    ) {
-      setQualityForProject({
-        status: "done",
-        score: lifecycle.score ?? quality.score,
-        updatedAt: lifecycle.lastUpdatedAt ?? quality.updatedAt,
-        run: createRunState("done"),
-      });
-    } else if (stage.includes("fail") && quality.status === "idle") {
-      setQualityForProject({
-        status: "failed",
-        lastError: "이전 품질 검토가 실패했습니다.",
-        run: createRunState("failed"),
-      });
-    }
+
+    setQualityForProject((current) => {
+      if (stage.includes("run")) {
+        if (current.status === "running") {
+          return {};
+        }
+        return {
+          status: "running",
+          lastError: null,
+          run: createRunState("running"),
+        };
+      }
+
+      if (stage.includes("done") || stage.includes("complete")) {
+        if (current.status === "done" && current.score === lifecycle.score) {
+          return {};
+        }
+        return {
+          status: "done",
+          score: lifecycle.score ?? current.score,
+          lastError: null,
+          updatedAt: lifecycle.lastUpdatedAt ?? current.updatedAt,
+          run: createRunState("done"),
+        };
+      }
+
+      if (stage.includes("fail")) {
+        if (current.status === "failed" && current.lastError) {
+          return {};
+        }
+        return {
+          status: "failed",
+          lastError: "이전 품질 검토가 실패했습니다.",
+          run: createRunState("failed"),
+        };
+      }
+
+      return {};
+    });
   }, [
     lifecycle,
     projectId,
-    quality.score,
-    quality.status,
-    quality.updatedAt,
     setQualityForProject,
   ]);
 
@@ -456,16 +471,6 @@ export const useQualityAgent = ({
           },
         );
 
-        await api.saveQualityAssessment(token, {
-          projectId,
-          jobId: translationJobId ?? undefined,
-          sourceText: originText,
-          translatedText: translationText,
-          qualityResult: finalResult,
-          translationMethod: "auto",
-          modelUsed: finalResult.meta?.model,
-        });
-
         setQualityForProject((current) => ({
           status: "done",
           score: finalResult.overallScore ?? current.score,
@@ -485,6 +490,13 @@ export const useQualityAgent = ({
           subStates: mapChunkSummariesToSubStates(current.chunkSummaries),
         }));
 
+        if (projectId) {
+          await queryClient.invalidateQueries({
+            queryKey: projectKeys.qualityHistory(projectId),
+            exact: true,
+          });
+        }
+
         refreshContent?.();
         onCompleted?.();
         openQualityDialog?.();
@@ -498,6 +510,15 @@ export const useQualityAgent = ({
           currentChunkIndex: null,
           run: createRunState("failed"),
         });
+
+        if (projectId) {
+          await queryClient.invalidateQueries({
+            queryKey: projectKeys.qualityHistory(projectId),
+            exact: true,
+          });
+        }
+
+        refreshContent?.();
       }
     },
     [
@@ -512,6 +533,7 @@ export const useQualityAgent = ({
       refreshContent,
       onCompleted,
       openQualityDialog,
+      queryClient,
     ],
   );
 

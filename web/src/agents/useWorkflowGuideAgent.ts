@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
   ChatAction,
   DocumentProfileSummary,
   ProjectContent,
 } from "../types/domain";
 import type { ProjectContextSnapshot } from "../hooks/useProjectContext";
-import { useWorkflowStore } from "../store/workflow.store";
+import {
+  scopeProofreadingState,
+  scopeQualityState,
+  scopeTranslationState,
+  useWorkflowStore,
+} from "../store/workflow.store";
 import { useUILocale } from "../hooks/useUILocale";
 import { translate } from "../lib/locale";
 
@@ -127,9 +132,21 @@ export const useWorkflowGuideAgent = ({
     },
     [locale],
   );
-  const translationState = useWorkflowStore((state) => state.translation);
-  const proofreadingState = useWorkflowStore((state) => state.proofreading);
-  const qualityState = useWorkflowStore((state) => state.quality);
+  const translationStateRaw = useWorkflowStore((state) => state.translation);
+  const proofreadingStateRaw = useWorkflowStore((state) => state.proofreading);
+  const qualityStateRaw = useWorkflowStore((state) => state.quality);
+  const translationState = useMemo(
+    () => scopeTranslationState(translationStateRaw, projectId ?? null),
+    [projectId, translationStateRaw],
+  );
+  const proofreadingState = useMemo(
+    () => scopeProofreadingState(proofreadingStateRaw, projectId ?? null),
+    [projectId, proofreadingStateRaw],
+  );
+  const qualityState = useMemo(
+    () => scopeQualityState(qualityStateRaw, projectId ?? null),
+    [projectId, qualityStateRaw],
+  );
   const projectProfile = content?.projectProfile ?? null;
   const originProfile =
     (content?.documentProfiles?.origin as DocumentProfileSummary | null) ??

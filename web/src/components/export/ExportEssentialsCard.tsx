@@ -1,16 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   AlertCircle,
   AlertTriangle,
   Check,
   Circle,
   ExternalLink,
-  FileText,
   Loader2,
   Play,
 } from "lucide-react";
 import {
-  type EssentialsSnapshot,
   type GenerationFormat,
   type GenerationProgressChip,
   type TranslationSummary,
@@ -21,13 +19,14 @@ import { mapGenerationError, type BackendErrorCode } from "./errorMap";
 
 interface ExportEssentialsCardProps {
   t: (key: string, params?: Record<string, string | number>) => string;
-  snap: EssentialsSnapshot;
-  setSnap: (draft: EssentialsSnapshot) => void;
   readiness: Readiness;
   buildState: "idle" | "running" | "done" | "error";
   buildPercent: number;
   progress: GenerationProgressChip[];
   translation: TranslationSummary;
+  wantPDF: boolean;
+  wantEPUB: boolean;
+  profileSection?: ReactNode;
   onOpenTranslation: () => void;
   onToggleFormat: (format: GenerationFormat, value: boolean) => void;
   onGenerate: () => void;
@@ -41,15 +40,6 @@ interface ExportEssentialsCardProps {
   downloadError?: string | null;
 }
 
-const statusIconByState = {
-  idle: <Circle className="h-3 w-3 text-slate-400" aria-hidden />,
-  running: (
-    <Loader2 className="h-3 w-3 animate-spin text-indigo-500" aria-hidden />
-  ),
-  done: <Check className="h-3 w-3 text-emerald-500" aria-hidden />,
-  error: <AlertTriangle className="h-3 w-3 text-rose-500" aria-hidden />,
-};
-
 const progressIcon = {
   pending: <Circle className="h-3 w-3 text-slate-300" aria-hidden />,
   running: (
@@ -61,13 +51,14 @@ const progressIcon = {
 
 export function ExportEssentialsCard({
   t,
-  snap,
-  setSnap,
   readiness,
-  buildState,
-  buildPercent,
+  buildState: _buildState,
+  buildPercent: _buildPercent,
   progress,
   translation,
+  wantPDF,
+  wantEPUB,
+  profileSection,
   onOpenTranslation,
   onToggleFormat,
   onGenerate,
@@ -96,7 +87,18 @@ export function ExportEssentialsCard({
         code: langToCode(translation.targetLang),
       });
 
-  const buildStatusLabel = t(`export.essentials.status.${buildState}`);
+  const translationStatusBadge = (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+        translationReady
+          ? "bg-emerald-50 text-emerald-700"
+          : "bg-rose-50 text-rose-600"
+      }`}
+      aria-live="polite"
+    >
+      {translationBadge}
+    </span>
+  );
 
   const displayError = useMemo(() => {
     if (!errorCode && !errorMessage) return null;
@@ -106,23 +108,6 @@ export function ExportEssentialsCard({
       message: mapped.message,
     };
   }, [errorCode, errorMessage]);
-
-  const toggleMeta = (key: keyof EssentialsSnapshot["meta"], value: string) => {
-    setSnap({
-      ...snap,
-      meta: {
-        ...snap.meta,
-        [key]: value,
-      },
-    });
-  };
-
-  const handleRightsToggle = (checked: boolean) => {
-    setSnap({
-      ...snap,
-      accepted: checked,
-    });
-  };
 
   const progressLabel = (chip: GenerationProgressChip) =>
     t(`export.essentials.progress.${chip.status}`, {
@@ -141,18 +126,16 @@ export function ExportEssentialsCard({
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <div
-            className="flex items-center gap-2 text-xs text-slate-500"
-            aria-live="polite"
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+            onClick={onGenerate}
+            disabled={generationDisabled}
+            aria-label={t("export.essentials.generate.aria")}
           >
-            {statusIconByState[buildState]}
-            <span>{buildStatusLabel}</span>
-            {buildState === "running" && (
-              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-600">
-                {Math.round(buildPercent)}%
-              </span>
-            )}
-          </div>
+            <Play className="h-4 w-4" aria-hidden />
+            <span>{t("export.essentials.generate.label")}</span>
+          </button>
           <div className="flex flex-wrap justify-end gap-2">
             {progress.map((chip) => (
               <span
@@ -164,16 +147,6 @@ export function ExportEssentialsCard({
               </span>
             ))}
           </div>
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
-            onClick={onGenerate}
-            disabled={generationDisabled}
-            aria-label={t("export.essentials.generate.aria")}
-          >
-            <Play className="h-4 w-4" aria-hidden />
-            <span>{t("export.essentials.generate.label")}</span>
-          </button>
           {onDownload && (
             <button
               type="button"
@@ -203,19 +176,8 @@ export function ExportEssentialsCard({
             }`}
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm text-slate-700">
-                <FileText className="h-4 w-4 text-slate-500" aria-hidden />
-                <span>{t("export.essentials.translation.label")}</span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                    translationReady
-                      ? "bg-emerald-50 text-emerald-700"
-                      : "bg-rose-50 text-rose-600"
-                  }`}
-                  aria-live="polite"
-                >
-                  {translationBadge}
-                </span>
+              <div className="text-sm font-semibold text-slate-700">
+                {t("export.essentials.translation.pick")}
               </div>
               <button
                 type="button"
@@ -227,23 +189,28 @@ export function ExportEssentialsCard({
                 <span>{t("export.essentials.translation.open")}</span>
               </button>
             </div>
-            <div className="mt-2 text-xs text-slate-500">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-700">
-                  {t("export.essentials.translation.detail")}
-                </span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-                  {translation.targetLang || ""}
-                </span>
-                {typeof translation.qaScore === "number" && (
-                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-600">
-                    {t("export.essentials.translation.score", {
-                      score: translation.qaScore.toFixed(1),
-                    })}
+            <div className="mt-3 space-y-1 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-slate-600">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">
+                    {t("export.essentials.translation.detail")}
                   </span>
-                )}
+                  {translation.targetLang && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                      {translation.targetLang}
+                    </span>
+                  )}
+                  {typeof translation.qaScore === "number" && (
+                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-600">
+                      {t("export.essentials.translation.score", {
+                        score: translation.qaScore.toFixed(1),
+                      })}
+                    </span>
+                  )}
+                </div>
+                {translationStatusBadge}
               </div>
-              <div className="mt-1 text-[11px] text-slate-500">
+              <div className="text-[11px] text-slate-500">
                 {translation.id ? (
                   <span>
                     {t("export.essentials.translation.id", {
@@ -258,74 +225,15 @@ export function ExportEssentialsCard({
           </div>
         </section>
 
-        <section className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            {renderField({
-              id: "export-title",
-              label: t("export.essentials.field.title"),
-              value: snap.meta.title,
-              onChange: (value) => toggleMeta("title", value),
-              invalid: missingSet.has("title"),
-              requiredLabel: t("export.essentials.field.required"),
-            })}
-            {renderField({
-              id: "export-writer",
-              label: t("export.essentials.field.writer"),
-              value: snap.meta.writer,
-              onChange: (value) => toggleMeta("writer", value),
-              invalid: missingSet.has("writer"),
-              requiredLabel: t("export.essentials.field.required"),
-            })}
-            {renderField({
-              id: "export-translator",
-              label: t("export.essentials.field.translator"),
-              value: snap.meta.translator,
-              onChange: (value) => toggleMeta("translator", value),
-              invalid: missingSet.has("translator"),
-              requiredLabel: t("export.essentials.field.required"),
-            })}
-            {renderField({
-              id: "export-writer-note",
-              label: t("export.essentials.field.writerNote"),
-              value: snap.meta.writerNote ?? "",
-              onChange: (value) => toggleMeta("writerNote", value),
-            })}
-            {renderField({
-              id: "export-translator-note",
-              label: t("export.essentials.field.translatorNote"),
-              value: snap.meta.translatorNote ?? "",
-              onChange: (value) => toggleMeta("translatorNote", value),
-            })}
+        {profileSection ? <div className="space-y-4">{profileSection}</div> : null}
+
+        {missingSet.has("rightsAccepted") && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
+            {t("export.essentials.rights.description")}
           </div>
-        </section>
+        )}
 
         <section className="flex flex-col gap-4 md:flex-row">
-          <div
-            className={`flex flex-1 items-center justify-between rounded-xl border p-4 ${
-              missingSet.has("rightsAccepted") && !snap.accepted
-                ? "border-rose-300"
-                : "border-slate-200"
-            }`}
-          >
-            <div>
-              <p className="text-sm font-semibold text-slate-700">
-                {t("export.essentials.rights.title")}
-              </p>
-              <p className="text-xs text-slate-500">
-                {t("export.essentials.rights.description")}
-              </p>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                checked={snap.accepted}
-                onChange={(event) => handleRightsToggle(event.target.checked)}
-                aria-label={t("export.essentials.rights.aria")}
-              />
-              <span>{t("export.essentials.rights.switch")}</span>
-            </label>
-          </div>
           <div className="flex-1 rounded-xl border border-slate-200 p-4">
             <p className="text-sm font-semibold text-slate-700">
               {t("export.essentials.format.title")}
@@ -336,7 +244,7 @@ export function ExportEssentialsCard({
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  checked={snap.wantPDF}
+                  checked={wantPDF}
                   onChange={(event) =>
                     onToggleFormat("pdf", event.target.checked)
                   }
@@ -348,7 +256,7 @@ export function ExportEssentialsCard({
                 <input
                   type="checkbox"
                   className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  checked={snap.wantEPUB}
+                  checked={wantEPUB}
                   onChange={(event) =>
                     onToggleFormat("epub", event.target.checked)
                   }
@@ -381,43 +289,5 @@ export function ExportEssentialsCard({
         )}
       </div>
     </div>
-  );
-}
-
-function renderField({
-  id,
-  label,
-  value,
-  onChange,
-  invalid,
-  requiredLabel,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  invalid?: boolean;
-  requiredLabel?: string;
-}) {
-  return (
-    <label htmlFor={id} className="space-y-1">
-      <span
-        className={`text-sm font-medium ${invalid ? "text-rose-600" : "text-slate-700"}`}
-      >
-        {label}
-      </span>
-      <input
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={`w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-          invalid ? "border-rose-300" : "border-slate-200"
-        }`}
-        aria-invalid={invalid ?? false}
-      />
-      {invalid && requiredLabel && (
-        <span className="block text-[11px] text-rose-600">{requiredLabel}</span>
-      )}
-    </label>
   );
 }

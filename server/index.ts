@@ -401,8 +401,20 @@ function resolveLoggerOption(): LoggerOption {
   if (loggerFlag === "false" || loggerFlag === "0") {
     return false;
   }
+  const level = process.env.LOG_LEVEL ?? "info";
+  if (IS_PRODUCTION){
+    return {level};
+  }
   return {
-    level: process.env.LOG_LEVEL ?? (IS_PRODUCTION ? "info" : "warn"),
+    level,
+    transport:{
+      target: "pino-pretty",
+      options: {
+        colorize: true,
+        translateTime: "SYS:standard",
+        ignore: "pid,hostname",
+      },
+    }
   };
 }
 

@@ -27,7 +27,7 @@ const resolveInitialLocale = (): UILocale => {
   return DEFAULT_LOCALE;
 };
 
-const DEFAULT_RIGHT_RATIO = 0.5;
+const DEFAULT_RIGHT_RATIO = 0.6;
 const DEFAULT_RIGHT_WIDTH =
   typeof window !== "undefined"
     ? Math.max(400, Math.round(window.innerWidth * DEFAULT_RIGHT_RATIO))
